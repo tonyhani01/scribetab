@@ -86,6 +86,22 @@ async function handleStop(): Promise<Ack> {
 }
 
 export default defineBackground(() => {
+  // Boot-time reconciliation: transient states can't survive their in-flight
+  // handler, and 'recording' is only real if the offscreen document exists.
+  void (async () => {
+    const { captureState } = await chrome.storage.local.get('captureState');
+    if (captureState === 'starting' || captureState === 'stopping') {
+      await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
+    } else if (captureState === 'recording') {
+      const contexts = await chrome.runtime.getContexts({
+        contextTypes: ['OFFSCREEN_DOCUMENT' as chrome.runtime.ContextType],
+      });
+      if (contexts.length === 0) {
+        await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
+      }
+    }
+  })();
+
   chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
     const msg = raw as ToBackground;
     if (msg?.target !== 'background') return false; // not ours — never hold the port
