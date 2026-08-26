@@ -23,8 +23,12 @@ function App() {
 
   const send = async (type: 'START_CAPTURE' | 'STOP_CAPTURE') => {
     setError(null);
-    const res = (await chrome.runtime.sendMessage({ target: 'background', type })) as Ack;
-    if (!res?.ok) setError(res?.error ?? 'Unknown error');
+    try {
+      const res = (await chrome.runtime.sendMessage({ target: 'background', type })) as Ack;
+      if (!res?.ok) setError(res?.error ?? 'Unknown error');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const download = async () => {
