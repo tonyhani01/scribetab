@@ -112,12 +112,14 @@ async function handleStop(): Promise<Ack> {
       await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null, lastError: null });
       return { ok: true };
     }
-    if ((await offscreenContexts()).length === 0) {
-      await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
-      return { ok: true };
-    }
+    // A reply with ok:false means the offscreen listener ran finalize, which
+    // always tears the engine down before responding — the recording is over,
+    // its writes just failed. Going back to 'recording' would fight the
+    // CAPTURE_ENDED handler's 'idle' and leave the partial audio undownloadable
+    // (download requires 'idle'). Surface the error and settle at idle.
     await chrome.storage.local.set({
-      captureState: 'recording',
+      captureState: 'idle',
+      capturedTabId: null,
       lastError: res?.error ?? 'Stop failed',
     });
     return { ok: false, error: res?.error ?? 'Stop failed' };

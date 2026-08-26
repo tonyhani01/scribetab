@@ -44,7 +44,10 @@ function enqueueChunk(pcm: Float32Array, sampleRate: number): void {
 }
 
 async function start(streamId: string): Promise<void> {
-  if (finalizePromise) await finalizePromise;
+  // Wait for a finalize in flight, but swallow its rejection: a write failure
+  // was already surfaced through the stop ACK / CAPTURE_ENDED, and it must not
+  // poison the next session's start.
+  if (finalizePromise) await finalizePromise.catch(() => {});
   if (engine) throw new Error('Capture already running');
 
   let stream: MediaStream | null = null;
