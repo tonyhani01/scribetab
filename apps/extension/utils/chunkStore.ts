@@ -32,6 +32,9 @@ function openDb(): Promise<IDBDatabase> {
           db.close();
           dbPromise = null;
         };
+        db.onclose = () => {
+          dbPromise = null;
+        };
         resolve(db);
       };
       req.onerror = () => {
