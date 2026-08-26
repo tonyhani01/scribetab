@@ -17,9 +17,9 @@ Closest prior art is `hugoblanc/meet-transcriber` (MIT — GPLv3-compatible, may
 1. The only bytes that leave the machine are:
    - audio/text sent to the STT/LLM endpoint the user configured, and
    - optional pushes to Notion if the user connects it.
-2. API keys live in `chrome.storage.local` — never `chrome.storage.sync`, never any server.
+2. API keys live in `chrome.storage.local` — never `chrome.storage.sync`, never any server. Integration tokens used by the native host (e.g. Notion, Phase 8) live in the host's local config file with `0600` permissions — same rule, different local store.
 3. Transcripts live in IndexedDB and local files under `~/ScribeTab/`. No telemetry, no analytics, no phone-home of any kind.
-4. Capture requires exactly one user gesture (extension click or hotkey). No auto-start (Chrome forbids it), no screen-picker dialog (`tabCapture.getMediaStreamId` avoids it), no meeting bot.
+4. Capture starts only from an explicit user action on the extension — a button in the toolbar popup, or a hotkey. No auto-start (Chrome forbids it), no screen-picker dialog (`tabCapture.getMediaStreamId` avoids it), no meeting bot.
 
 ## Architecture
 
@@ -52,16 +52,16 @@ Cuts ~45s segments on silence boundaries (RMS threshold) so sentences are not sp
 
 Two interfaces, each implementation ~100 lines:
 
-- `TranscriptionProvider`: OpenAI, Groq (whisper-large-v3-turbo), Deepgram, Mistral Voxtral, and **Custom OpenAI-compatible endpoint** — this last one is the local-model story: whisper.cpp server, Speaches/faster-whisper, LM Studio on `localhost` all work with zero extra code.
+- `TranscriptionProvider`: OpenAI, Groq (whisper-large-v3-turbo), Deepgram, Mistral Voxtral, and **Custom OpenAI-compatible endpoint** — this last one is the local-model story: whisper.cpp server, Speaches/faster-whisper, LM Studio on `localhost` all use the same adapter code. Each configured endpoint (cloud or localhost) requires an `optional_host_permissions` grant, requested from the options page before first use.
 - `LlmProvider` (summaries/action items): any OpenAI-compatible chat endpoint — Ollama gives fully-local summaries.
 
 In-browser WebGPU transcription (transformers.js + Moonshine/distil-whisper) is deferred to v2.
 
 ### Data flow
 
-Click → capture → chunks → near-real-time transcription → segments merged with caption-scraped speaker timeline (speaker attribution without a diarization model) → IndexedDB + live side panel → on stop: LLM summary + action items → optional PII redaction → sync via native messaging to `~/ScribeTab/meetings/<date>-<title>/` as `transcript.md`, `transcript.json`, `summary.md` (+ audio when retention is enabled).
+Click → capture → chunks → near-real-time transcription → optional PII redaction at ingest → segments merged with caption-scraped speaker timeline (speaker attribution without a diarization model) → IndexedDB + live side panel → on stop: LLM summary + action items → sync via native messaging to `~/ScribeTab/meetings/<date>-<title>/` as `transcript.md`, `transcript.json`, `summary.md` (+ audio when retention is enabled).
 
-**Redaction scope (honest):** redaction applies to *text* — before it is sent to the LLM and before storage/export. Audio sent to the STT provider cannot be pre-redacted; the docs must say so.
+**Redaction scope (honest):** when enabled, redaction applies to segment *text at ingest* — before the segment is stored, and therefore before any LLM call, export, or sync sees it. Audio sent to the STT provider cannot be pre-redacted, and raw audio retained on disk is unredacted; the docs must say both.
 
 ### Native host + MCP
 

@@ -2,11 +2,25 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A pnpm monorepo where the ScribeTab extension records audio from a browser tab with one click (no picker, no bot), keeps the tab audible, chunks audio on silence boundaries, and saves a playable WAV — all local.
+**Revision 2 (2026-08-26):** Tasks 5–6 rewritten after the 3-way MoA audit
+(`MoA audit - 2026-08-26-phase-1-2-scaffold-and-capture.md`). Changes: targeted
+message envelopes with a single responder (M1), one typed inbound union per
+endpoint (M2), sample rate persisted per chunk (M3), offscreen created before
+stream-id (M4), serialized IDB writes with sync index assignment (M5), one
+idempotent finalize path for stop/track-ended/tab-closed (M6),
+`runtime.getContexts` instead of Chrome-150-only `hasDocument` (M7), offscreen
+never touches `chrome.storage` (M8), capture state machine refusing double
+start and only wiping data after capture is granted (M10), assemble moved into
+the popup via direct same-origin IndexedDB reads (removes a messaging leg),
+PCM-concat assembly without float round-trip (S8/S9), empty recording rejected
+(S10), `chrome.runtime.getURL` for the worklet (S11), start rollback +
+finalize `finally` teardown (S1).
 
-**Architecture:** MV3 extension (WXT + Preact). Popup click → service worker gets `tabCapture` stream ID → offscreen document captures, re-routes audio to speakers, and feeds an AudioWorklet → PCM frames run through a silence-aware chunker (pure, unit-tested, in `packages/shared`) → WAV chunks stored in IndexedDB → stop assembles one WAV for download.
+**Goal:** A pnpm monorepo where the ScribeTab extension records audio from a browser tab with one click on the extension (no picker, no bot), keeps the tab audible, chunks audio on silence boundaries, and saves a playable WAV — all local.
 
-**Tech Stack:** pnpm workspaces, TypeScript 5 (strict), WXT, Preact, Vitest, Chrome MV3 APIs (`tabCapture`, `offscreen`, `storage`, `downloads`).
+**Architecture:** MV3 extension (WXT + Preact). Popup → service worker (sole orchestrator, owns all `chrome.storage` state) → offscreen document (sole audio owner: capture, re-route to speakers, AudioWorklet → silence chunker → serialized WAV chunk writes to IndexedDB). The popup reads IndexedDB directly (same extension origin) to assemble and download the full recording — no offscreen round-trip.
+
+**Tech Stack:** pnpm workspaces, TypeScript 5 (strict), WXT, Preact, Vitest, Chrome MV3 APIs (`tabCapture`, `offscreen`, `storage`, `downloads`, `runtime.getContexts`).
 
 **Spec:** `docs/superpowers/specs/2026-08-26-scribetab-design.md`
 **Roadmap (locked interfaces):** `docs/superpowers/plans/2026-08-26-scribetab-roadmap.md`
@@ -16,8 +30,9 @@
 - License GPLv3; every `package.json` gets `"license": "GPL-3.0-only"`.
 - No telemetry, no analytics, no network calls anywhere in Phases 1–2.
 - Keys/settings only ever in `chrome.storage.local` (never `sync`) — no keys exist yet in these phases.
+- `chrome.storage.*` is called ONLY from the service worker. Offscreen documents support only the `chrome.runtime` API.
 - Node ≥ 20, pnpm ≥ 9, TypeScript `strict: true`.
-- Chrome ≥ 116 (offscreen + tabCapture.getMediaStreamId).
+- Chrome ≥ 116 (offscreen + `tabCapture.getMediaStreamId` + `runtime.getContexts`). Never use `chrome.offscreen.hasDocument()` — it is Chrome 150+.
 - Package names: `@scribetab/shared`, `@scribetab/extension`.
 - Commit style: conventional commits (`feat:`, `test:`, `chore:`, `ci:`).
 
@@ -120,7 +135,10 @@ git add -A && git commit -m "chore: scaffold pnpm monorepo"
 
 **Interfaces:**
 - Consumes: locked contracts from the roadmap doc — copy `types.ts` content **verbatim** from `2026-08-26-scribetab-roadmap.md` "Locked interface contracts"
-- Produces: `encodeWav(samples: Float32Array, sampleRate: number): ArrayBuffer` (16-bit mono PCM WAV); all shared types re-exported from `@scribetab/shared`
+- Produces:
+  - `wavHeader(dataByteLength: number, sampleRate: number): ArrayBuffer` — 44-byte 16-bit mono PCM WAV header
+  - `encodeWav(samples: Float32Array, sampleRate: number): ArrayBuffer` — full WAV file
+  - all shared types re-exported from `@scribetab/shared`
 
 - [ ] **Step 1: Package scaffolding**
 
@@ -156,8 +174,8 @@ Run: `pnpm install`
 - [ ] **Step 2: Types (verbatim from roadmap) and index**
 
 `packages/shared/src/types.ts`: paste the entire code block from the roadmap's
-"Locked interface contracts" section (both blocks: core types and
-`SyncSessionMessage`), unchanged.
+"Locked interface contracts" section (both blocks: core types and the
+native-host sync protocol), unchanged.
 
 `packages/shared/src/index.ts`:
 ```ts
@@ -165,28 +183,39 @@ export * from './types';
 export * from './wav';
 ```
 
-- [ ] **Step 3: Write the failing WAV test**
+- [ ] **Step 3: Write the failing WAV tests**
 
 `packages/shared/test/wav.test.ts`:
 ```ts
 import { describe, it, expect } from 'vitest';
-import { encodeWav } from '../src/wav';
+import { encodeWav, wavHeader } from '../src/wav';
 
-describe('encodeWav', () => {
-  it('produces a valid 16-bit mono RIFF/WAVE header', () => {
-    const samples = new Float32Array(48000); // 1s of silence @48kHz
-    const buf = encodeWav(samples, 48000);
+describe('wavHeader', () => {
+  it('writes a valid 16-bit mono RIFF/WAVE header', () => {
+    const buf = wavHeader(48000 * 2, 48000); // 1s of audio
     const view = new DataView(buf);
     const ascii = (off: number, len: number) =>
       String.fromCharCode(...new Uint8Array(buf, off, len));
 
+    expect(buf.byteLength).toBe(44);
     expect(ascii(0, 4)).toBe('RIFF');
+    expect(view.getUint32(4, true)).toBe(36 + 48000 * 2);
     expect(ascii(8, 4)).toBe('WAVE');
     expect(view.getUint16(22, true)).toBe(1);        // mono
     expect(view.getUint32(24, true)).toBe(48000);    // sample rate
     expect(view.getUint16(34, true)).toBe(16);       // bits per sample
     expect(view.getUint32(40, true)).toBe(48000 * 2); // data byte length
+  });
+});
+
+describe('encodeWav', () => {
+  it('produces header + samples', () => {
+    const samples = new Float32Array(48000);
+    const buf = encodeWav(samples, 48000);
     expect(buf.byteLength).toBe(44 + 48000 * 2);
+    const ascii = (off: number, len: number) =>
+      String.fromCharCode(...new Uint8Array(buf, off, len));
+    expect(ascii(0, 4)).toBe('RIFF');
   });
 
   it('clamps and converts float samples to int16', () => {
@@ -202,58 +231,65 @@ describe('encodeWav', () => {
 });
 ```
 
-- [ ] **Step 4: Run test to verify it fails**
+- [ ] **Step 4: Run tests to verify they fail**
 
 Run: `pnpm --filter @scribetab/shared test`
-Expected: FAIL — `Cannot find module '../src/wav'` (or export missing).
+Expected: FAIL — `Cannot find module '../src/wav'` (or exports missing).
 
-- [ ] **Step 5: Implement `encodeWav`**
+- [ ] **Step 5: Implement `wavHeader` and `encodeWav`**
 
 `packages/shared/src/wav.ts`:
 ```ts
-/** Encode mono float32 PCM as a 16-bit PCM WAV file. */
-export function encodeWav(samples: Float32Array, sampleRate: number): ArrayBuffer {
-  const dataLength = samples.length * 2;
-  const buf = new ArrayBuffer(44 + dataLength);
+/** 44-byte header for a 16-bit mono PCM WAV file with the given data length. */
+export function wavHeader(dataByteLength: number, sampleRate: number): ArrayBuffer {
+  const buf = new ArrayBuffer(44);
   const view = new DataView(buf);
   const writeAscii = (off: number, s: string) => {
     for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
   };
 
   writeAscii(0, 'RIFF');
-  view.setUint32(4, 36 + dataLength, true);
+  view.setUint32(4, 36 + dataByteLength, true);
   writeAscii(8, 'WAVE');
   writeAscii(12, 'fmt ');
-  view.setUint32(16, 16, true);            // fmt chunk size
-  view.setUint16(20, 1, true);             // PCM
-  view.setUint16(22, 1, true);             // mono
+  view.setUint32(16, 16, true);             // fmt chunk size
+  view.setUint16(20, 1, true);              // PCM
+  view.setUint16(22, 1, true);              // mono
   view.setUint32(24, sampleRate, true);
   view.setUint32(28, sampleRate * 2, true); // byte rate
-  view.setUint16(32, 2, true);             // block align
-  view.setUint16(34, 16, true);            // bits per sample
+  view.setUint16(32, 2, true);              // block align
+  view.setUint16(34, 16, true);             // bits per sample
   writeAscii(36, 'data');
-  view.setUint32(40, dataLength, true);
+  view.setUint32(40, dataByteLength, true);
+  return buf;
+}
 
+/** Encode mono float32 PCM as a complete 16-bit PCM WAV file. */
+export function encodeWav(samples: Float32Array, sampleRate: number): ArrayBuffer {
+  const dataLength = samples.length * 2;
+  const out = new Uint8Array(44 + dataLength);
+  out.set(new Uint8Array(wavHeader(dataLength, sampleRate)), 0);
+  const view = new DataView(out.buffer);
   let off = 44;
   for (let i = 0; i < samples.length; i++) {
     const s = Math.max(-1, Math.min(1, samples[i] ?? 0));
     view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
     off += 2;
   }
-  return buf;
+  return out.buffer;
 }
 ```
 
 - [ ] **Step 6: Run tests to verify pass**
 
 Run: `pnpm --filter @scribetab/shared test`
-Expected: PASS (2 tests).
+Expected: PASS (3 tests).
 
 - [ ] **Step 7: Typecheck and commit**
 
 ```bash
 pnpm --filter @scribetab/shared typecheck
-git add -A && git commit -m "feat(shared): locked domain types and WAV encoder"
+git add -A && git commit -m "feat(shared): locked domain types, WAV header and encoder"
 ```
 
 ---
@@ -348,6 +384,27 @@ describe('SilenceChunker', () => {
     expect(rest!.length / SR).toBeCloseTo(1, 1);
     expect(chunker.flush()).toBeNull();
   });
+
+  it('works with production defaults at 48 kHz', () => {
+    const sr = 48000;
+    const chunker = new SilenceChunker({
+      sampleRate: sr,
+      targetSeconds: 45,
+      maxSeconds: 60,
+      silenceThreshold: 0.01,
+      minSilenceMs: 300,
+    });
+    // 61s of tone at 48 kHz must hard-cut exactly once at ~60s.
+    const out = new Float32Array(Math.round(61 * sr));
+    for (let i = 0; i < out.length; i++) out[i] = 0.5 * Math.sin((2 * Math.PI * 440 * i) / sr);
+    const chunks: Float32Array[] = [];
+    for (let i = 0; i < out.length; i += 128) {
+      const c = chunker.push(out.subarray(i, Math.min(i + 128, out.length)));
+      if (c) chunks.push(c);
+    }
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]!.length / sr).toBeCloseTo(60, 0);
+  });
 });
 ```
 
@@ -427,7 +484,7 @@ export * from './chunker';
 - [ ] **Step 4: Run tests to verify pass**
 
 Run: `pnpm --filter @scribetab/shared test`
-Expected: PASS (6 tests total).
+Expected: PASS (8 tests total).
 
 - [ ] **Step 5: Commit**
 
@@ -553,77 +610,232 @@ git add -A && git commit -m "feat(extension): WXT + Preact MV3 scaffold with cap
 
 ---
 
-### Task 5: Capture pipeline — background, offscreen, worklet
+### Task 5: Capture pipeline — messages, chunk store, background, offscreen
 
 **Files:**
-- Create: `apps/extension/entrypoints/offscreen/index.html`, `apps/extension/entrypoints/offscreen/main.ts`, `apps/extension/public/pcm-worklet.js`, `apps/extension/utils/messages.ts`
+- Create: `apps/extension/utils/messages.ts`, `apps/extension/utils/chunkStore.ts`, `apps/extension/entrypoints/offscreen/index.html`, `apps/extension/entrypoints/offscreen/main.ts`, `apps/extension/public/pcm-worklet.js`
 - Modify: `apps/extension/entrypoints/background.ts`
 
 **Interfaces:**
 - Consumes: `SilenceChunker`, `encodeWav` from `@scribetab/shared`
-- Produces: runtime message protocol used by Task 6's popup:
-  - `{ type: 'START_CAPTURE' }` popup → background
-  - `{ type: 'STOP_CAPTURE' }` popup → background
-  - `{ type: 'OFFSCREEN_START', streamId: string }` background → offscreen
-  - `{ type: 'OFFSCREEN_STOP' }` background → offscreen
-  - `chrome.storage.local` keys: `captureState: 'idle' | 'recording'`, `chunkCount: number`
+- Produces (used verbatim by Task 6):
+  - Message unions in `utils/messages.ts` (below). Every message carries a `target`; a listener returns `false` immediately for messages not addressed to it, so exactly one endpoint ever responds.
+  - `utils/chunkStore.ts`: `putChunk(row: ChunkRow): Promise<void>`, `getAllChunks(): Promise<ChunkRow[]>` (sorted by index), `clearChunks(): Promise<void>`, with `interface ChunkRow { index: number; sampleRate: number; startOffsetSamples: number; wav: ArrayBuffer; createdAt: number }`
+  - `chrome.storage.local` keys (written ONLY by the service worker): `captureState: 'idle' | 'starting' | 'recording' | 'stopping'`, `chunkCount: number`, `capturedTabId: number | null`
 
-- [ ] **Step 1: Message types**
+- [ ] **Step 1: Message protocol**
 
 `apps/extension/utils/messages.ts`:
 ```ts
-export type PopupToBackground =
-  | { type: 'START_CAPTURE' }
-  | { type: 'STOP_CAPTURE' };
+export type CaptureState = 'idle' | 'starting' | 'recording' | 'stopping';
 
-export type BackgroundToOffscreen =
-  | { type: 'OFFSCREEN_START'; streamId: string }
-  | { type: 'OFFSCREEN_STOP' };
+/** Messages handled by the service worker (from popup or offscreen). */
+export type ToBackground =
+  | { target: 'background'; type: 'START_CAPTURE' }
+  | { target: 'background'; type: 'STOP_CAPTURE' }
+  | { target: 'background'; type: 'CHUNK_SAVED'; count: number }      // offscreen → SW
+  | { target: 'background'; type: 'CAPTURE_ENDED'; reason: string };  // offscreen → SW
 
-export type CaptureState = 'idle' | 'recording';
+/** Messages handled by the offscreen document (from the service worker only). */
+export type ToOffscreen =
+  | { target: 'offscreen'; type: 'OFFSCREEN_START'; streamId: string }
+  | { target: 'offscreen'; type: 'OFFSCREEN_STOP' };
+
+export interface Ack {
+  ok: boolean;
+  error?: string;
+}
 ```
 
-- [ ] **Step 2: Background orchestration**
+- [ ] **Step 2: Chunk store (same-origin IndexedDB, shared by offscreen writer and popup reader)**
+
+`apps/extension/utils/chunkStore.ts`:
+```ts
+export interface ChunkRow {
+  index: number;
+  sampleRate: number;
+  startOffsetSamples: number; // cumulative samples before this chunk (session-relative timing)
+  wav: ArrayBuffer;
+  createdAt: number;
+}
+
+const DB_NAME = 'scribetab';
+const DB_VERSION = 1;
+const STORE = 'audioChunks';
+
+function openDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      if (!req.result.objectStoreNames.contains(STORE)) {
+        req.result.createObjectStore(STORE, { keyPath: 'index' });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function putChunk(row: ChunkRow): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).put(row);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function getAllChunks(): Promise<ChunkRow[]> {
+  const db = await openDb();
+  const rows = await new Promise<ChunkRow[]>((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const req = tx.objectStore(STORE).getAll();
+    req.onsuccess = () => resolve(req.result as ChunkRow[]);
+    req.onerror = () => reject(req.error);
+  });
+  return rows.sort((a, b) => a.index - b.index);
+}
+
+export async function clearChunks(): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+```
+Schema note: v1 is deliberately session-less; Phase 4 introduces `sessions` and
+re-keys chunks as `[sessionId, index]` behind a DB version bump with a
+migration test. `startOffsetSamples` exists now so chunk timing survives that
+migration.
+
+- [ ] **Step 3: Background — state machine + orchestration (sole `chrome.storage` writer)**
 
 Replace `apps/extension/entrypoints/background.ts`:
 ```ts
-import type { PopupToBackground } from '@/utils/messages';
+import type { Ack, ToBackground, ToOffscreen } from '@/utils/messages';
 
 async function ensureOffscreen(): Promise<void> {
-  const has = await chrome.offscreen.hasDocument();
-  if (!has) {
-    await chrome.offscreen.createDocument({
-      url: 'offscreen.html',
-      reasons: [chrome.offscreen.Reason.USER_MEDIA],
-      justification: 'Capture tab audio locally for transcription',
+  // hasDocument() is Chrome 150+; getContexts() works on our 116 floor.
+  const contexts = await chrome.runtime.getContexts({
+    contextTypes: ['OFFSCREEN_DOCUMENT' as chrome.runtime.ContextType],
+  });
+  if (contexts.length > 0) return;
+  await chrome.offscreen.createDocument({
+    url: 'offscreen.html',
+    // USER_MEDIA has no idle timeout and the live capture keeps the document
+    // alive. Deliberately NOT declaring AUDIO_PLAYBACK: that reason closes the
+    // document after 30s without audio, which would endanger silent meetings.
+    reasons: [chrome.offscreen.Reason.USER_MEDIA],
+    justification: 'Capture tab audio locally for transcription',
+  });
+}
+
+function sendToOffscreen(msg: ToOffscreen): Promise<Ack> {
+  return chrome.runtime.sendMessage(msg) as Promise<Ack>;
+}
+
+let opInFlight = false; // serializes start/stop within one SW lifetime
+
+async function handleStart(): Promise<Ack> {
+  if (opInFlight) return { ok: false, error: 'Operation in progress' };
+  opInFlight = true;
+  try {
+    const { captureState } = await chrome.storage.local.get('captureState');
+    if (captureState === 'recording' || captureState === 'starting') {
+      return { ok: false, error: 'Already recording' };
+    }
+    await chrome.storage.local.set({ captureState: 'starting' });
+
+    // Offscreen must exist BEFORE getMediaStreamId: stream ids are one-use
+    // and expire within seconds, so the consumer must be ready.
+    await ensureOffscreen();
+
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) throw new Error('No active tab');
+    const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
+
+    const res = await sendToOffscreen({ target: 'offscreen', type: 'OFFSCREEN_START', streamId });
+    if (!res?.ok) throw new Error(res?.error ?? 'Offscreen failed to start');
+
+    await chrome.storage.local.set({
+      captureState: 'recording',
+      chunkCount: 0,
+      capturedTabId: tab.id,
     });
+    return { ok: true };
+  } catch (e) {
+    await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
+    return { ok: false, error: String(e) };
+  } finally {
+    opInFlight = false;
+  }
+}
+
+async function handleStop(): Promise<Ack> {
+  if (opInFlight) return { ok: false, error: 'Operation in progress' };
+  opInFlight = true;
+  try {
+    await chrome.storage.local.set({ captureState: 'stopping' });
+    const res = await sendToOffscreen({ target: 'offscreen', type: 'OFFSCREEN_STOP' });
+    await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
+    return res?.ok ? { ok: true } : { ok: false, error: res?.error ?? 'Stop failed' };
+  } catch (e) {
+    await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
+    return { ok: false, error: String(e) };
+  } finally {
+    opInFlight = false;
   }
 }
 
 export default defineBackground(() => {
-  chrome.runtime.onMessage.addListener((msg: PopupToBackground, _sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
+    const msg = raw as ToBackground;
+    if (msg?.target !== 'background') return false; // not ours — never hold the port
+
     (async () => {
-      if (msg.type === 'START_CAPTURE') {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (!tab?.id) throw new Error('No active tab');
-        // One user gesture (popup click) → stream id, no screen picker, no bot.
-        const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
-        await ensureOffscreen();
-        await chrome.runtime.sendMessage({ type: 'OFFSCREEN_START', streamId });
-        await chrome.storage.local.set({ captureState: 'recording', chunkCount: 0 });
-        sendResponse({ ok: true });
-      } else if (msg.type === 'STOP_CAPTURE') {
-        await chrome.runtime.sendMessage({ type: 'OFFSCREEN_STOP' });
-        await chrome.storage.local.set({ captureState: 'idle' });
-        sendResponse({ ok: true });
+      switch (msg.type) {
+        case 'START_CAPTURE':
+          sendResponse(await handleStart());
+          break;
+        case 'STOP_CAPTURE':
+          sendResponse(await handleStop());
+          break;
+        case 'CHUNK_SAVED':
+          // Offscreen cannot use chrome.storage — the SW owns all state.
+          await chrome.storage.local.set({ chunkCount: msg.count });
+          sendResponse({ ok: true });
+          break;
+        case 'CAPTURE_ENDED':
+          await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
+          sendResponse({ ok: true });
+          break;
       }
     })().catch((e) => sendResponse({ ok: false, error: String(e) }));
-    return true; // async response
+    return true;
+  });
+
+  // Belt-and-braces finalize: the captured tab going away must end the session
+  // (the audio track's 'ended' event in the offscreen doc is the primary path).
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    void (async () => {
+      const { capturedTabId, captureState } = await chrome.storage.local.get([
+        'capturedTabId',
+        'captureState',
+      ]);
+      if (captureState === 'recording' && tabId === capturedTabId) {
+        await sendToOffscreen({ target: 'offscreen', type: 'OFFSCREEN_STOP' }).catch(() => {});
+        await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
+      }
+    })();
   });
 });
 ```
 
-- [ ] **Step 3: AudioWorklet processor**
+- [ ] **Step 4: AudioWorklet processor**
 
 `apps/extension/public/pcm-worklet.js`:
 ```js
@@ -650,7 +862,7 @@ class PcmCapture extends AudioWorkletProcessor {
 registerProcessor('pcm-capture', PcmCapture);
 ```
 
-- [ ] **Step 4: Offscreen capture engine**
+- [ ] **Step 5: Offscreen capture engine (no `chrome.storage`, serialized writes, idempotent finalize)**
 
 `apps/extension/entrypoints/offscreen/index.html`:
 ```html
@@ -664,114 +876,154 @@ registerProcessor('pcm-capture', PcmCapture);
 `apps/extension/entrypoints/offscreen/main.ts`:
 ```ts
 import { SilenceChunker, encodeWav } from '@scribetab/shared';
-import type { BackgroundToOffscreen } from '@/utils/messages';
+import type { Ack, ToOffscreen } from '@/utils/messages';
+import { clearChunks, putChunk } from '@/utils/chunkStore';
 
-let ctx: AudioContext | null = null;
-let stream: MediaStream | null = null;
-let chunker: SilenceChunker | null = null;
+interface Engine {
+  ctx: AudioContext;
+  stream: MediaStream;
+  node: AudioWorkletNode;
+  chunker: SilenceChunker;
+  sampleRate: number;
+}
+
+let engine: Engine | null = null;
+let finalized = true; // no session yet
 let chunkIndex = 0;
+let samplesWritten = 0;
+let writeChain: Promise<void> = Promise.resolve();
 
-const DB_NAME = 'scribetab';
-const STORE = 'audioChunks';
-
-function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => {
-      if (!req.result.objectStoreNames.contains(STORE)) {
-        req.result.createObjectStore(STORE, { keyPath: 'index' });
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+function notifyBackground(msg: { target: 'background'; type: 'CHUNK_SAVED'; count: number } | { target: 'background'; type: 'CAPTURE_ENDED'; reason: string }): void {
+  void chrome.runtime.sendMessage(msg).catch(() => {
+    // SW may be restarting; state converges via storage on its next event.
   });
 }
 
-async function saveChunk(wav: ArrayBuffer): Promise<void> {
-  const db = await openDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).put({ index: chunkIndex++, wav, createdAt: Date.now() });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-  await chrome.storage.local.set({ chunkCount: chunkIndex });
-}
-
-async function clearChunks(): Promise<void> {
-  const db = await openDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).clear();
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+/** Index and offset are assigned synchronously; writes are serialized on a chain. */
+function enqueueChunk(pcm: Float32Array, sampleRate: number): void {
+  const index = chunkIndex++;
+  const startOffsetSamples = samplesWritten;
+  samplesWritten += pcm.length;
+  const wav = encodeWav(pcm, sampleRate);
+  writeChain = writeChain
+    .then(() => putChunk({ index, sampleRate, startOffsetSamples, wav, createdAt: Date.now() }))
+    .then(() => notifyBackground({ target: 'background', type: 'CHUNK_SAVED', count: index + 1 }))
+    .catch((e) => console.error('[scribetab] chunk write failed', e));
 }
 
 async function start(streamId: string): Promise<void> {
-  await clearChunks();
-  chunkIndex = 0;
+  if (engine) throw new Error('Capture already running');
 
-  stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId },
-    },
-  } as MediaStreamConstraints);
+  let stream: MediaStream | null = null;
+  let ctx: AudioContext | null = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId },
+      },
+    } as MediaStreamConstraints);
 
-  ctx = new AudioContext();
-  const source = ctx.createMediaStreamSource(stream);
-  source.connect(ctx.destination); // tabCapture mutes the tab; keep it audible
+    // Capture is granted — only NOW is it safe to discard the previous recording.
+    await clearChunks();
+    chunkIndex = 0;
+    samplesWritten = 0;
+    writeChain = Promise.resolve();
 
-  await ctx.audioWorklet.addModule('/pcm-worklet.js');
-  const node = new AudioWorkletNode(ctx, 'pcm-capture');
-  source.connect(node);
+    ctx = new AudioContext();
+    const source = ctx.createMediaStreamSource(stream);
+    source.connect(ctx.destination); // tabCapture mutes the tab; keep it audible
 
-  chunker = new SilenceChunker({
-    sampleRate: ctx.sampleRate,
-    targetSeconds: 45,
-    maxSeconds: 60,
-    silenceThreshold: 0.01,
-    minSilenceMs: 300,
-  });
+    await ctx.audioWorklet.addModule(chrome.runtime.getURL('pcm-worklet.js'));
+    const node = new AudioWorkletNode(ctx, 'pcm-capture');
+    source.connect(node);
 
-  node.port.onmessage = (e: MessageEvent<Float32Array>) => {
-    const done = chunker?.push(e.data);
-    if (done && ctx) void saveChunk(encodeWav(done, ctx.sampleRate));
-  };
+    const sampleRate = ctx.sampleRate;
+    const chunker = new SilenceChunker({
+      sampleRate,
+      targetSeconds: 45,
+      maxSeconds: 60,
+      silenceThreshold: 0.01,
+      minSilenceMs: 300,
+    });
+
+    node.port.onmessage = (e: MessageEvent<Float32Array>) => {
+      if (finalized) return;
+      const done = chunker.push(e.data);
+      if (done) enqueueChunk(done, sampleRate);
+    };
+
+    // Primary finalize trigger for tab close / capture loss.
+    stream.getAudioTracks()[0]?.addEventListener('ended', () => {
+      void finalize('track-ended');
+    });
+
+    engine = { ctx, stream, node, chunker, sampleRate };
+    finalized = false;
+  } catch (e) {
+    // Rollback: never leak tracks or contexts on a failed start.
+    stream?.getTracks().forEach((t) => t.stop());
+    await ctx?.close().catch(() => {});
+    throw e;
+  }
 }
 
-async function stop(): Promise<void> {
-  const rest = chunker?.flush();
-  if (rest && ctx) await saveChunk(encodeWav(rest, ctx.sampleRate));
-  stream?.getTracks().forEach((t) => t.stop());
-  await ctx?.close();
-  ctx = null; stream = null; chunker = null;
+/** Idempotent. Shared by user stop, track-ended, and tab-removed paths. */
+async function finalize(reason: string): Promise<void> {
+  if (finalized || !engine) return;
+  finalized = true;
+  const { ctx, stream, node, chunker, sampleRate } = engine;
+  engine = null;
+  try {
+    node.port.onmessage = null;
+    node.disconnect();
+    const rest = chunker.flush();
+    if (rest && rest.length > 0) enqueueChunk(rest, sampleRate);
+    await writeChain; // drain all pending IDB writes before acknowledging
+  } finally {
+    stream.getTracks().forEach((t) => t.stop());
+    await ctx.close().catch(() => {});
+    notifyBackground({ target: 'background', type: 'CAPTURE_ENDED', reason });
+  }
 }
 
-chrome.runtime.onMessage.addListener((msg: BackgroundToOffscreen, _s, sendResponse) => {
+chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
+  const msg = raw as ToOffscreen;
+  if (msg?.target !== 'offscreen') return false; // not ours — never hold the port
+
   (async () => {
-    if (msg.type === 'OFFSCREEN_START') await start(msg.streamId);
-    if (msg.type === 'OFFSCREEN_STOP') await stop();
-    sendResponse({ ok: true });
-  })().catch((e) => sendResponse({ ok: false, error: String(e) }));
+    switch (msg.type) {
+      case 'OFFSCREEN_START':
+        await start(msg.streamId);
+        sendResponse({ ok: true } satisfies Ack);
+        break;
+      case 'OFFSCREEN_STOP':
+        await finalize('user-stop');
+        sendResponse({ ok: true } satisfies Ack);
+        break;
+    }
+  })().catch((e) => sendResponse({ ok: false, error: String(e) } satisfies Ack));
   return true;
 });
 ```
 
-- [ ] **Step 5: Build and verify manually**
+- [ ] **Step 6: Typecheck, build, manual verification**
 
-Run: `pnpm --filter @scribetab/extension build`, reload the unpacked extension.
-On a YouTube tab: open the popup (Task 6 wires real buttons — for now trigger from
-the popup console):
+Run: `pnpm typecheck && pnpm --filter @scribetab/extension build`, reload the
+unpacked extension. On a YouTube tab, from the popup's devtools console:
 ```js
-chrome.runtime.sendMessage({ type: 'START_CAPTURE' })
+chrome.runtime.sendMessage({ target: 'background', type: 'START_CAPTURE' })
 ```
-Expected: tab audio **keeps playing audibly**; after ~45–60s `chrome.storage.local.get('chunkCount')` shows ≥ 1. Then `{ type: 'STOP_CAPTURE' }` → state `idle`.
+Expected: `{ok: true}`; tab audio **keeps playing audibly**; after ~45–60s
+`chrome.storage.local.get('chunkCount')` shows ≥ 1. Send `START_CAPTURE` again
+while recording → `{ok: false, error: 'Already recording'}` and the existing
+chunks survive. Then `{ target: 'background', type: 'STOP_CAPTURE' }` →
+`{ok: true}`, state `idle`. Close the tab mid-recording → state returns to
+`idle` on its own.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add -A && git commit -m "feat(extension): one-click tab capture via offscreen AudioWorklet pipeline"
+git add -A && git commit -m "feat(extension): one-click tab capture with state machine, serialized chunk writes, idempotent finalize"
 ```
 
 ---
@@ -780,61 +1032,56 @@ git add -A && git commit -m "feat(extension): one-click tab capture via offscree
 
 **Files:**
 - Modify: `apps/extension/entrypoints/popup/main.tsx`
-- Modify: `apps/extension/entrypoints/offscreen/main.ts` (add `ASSEMBLE_WAV` handling)
-- Modify: `apps/extension/utils/messages.ts`
+- Create: `apps/extension/utils/assemble.ts`
 
 **Interfaces:**
-- Consumes: message protocol + storage keys from Task 5
-- Produces: `{ type: 'ASSEMBLE_WAV' }` popup → offscreen, responds `{ ok: true, url: string, seconds: number }` (blob URL of full recording); popup UI states `idle`/`recording`
+- Consumes: message protocol + storage keys from Task 5; `getAllChunks` from `utils/chunkStore.ts`; `wavHeader` from `@scribetab/shared`
+- Produces: `assembleRecording(): Promise<{ blob: Blob; seconds: number }>` — throws `Error('Nothing recorded yet')` on zero chunks; popup UI states driven by `captureState`
 
-- [ ] **Step 1: Extend message types**
+- [ ] **Step 1: Assembly — PCM concatenation, no float round-trip**
 
-In `apps/extension/utils/messages.ts` add:
+`apps/extension/utils/assemble.ts`:
 ```ts
-export type PopupToOffscreen = { type: 'ASSEMBLE_WAV' };
-export interface AssembleResponse { ok: boolean; url?: string; seconds?: number; error?: string }
-```
+import { wavHeader } from '@scribetab/shared';
+import { getAllChunks } from './chunkStore';
 
-- [ ] **Step 2: Assemble endpoint in offscreen**
+/**
+ * Concatenates stored WAV chunks into one file by stripping each 44-byte
+ * header and prepending a single new one. Raw int16 bytes are copied as-is —
+ * no decode/re-encode, no lossy requantization, no large float buffers.
+ */
+export async function assembleRecording(): Promise<{ blob: Blob; seconds: number }> {
+  const rows = await getAllChunks(); // sorted by index
+  if (rows.length === 0) throw new Error('Nothing recorded yet');
 
-Append to `apps/extension/entrypoints/offscreen/main.ts` — extend the existing
-`onMessage` listener with a third branch (keep start/stop branches unchanged):
-```ts
-// inside the async IIFE of the listener:
-if (msg.type === 'ASSEMBLE_WAV') {
-  const db = await openDb();
-  const rows = await new Promise<{ index: number; wav: ArrayBuffer }[]>((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readonly');
-    const req = tx.objectStore(STORE).getAll();
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-  rows.sort((a, b) => a.index - b.index);
-  // Concatenate PCM (skip each 44-byte WAV header), re-encode once.
-  const sampleRate = ctx?.sampleRate ?? 48000;
-  const totalInt16 = rows.reduce((n, r) => n + (r.wav.byteLength - 44) / 2, 0);
-  const all = new Float32Array(totalInt16);
-  let off = 0;
+  const sampleRate = rows[0]!.sampleRate;
+  const dataLength = rows.reduce((n, r) => n + (r.wav.byteLength - 44), 0);
+  const out = new Uint8Array(44 + dataLength);
+  out.set(new Uint8Array(wavHeader(dataLength, sampleRate)), 0);
+
+  let off = 44;
   for (const r of rows) {
-    const int16 = new Int16Array(r.wav, 44);
-    for (let i = 0; i < int16.length; i++) all[off + i] = (int16[i] ?? 0) / 32768;
-    off += int16.length;
+    out.set(new Uint8Array(r.wav, 44), off);
+    off += r.wav.byteLength - 44;
   }
-  const url = URL.createObjectURL(new Blob([encodeWav(all, sampleRate)], { type: 'audio/wav' }));
-  sendResponse({ ok: true, url, seconds: totalInt16 / sampleRate });
-  return;
+  return {
+    blob: new Blob([out], { type: 'audio/wav' }),
+    seconds: dataLength / 2 / sampleRate,
+  };
 }
 ```
-Note: `sendResponse` for this branch happens inside the branch; make sure the
-listener still `return true`s for async response.
+The popup shares the extension origin, so it reads IndexedDB directly — no
+offscreen messaging, and the sample rate comes from the stored rows, never a
+default.
 
-- [ ] **Step 3: Real popup UI**
+- [ ] **Step 2: Popup UI**
 
 Replace `apps/extension/entrypoints/popup/main.tsx`:
 ```tsx
 import { render } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import type { AssembleResponse, CaptureState } from '@/utils/messages';
+import type { Ack, CaptureState } from '@/utils/messages';
+import { assembleRecording } from '@/utils/assemble';
 
 function App() {
   const [state, setState] = useState<CaptureState>('idle');
@@ -842,14 +1089,12 @@ function App() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    chrome.storage.local
-      .get(['captureState', 'chunkCount'])
-      .then((v) => {
-        setState((v.captureState as CaptureState) ?? 'idle');
-        setChunks((v.chunkCount as number) ?? 0);
-      });
+    chrome.storage.local.get(['captureState', 'chunkCount']).then((v) => {
+      setState((v.captureState as CaptureState) ?? 'idle');
+      setChunks((v.chunkCount as number) ?? 0);
+    });
     const onChange = (c: Record<string, chrome.storage.StorageChange>) => {
-      if (c.captureState) setState(c.captureState.newValue as CaptureState);
+      if (c.captureState) setState((c.captureState.newValue as CaptureState) ?? 'idle');
       if (c.chunkCount) setChunks((c.chunkCount.newValue as number) ?? 0);
     };
     chrome.storage.onChanged.addListener(onChange);
@@ -858,31 +1103,37 @@ function App() {
 
   const send = async (type: 'START_CAPTURE' | 'STOP_CAPTURE') => {
     setError(null);
-    const res = await chrome.runtime.sendMessage({ type });
+    const res = (await chrome.runtime.sendMessage({ target: 'background', type })) as Ack;
     if (!res?.ok) setError(res?.error ?? 'Unknown error');
   };
 
   const download = async () => {
-    const res = (await chrome.runtime.sendMessage({ type: 'ASSEMBLE_WAV' })) as AssembleResponse;
-    if (!res.ok || !res.url) { setError(res.error ?? 'Nothing recorded yet'); return; }
-    await chrome.downloads.download({
-      url: res.url,
-      filename: `scribetab-recording-${Date.now()}.wav`,
-    });
+    setError(null);
+    try {
+      const { blob, seconds } = await assembleRecording();
+      const url = URL.createObjectURL(blob);
+      await chrome.downloads.download({
+        url,
+        filename: `scribetab-recording-${Math.round(seconds)}s.wav`,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   };
 
+  const busy = state === 'starting' || state === 'stopping';
   return (
     <main style={{ minWidth: 260, padding: 12, fontFamily: 'system-ui' }}>
       <h1 style={{ fontSize: 16, margin: '0 0 8px' }}>ScribeTab</h1>
-      {state === 'idle' ? (
-        <button onClick={() => send('START_CAPTURE')}>● Start recording this tab</button>
+      {state === 'recording' || state === 'stopping' ? (
+        <button disabled={busy} onClick={() => send('STOP_CAPTURE')}>■ Stop recording</button>
       ) : (
-        <button onClick={() => send('STOP_CAPTURE')}>■ Stop recording</button>
+        <button disabled={busy} onClick={() => send('START_CAPTURE')}>● Start recording this tab</button>
       )}
       <p data-testid="chunk-count" style={{ fontSize: 12, color: '#555' }}>
         Saved chunks: {chunks}
       </p>
-      <button onClick={download} disabled={state === 'recording'}>
+      <button onClick={download} disabled={state !== 'idle'}>
         Download last recording (.wav)
       </button>
       {error && <p style={{ color: 'crimson', fontSize: 12 }}>{error}</p>}
@@ -891,23 +1142,26 @@ function App() {
 }
 render(<App />, document.getElementById('app')!);
 ```
-Note: `ASSEMBLE_WAV` is broadcast via `chrome.runtime.sendMessage`; the background
-listener ignores unknown types, the offscreen listener answers. Verify the
-background's listener does not `sendResponse` for `ASSEMBLE_WAV` (it only handles
-`START_CAPTURE`/`STOP_CAPTURE` — confirm the switch falls through silently).
+
+- [ ] **Step 3: Typecheck and build**
+
+Run: `pnpm typecheck && pnpm --filter @scribetab/extension build`
+Expected: both green — the popup imports only `messages.ts`, `assemble.ts`, and shared; no cross-endpoint type unions exist to drift.
 
 - [ ] **Step 4: End-to-end manual verification (the Phase 2 milestone)**
 
 Build + reload. On a YouTube video:
-1. Popup → "Start recording this tab" → audio stays audible.
+1. Popup → "Start recording this tab" → audio stays audible, button flips to Stop.
 2. Wait ~90s → "Saved chunks" reaches ≥ 1 live.
 3. Stop → chunk count includes the flushed remainder.
-4. "Download last recording" → open the WAV → it plays the tab audio.
+4. "Download last recording" → open the WAV → it plays the tab audio **at correct speed/pitch** (sample rate comes from stored rows).
+5. Download with nothing recorded → visible "Nothing recorded yet" error, no 44-byte file.
+6. Start recording, close the tab → popup shows idle; downloading yields the audio captured up to the close.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add -A && git commit -m "feat(extension): popup start/stop, live chunk counter, WAV download"
+git add -A && git commit -m "feat(extension): popup start/stop, live chunk counter, direct-IDB WAV assembly and download"
 ```
 
 ---
@@ -957,18 +1211,26 @@ git add -A && git commit -m "ci: typecheck, test, build on every push/PR"
 
 Playwright e2e (extension loaded into a persistent Chromium context, capture
 against a local page playing a tone) is intentionally deferred to Phase 3, when
-the side panel gives the test something meaningful to assert; capture correctness
-in Phase 2 is gated by the manual milestone in Task 6 Step 4.
+the side panel gives the test something meaningful to assert; capture
+correctness in Phase 2 is gated by the manual milestone in Task 6 Step 4.
+Linting is added in Phase 3 alongside the first multi-contributor surface.
 
 ---
 
-## Self-review (done at plan time)
+## Self-review (revision 2)
 
 - **Spec coverage (Phases 1–2 scope):** monorepo ✓, GPLv3 metadata ✓, one-click
   no-picker capture ✓, audio re-route (stays audible) ✓, offscreen architecture ✓,
-  silence chunker ✓ (TDD), local-only storage ✓, CI ✓. Mic mixing is Phase 3+ per
-  roadmap (capture path must exist first); side panel is Phase 3.
+  silence chunker ✓ (TDD incl. production defaults at 48 kHz), local-only
+  storage ✓, tab-close/track-ended finalize ✓, double-start protection ✓, CI ✓.
+  Mic mixing and side panel are Phase 3 per roadmap.
+- **Known limitations accepted for Phase 2:** single anonymous recording (no
+  sessions until Phase 4); popup+button is the start gesture (hotkey lands in
+  Phase 9 per roadmap; spec wording updated to match); `opInFlight` guard is
+  per-SW-lifetime (storage state covers SW restarts).
+- **Type consistency:** each endpoint has exactly one inbound union
+  (`ToBackground`, `ToOffscreen`); popup consumes only `Ack`/`CaptureState`;
+  `ChunkRow` is defined once in `chunkStore.ts` and used by writer and reader;
+  `wavHeader`/`encodeWav`/`SilenceChunker` signatures match Tasks 2–3 and the
+  assemble/offscreen call sites. Verified by `pnpm typecheck` in Tasks 5–6.
 - **Placeholders:** none — every step has runnable content.
-- **Type consistency:** message types defined once in `utils/messages.ts` and
-  imported by background/offscreen/popup; chunker/WAV signatures match between
-  tasks and roadmap.

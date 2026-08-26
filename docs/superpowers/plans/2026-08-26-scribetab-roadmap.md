@@ -21,13 +21,14 @@ export interface MeetingSession {
   endedAt?: string;
   platform: 'meet' | 'teams' | 'zoom' | 'youtube' | 'other';
   tabUrl?: string;
+  status: 'recording' | 'complete' | 'failed';
 }
 
 export interface TranscriptSegment {
   id: string;
   sessionId: string;
-  startMs: number;           // offset from session start
-  endMs: number;
+  startMs: number;           // ms since session start — ALWAYS session-relative,
+  endMs: number;             // never chunk-relative; producers must add chunk offsets
   text: string;
   speaker?: string;          // from caption fusion (Phase 6)
   source: 'audio' | 'captions';
@@ -67,17 +68,34 @@ export interface LlmProvider {
 }
 ```
 
-Native-host message envelope (Phase 5), sent over Chrome native messaging:
+Native-host sync protocol (Phase 5), sent over a `chrome.runtime.connectNative()`
+port. Chrome's limits are 4 GB extension→host and 1 MB host→extension per
+message, but a whole meeting's audio must never travel as one giant JSON
+message (memory/parse spike on both sides) — audio streams as bounded chunks:
 
 ```ts
-export interface SyncSessionMessage {
-  type: 'sync_session';
-  session: MeetingSession;
-  segments: TranscriptSegment[];
-  summaryMarkdown?: string;
-  audioWavBase64?: string;   // only when retention enabled
+export type HostSyncMessage =
+  | {
+      type: 'sync_begin';
+      protocolVersion: 1;
+      session: MeetingSession;
+      segments: TranscriptSegment[];
+      summaryMarkdown?: string;
+      audio?: { format: 'wav'; sampleRate: number; totalChunks: number }; // present only when retention enabled
+    }
+  | { type: 'sync_audio_chunk'; sessionId: string; index: number; wavBase64: string } // ≤ 8 MiB decoded per chunk
+  | { type: 'sync_end'; sessionId: string };
+
+export interface HostSyncAck {
+  ok: boolean;
+  sessionId: string;
+  error?: string;            // host replies after sync_end (and on any failure)
 }
 ```
+
+The host writes audio chunks to a temp file as they arrive and atomically
+renames the session directory into place on `sync_end` — a killed sync never
+leaves a half-written meeting visible.
 
 ## Phases
 
@@ -96,6 +114,10 @@ IndexedDB → stop assembles a full recording the user can download and play.
   `openai.ts`, `groq.ts`, `deepgram.ts`, `mistral.ts`, `custom.ts` (OpenAI-compatible
   `baseUrl` — this is the local-model path: whisper.cpp server, Speaches, LM Studio).
   Unit-tested with mocked `fetch` fixtures per provider.
+- Host permissions: cloud providers and custom/localhost endpoints need
+  `optional_host_permissions` — the options page requests the configured origin
+  via `chrome.permissions.request` before first use (adapters stay unchanged,
+  but the manifest/permission flow is real work, not "zero code").
 - Transcription queue in offscreen doc: chunk → provider → `TranscriptSegment[]`,
   exponential backoff (1s/4s/16s, then mark gap segment `"[transcription failed]"`).
 - Options page: provider picker, key entry (stored `chrome.storage.local`), model,
@@ -117,14 +139,22 @@ IndexedDB → stop assembles a full recording the user can download and play.
 **Milestone: browse past meetings, search them, export any meeting in 4 formats.**
 
 ### Phase 5 — Native host + MCP
+- Prerequisite: `@scribetab/shared` gains a build step (ESM + `.d.ts` to `dist/`
+  with a proper `exports` map) so plain Node can import it — WXT bundles TS
+  source, Node does not. Tested from both consumers.
 - `apps/native-host`: Node ≥ 20, zero heavy deps. Two entrypoints, one codebase:
   `scribetab-host` (native messaging: length-prefixed JSON over stdio, receives
-  `SyncSessionMessage`, writes `~/ScribeTab/meetings/<date>-<slug>/{transcript.md,transcript.json,summary.md,audio.wav}`)
+  the `HostSyncMessage` stream, writes `~/ScribeTab/meetings/<date>-<slug>/{transcript.md,transcript.json,summary.md,audio.wav}`)
   and `scribetab-mcp` (MCP stdio server; tools `list_transcripts`, `get_transcript`,
   `get_latest_transcript`, `search_transcripts`, `export_transcript` reading the same
   directory).
 - Install script (`npx scribetab-host install`) writes the Chrome
-  `NativeMessagingHosts` manifest for macOS/Linux/Windows.
+  `NativeMessagingHosts` manifest for macOS/Linux/Windows. `allowed_origins`
+  needs a stable extension ID: ship a packed `key` in the manifest for
+  development and document the store ID once published.
+- File layout rules: `~/ScribeTab/meetings/<date>-<slug>/` where slug is
+  filesystem-sanitized (`[a-z0-9-]`, max 60 chars) with `-2`, `-3` suffixes on
+  collision; sessions are written to a temp dir and atomically renamed in.
 - Extension: sync-on-finalize + "sync all" button; graceful "host not installed" state.
 - Tests: spawn host as child process, drive both protocols over stdio.
 **Milestone: finish a meeting → files appear in `~/ScribeTab/` → Claude reads them via MCP.**
