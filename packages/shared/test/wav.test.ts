@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { encodeWav, wavHeader } from '../src/wav';
+import { assembleWavChunks, encodeWav, wavHeader } from '../src/wav';
 
 describe('wavHeader', () => {
   it('writes a valid 16-bit mono RIFF/WAVE header', () => {
@@ -38,5 +38,37 @@ describe('encodeWav', () => {
     expect(view.getInt16(48, true)).toBe(-32768);
     expect(view.getInt16(50, true)).toBe(32767);
     expect(view.getInt16(52, true)).toBe(-32768);
+  });
+});
+
+describe('assembleWavChunks', () => {
+  it('rejects an empty list', () => {
+    expect(() => assembleWavChunks([])).toThrow('Nothing recorded yet');
+  });
+
+  it('concatenates two chunks without requantizing', () => {
+    const a = encodeWav(new Float32Array([0, 1]), 16000);
+    const b = encodeWav(new Float32Array([-1]), 16000);
+    const out = assembleWavChunks([
+      { sampleRate: 16000, wav: a },
+      { sampleRate: 16000, wav: b },
+    ]);
+    const view = new DataView(out);
+    expect(out.byteLength).toBe(44 + 6);
+    expect(view.getUint32(24, true)).toBe(16000);
+    expect(view.getInt16(44, true)).toBe(0);
+    expect(view.getInt16(46, true)).toBe(32767);
+    expect(view.getInt16(48, true)).toBe(-32768);
+  });
+
+  it('rejects mixed sample rates', () => {
+    const a = encodeWav(new Float32Array([0]), 16000);
+    const b = encodeWav(new Float32Array([0]), 48000);
+    expect(() =>
+      assembleWavChunks([
+        { sampleRate: 16000, wav: a },
+        { sampleRate: 48000, wav: b },
+      ]),
+    ).toThrow(/Mixed sample rates/);
   });
 });

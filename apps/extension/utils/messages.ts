@@ -5,7 +5,7 @@ export type ToBackground =
   | { target: 'background'; type: 'START_CAPTURE' }
   | { target: 'background'; type: 'STOP_CAPTURE' }
   | { target: 'background'; type: 'CHUNK_SAVED'; count: number }      // offscreen → SW
-  | { target: 'background'; type: 'CAPTURE_ENDED'; reason: string };  // offscreen → SW
+  | { target: 'background'; type: 'CAPTURE_ENDED'; reason: string; error?: string };  // offscreen → SW
 
 /** Messages handled by the offscreen document (from the service worker only). */
 export type ToOffscreen =

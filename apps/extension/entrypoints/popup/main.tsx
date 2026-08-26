@@ -9,13 +9,16 @@ function App() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    chrome.storage.local.get(['captureState', 'chunkCount']).then((v) => {
+    chrome.storage.local.get(['captureState', 'chunkCount', 'lastError']).then((v) => {
       setState((v.captureState as CaptureState) ?? 'idle');
       setChunks((v.chunkCount as number) ?? 0);
+      if (typeof v.lastError === 'string' && v.lastError) setError(v.lastError);
     });
-    const onChange = (c: Record<string, chrome.storage.StorageChange>) => {
+    const onChange = (c: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area !== 'local') return;
       if (c.captureState) setState((c.captureState.newValue as CaptureState) ?? 'idle');
       if (c.chunkCount) setChunks((c.chunkCount.newValue as number) ?? 0);
+      if (c.lastError?.newValue) setError(String(c.lastError.newValue));
     };
     chrome.storage.onChanged.addListener(onChange);
     return () => chrome.storage.onChanged.removeListener(onChange);
@@ -36,10 +39,18 @@ function App() {
     try {
       const { blob, seconds } = await assembleRecording();
       const url = URL.createObjectURL(blob);
-      await chrome.downloads.download({
+      const downloadId = await chrome.downloads.download({
         url,
         filename: `scribetab-recording-${Math.round(seconds)}s.wav`,
       });
+      const done = (delta: chrome.downloads.DownloadDelta) => {
+        if (delta.id !== downloadId) return;
+        if (delta.state?.current === 'complete' || delta.state?.current === 'interrupted') {
+          URL.revokeObjectURL(url);
+          chrome.downloads.onChanged.removeListener(done);
+        }
+      };
+      chrome.downloads.onChanged.addListener(done);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }

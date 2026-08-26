@@ -1,19 +1,36 @@
 import type { Ack, ToBackground, ToOffscreen } from '@/utils/messages';
 
-async function ensureOffscreen(): Promise<void> {
-  // hasDocument() is Chrome 150+; getContexts() works on our 116 floor.
-  const contexts = await chrome.runtime.getContexts({
+let creatingOffscreen: Promise<void> | null = null;
+
+async function offscreenContexts(): Promise<chrome.runtime.ExtensionContext[]> {
+  return chrome.runtime.getContexts({
     contextTypes: ['OFFSCREEN_DOCUMENT' as chrome.runtime.ContextType],
   });
-  if (contexts.length > 0) return;
-  await chrome.offscreen.createDocument({
-    url: 'offscreen.html',
-    // USER_MEDIA has no idle timeout and the live capture keeps the document
-    // alive. Deliberately NOT declaring AUDIO_PLAYBACK: that reason closes the
-    // document after 30s without audio, which would endanger silent meetings.
-    reasons: [chrome.offscreen.Reason.USER_MEDIA],
-    justification: 'Capture tab audio locally for transcription',
-  });
+}
+
+async function ensureOffscreen(): Promise<void> {
+  // hasDocument() is Chrome 150+; getContexts() works on our 116 floor.
+  if ((await offscreenContexts()).length > 0) return;
+  if (!creatingOffscreen) {
+    creatingOffscreen = chrome.offscreen
+      .createDocument({
+        url: 'offscreen.html',
+        // USER_MEDIA has no idle timeout and the live capture keeps the document
+        // alive. Deliberately NOT declaring AUDIO_PLAYBACK: that reason closes the
+        // document after 30s without audio, which would endanger silent meetings.
+        reasons: [chrome.offscreen.Reason.USER_MEDIA],
+        justification: 'Capture tab audio locally for transcription',
+      })
+      .then(() => undefined)
+      .finally(() => {
+        creatingOffscreen = null;
+      });
+  }
+  try {
+    await creatingOffscreen;
+  } catch (e) {
+    if ((await offscreenContexts()).length === 0) throw e;
+  }
 }
 
 function sendToOffscreen(msg: ToOffscreen): Promise<Ack> {
@@ -37,31 +54,47 @@ let opInFlight = false; // serializes start/stop within one SW lifetime
 async function handleStart(): Promise<Ack> {
   if (opInFlight) return { ok: false, error: 'Operation in progress' };
   opInFlight = true;
+  let offscreenStarted = false;
   try {
     const { captureState } = await chrome.storage.local.get('captureState');
     if (captureState === 'recording' || captureState === 'starting') {
       return { ok: false, error: 'Already recording' };
     }
-    await chrome.storage.local.set({ captureState: 'starting' });
+
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id == null) throw new Error('No active tab');
+
+    await chrome.storage.local.set({ captureState: 'starting', lastError: null });
 
     // Offscreen must exist BEFORE getMediaStreamId: stream ids are one-use
     // and expire within seconds, so the consumer must be ready.
     await ensureOffscreen();
 
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) throw new Error('No active tab');
     const streamId = await getMediaStreamId({ targetTabId: tab.id });
 
-    const res = await sendToOffscreen({ target: 'offscreen', type: 'OFFSCREEN_START', streamId });
-    if (!res?.ok) throw new Error(res?.error ?? 'Offscreen failed to start');
+    const first = await sendToOffscreen({ target: 'offscreen', type: 'OFFSCREEN_START', streamId });
+    if (first?.ok) {
+      offscreenStarted = true;
+    } else if (/already running/i.test(first?.error ?? '')) {
+      await sendToOffscreen({ target: 'offscreen', type: 'OFFSCREEN_STOP' }).catch(() => {});
+      const retry = await sendToOffscreen({ target: 'offscreen', type: 'OFFSCREEN_START', streamId });
+      if (!retry?.ok) throw new Error(retry?.error ?? first?.error ?? 'Offscreen failed to start');
+      offscreenStarted = true;
+    } else {
+      throw new Error(first?.error ?? 'Offscreen failed to start');
+    }
 
     await chrome.storage.local.set({
       captureState: 'recording',
       chunkCount: 0,
       capturedTabId: tab.id,
+      lastError: null,
     });
     return { ok: true };
   } catch (e) {
+    if (offscreenStarted) {
+      await sendToOffscreen({ target: 'offscreen', type: 'OFFSCREEN_STOP' }).catch(() => {});
+    }
     await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
     return { ok: false, error: String(e) };
   } finally {
@@ -75,14 +108,45 @@ async function handleStop(): Promise<Ack> {
   try {
     await chrome.storage.local.set({ captureState: 'stopping' });
     const res = await sendToOffscreen({ target: 'offscreen', type: 'OFFSCREEN_STOP' });
-    await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
-    return res?.ok ? { ok: true } : { ok: false, error: res?.error ?? 'Stop failed' };
+    if (res?.ok) {
+      await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null, lastError: null });
+      return { ok: true };
+    }
+    if ((await offscreenContexts()).length === 0) {
+      await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
+      return { ok: true };
+    }
+    await chrome.storage.local.set({
+      captureState: 'recording',
+      lastError: res?.error ?? 'Stop failed',
+    });
+    return { ok: false, error: res?.error ?? 'Stop failed' };
   } catch (e) {
-    await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
+    if ((await offscreenContexts()).length === 0) {
+      await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
+      return { ok: true };
+    }
+    await chrome.storage.local.set({ captureState: 'recording', lastError: String(e) });
     return { ok: false, error: String(e) };
   } finally {
     opInFlight = false;
   }
+}
+
+async function finalizeIfCaptured(tabId: number): Promise<void> {
+  const { capturedTabId, captureState } = await chrome.storage.local.get([
+    'capturedTabId',
+    'captureState',
+  ]);
+  if (captureState !== 'recording' || tabId !== capturedTabId) return;
+  const res = await sendToOffscreen({ target: 'offscreen', type: 'OFFSCREEN_STOP' }).catch(
+    () => null,
+  );
+  await chrome.storage.local.set({
+    captureState: 'idle',
+    capturedTabId: null,
+    lastError: res && !res.ok ? (res.error ?? 'Stop failed') : null,
+  });
 }
 
 export default defineBackground(() => {
@@ -93,10 +157,7 @@ export default defineBackground(() => {
     if (captureState === 'starting' || captureState === 'stopping') {
       await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
     } else if (captureState === 'recording') {
-      const contexts = await chrome.runtime.getContexts({
-        contextTypes: ['OFFSCREEN_DOCUMENT' as chrome.runtime.ContextType],
-      });
-      if (contexts.length === 0) {
+      if ((await offscreenContexts()).length === 0) {
         await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
       }
     }
@@ -120,7 +181,11 @@ export default defineBackground(() => {
           sendResponse({ ok: true });
           break;
         case 'CAPTURE_ENDED':
-          await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
+          await chrome.storage.local.set({
+            captureState: 'idle',
+            capturedTabId: null,
+            lastError: msg.error ?? null,
+          });
           sendResponse({ ok: true });
           break;
       }
@@ -128,18 +193,12 @@ export default defineBackground(() => {
     return true;
   });
 
-  // Belt-and-braces finalize: the captured tab going away must end the session
-  // (the audio track's 'ended' event in the offscreen doc is the primary path).
   chrome.tabs.onRemoved.addListener((tabId) => {
-    void (async () => {
-      const { capturedTabId, captureState } = await chrome.storage.local.get([
-        'capturedTabId',
-        'captureState',
-      ]);
-      if (captureState === 'recording' && tabId === capturedTabId) {
-        await sendToOffscreen({ target: 'offscreen', type: 'OFFSCREEN_STOP' }).catch(() => {});
-        await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
-      }
-    })();
+    void finalizeIfCaptured(tabId);
+  });
+
+  chrome.tabs.onUpdated.addListener((tabId, info) => {
+    if (info.status !== 'loading' && info.url === undefined) return;
+    void finalizeIfCaptured(tabId);
   });
 });

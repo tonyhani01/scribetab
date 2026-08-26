@@ -36,3 +36,42 @@ export function encodeWav(samples: Float32Array, sampleRate: number): ArrayBuffe
   }
   return out.buffer;
 }
+
+export interface WavChunk {
+  sampleRate: number;
+  wav: ArrayBuffer;
+}
+
+/**
+ * Concatenate stored WAV chunks by stripping each 44-byte header and writing
+ * one new header. Raw int16 bytes are copied as-is.
+ */
+export function assembleWavChunks(chunks: WavChunk[]): ArrayBuffer {
+  if (chunks.length === 0) throw new Error('Nothing recorded yet');
+
+  const sampleRate = chunks[0]!.sampleRate;
+  if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
+    throw new Error(`Invalid sample rate: ${sampleRate}`);
+  }
+
+  let dataLength = 0;
+  for (const c of chunks) {
+    if (c.sampleRate !== sampleRate) {
+      throw new Error(`Mixed sample rates: ${sampleRate} vs ${c.sampleRate}`);
+    }
+    if (c.wav.byteLength < 44) throw new Error('Truncated WAV chunk');
+    const pcm = c.wav.byteLength - 44;
+    if (pcm % 2 !== 0) throw new Error('Odd PCM byte length');
+    dataLength += pcm;
+  }
+
+  const out = new Uint8Array(44 + dataLength);
+  out.set(new Uint8Array(wavHeader(dataLength, sampleRate)), 0);
+  let off = 44;
+  for (const c of chunks) {
+    const pcmBytes = c.wav.byteLength - 44;
+    out.set(new Uint8Array(c.wav, 44, pcmBytes), off);
+    off += pcmBytes;
+  }
+  return out.buffer;
+}

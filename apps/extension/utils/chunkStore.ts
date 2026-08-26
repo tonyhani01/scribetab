@@ -51,8 +51,10 @@ export async function putChunk(row: ChunkRow): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).put(row);
+    const fail = () => reject(tx.error ?? new Error('IndexedDB transaction failed'));
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.onerror = fail;
+    tx.onabort = fail;
   });
 }
 
@@ -63,6 +65,7 @@ export async function getAllChunks(): Promise<ChunkRow[]> {
     const req = tx.objectStore(STORE).getAll();
     req.onsuccess = () => resolve(req.result as ChunkRow[]);
     req.onerror = () => reject(req.error);
+    tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'));
   });
   return rows.sort((a, b) => a.index - b.index);
 }
@@ -72,7 +75,9 @@ export async function clearChunks(): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).clear();
+    const fail = () => reject(tx.error ?? new Error('IndexedDB transaction failed'));
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.onerror = fail;
+    tx.onabort = fail;
   });
 }
