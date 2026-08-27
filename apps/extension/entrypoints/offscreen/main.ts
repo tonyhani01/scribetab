@@ -1,6 +1,7 @@
-import { SilenceChunker, encodeWav } from '@scribetab/shared';
-import type { Ack, ToOffscreen } from '@/utils/messages';
+import { SilenceChunker, TranscriptionQueue, encodeWav, getTranscriptionProvider } from '@scribetab/shared';
+import type { Ack, ToOffscreen, ToSidePanel } from '@/utils/messages';
 import { clearChunks, putChunk } from '@/utils/chunkStore';
+import { clearSegments, putSegments } from '@/utils/segmentStore';
 
 interface Engine {
   ctx: AudioContext;
@@ -17,10 +18,14 @@ let chunkIndex = 0;
 let samplesWritten = 0;
 let writeChain: Promise<void> = Promise.resolve();
 let writeError: Error | null = null;
+let queue: TranscriptionQueue | null = null;
+let segmentCount = 0;
 
 function notifyBackground(
   msg:
     | { target: 'background'; type: 'CHUNK_SAVED'; count: number }
+    | { target: 'background'; type: 'SEGMENT_SAVED'; count: number }
+    | { target: 'background'; type: 'MIC_STATUS'; status: 'active' | 'denied' | 'off' }
     | { target: 'background'; type: 'CAPTURE_ENDED'; reason: string; error?: string },
 ): void {
   void chrome.runtime.sendMessage(msg).catch(() => {
@@ -32,18 +37,26 @@ function notifyBackground(
 function enqueueChunk(pcm: Float32Array, sampleRate: number): void {
   const index = chunkIndex++;
   const startOffsetSamples = samplesWritten;
+  const lengthSamples = pcm.length;
   samplesWritten += pcm.length;
   const wav = encodeWav(pcm, sampleRate);
   writeChain = writeChain.then(async () => {
     if (writeError) return;
     await putChunk({ index, sampleRate, startOffsetSamples, wav, createdAt: Date.now() });
     notifyBackground({ target: 'background', type: 'CHUNK_SAVED', count: index + 1 });
+    queue?.enqueue({
+      index,
+      wav,
+      startMs: Math.round((startOffsetSamples / sampleRate) * 1000),
+      durationMs: Math.round((lengthSamples / sampleRate) * 1000),
+    });
   }).catch((e) => {
     writeError = e instanceof Error ? e : new Error(String(e));
   });
 }
 
-async function start(streamId: string): Promise<void> {
+async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Promise<void> {
+  const { streamId } = msg;
   // Wait for a finalize in flight, but swallow its rejection: a write failure
   // was already surfaced through the stop ACK / CAPTURE_ENDED, and it must not
   // poison the next session's start.
@@ -87,6 +100,39 @@ async function start(streamId: string): Promise<void> {
 
     // Graph is live — only now is it safe to discard the previous recording.
     await clearChunks();
+    // Abandon any still-retrying jobs from the previous session BEFORE
+    // clearing its segments, or a late retry would resurrect them.
+    queue?.cancel();
+    await clearSegments();
+    segmentCount = 0;
+    const transcription = msg.transcription;
+    queue = transcription
+      ? new TranscriptionQueue({
+          sessionId: msg.sessionId,
+          language: transcription.language,
+          transcribe: (req) =>
+            getTranscriptionProvider(transcription.providerId).transcribe(req, {
+              apiKey: transcription.apiKey,
+              baseUrl: transcription.baseUrl,
+              model: transcription.model,
+            }),
+          onSegments: async (segments) => {
+            await putSegments(segments);
+            segmentCount += segments.length;
+            notifyBackground({ target: 'background', type: 'SEGMENT_SAVED', count: segmentCount });
+            void chrome.runtime
+              .sendMessage({
+                target: 'sidepanel',
+                type: 'SEGMENTS_ADDED',
+                sessionId: msg.sessionId,
+                segments,
+              } satisfies ToSidePanel)
+              .catch(() => {
+                // Side panel not open — segments are in IndexedDB; it catches up on open.
+              });
+          },
+        })
+      : null;
     chunkIndex = 0;
     samplesWritten = 0;
     writeChain = Promise.resolve();
@@ -155,7 +201,7 @@ chrome.runtime.onMessage.addListener((raw: unknown, _s, sendResponse) => {
   (async () => {
     switch (msg.type) {
       case 'OFFSCREEN_START':
-        await start(msg.streamId);
+        await start(msg);
         sendResponse({ ok: true } satisfies Ack);
         break;
       case 'OFFSCREEN_STOP':
