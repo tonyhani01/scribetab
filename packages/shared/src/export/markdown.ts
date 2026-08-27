@@ -1,8 +1,13 @@
 import type { MeetingSession, TranscriptSegment } from '../types.js';
+import type { ExportExtras } from './extras.js';
 import { orderedSegments } from './order.js';
 import { formatClock } from './timestamps.js';
 
-export function exportMarkdown(session: MeetingSession, segments: TranscriptSegment[]): string {
+export function exportMarkdown(
+  session: MeetingSession,
+  segments: TranscriptSegment[],
+  extras?: ExportExtras,
+): string {
   const lines: string[] = [
     `# ${session.title}`,
     '',
@@ -11,6 +16,12 @@ export function exportMarkdown(session: MeetingSession, segments: TranscriptSegm
     `- Platform: ${session.platform}`,
   ];
   if (session.tabUrl) lines.push(`- URL: ${session.tabUrl}`);
+  if (typeof extras?.costUsd === 'number') {
+    lines.push(`- Estimated cost (USD): ${extras.costUsd}`);
+  }
+  if (extras?.summaryMarkdown?.trim()) {
+    lines.push('', extras.summaryMarkdown.trim());
+  }
   lines.push('', '## Transcript', '');
 
   for (const seg of orderedSegments(segments)) {

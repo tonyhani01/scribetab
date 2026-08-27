@@ -61,6 +61,17 @@ describe('exportMarkdown', () => {
     expect(md).toContain('# Weekly standup');
     expect(md).not.toContain('Hello team');
   });
+
+  it('includes summary markdown and estimated cost when provided', () => {
+    const md = exportMarkdown(session, segments, {
+      summaryMarkdown: '## Summary\n\nShip it.\n\n## Action items\n\n- [ ] Recap',
+      costUsd: 0.006,
+    });
+    expect(md).toContain('- Estimated cost (USD): 0.006');
+    expect(md).toContain('## Summary');
+    expect(md).toContain('Ship it.');
+    expect(md.indexOf('## Summary')).toBeLessThan(md.indexOf('## Transcript'));
+  });
 });
 
 describe('exportJson', () => {
@@ -77,6 +88,16 @@ describe('exportJson', () => {
   it('emits an empty segments array when there are none', () => {
     const parsed = JSON.parse(exportJson(session, [])) as { segments: unknown[] };
     expect(parsed.segments).toEqual([]);
+  });
+
+  it('includes summaryMarkdown and costUsd extras without mutating session', () => {
+    const parsed = JSON.parse(
+      exportJson(session, segments, { summaryMarkdown: '## Summary\n\nHi', costUsd: 0.01 }),
+    ) as { session: MeetingSession; summaryMarkdown: string; costUsd: number };
+    expect(parsed.summaryMarkdown).toBe('## Summary\n\nHi');
+    expect(parsed.costUsd).toBe(0.01);
+    expect(parsed.session).toEqual(session);
+    expect('summaryMarkdown' in parsed.session).toBe(false);
   });
 });
 
