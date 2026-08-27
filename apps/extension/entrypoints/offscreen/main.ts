@@ -1,8 +1,16 @@
-import { SilenceChunker, TranscriptionQueue, encodeWav, getTranscriptionProvider, redactSegments } from '@scribetab/shared';
+import {
+  SilenceChunker,
+  TranscriptionQueue,
+  addCostUsd,
+  encodeWav,
+  getTranscriptionProvider,
+  redactSegments,
+} from '@scribetab/shared';
 import type { Ack, ToOffscreen, ToSidePanel } from '@/utils/messages';
 import { putChunk } from '@/utils/chunkStore';
 import { offscreenStopApplies } from '@/utils/sessionIdentity';
 import { putSegments } from '@/utils/segmentStore';
+import { getSession, updateSession } from '@/utils/sessionStore';
 
 interface Engine {
   ctx: AudioContext;
@@ -139,12 +147,23 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
       ? new TranscriptionQueue({
           sessionId: msg.sessionId,
           language: transcription.language,
-          transcribe: (req) =>
-            getTranscriptionProvider(transcription.providerId).transcribe(req, {
+          transcribe: async (req) => {
+            const result = await getTranscriptionProvider(transcription.providerId).transcribe(req, {
               apiKey: transcription.apiKey,
               baseUrl: transcription.baseUrl,
               model: transcription.model,
-            }),
+            });
+            await chrome.storage.local.remove('lastTranscriptionError');
+            return result;
+          },
+          onError: (message) => chrome.storage.local.set({ lastTranscriptionError: message }),
+          onCostUsd: async (usd) => {
+            const session = await getSession(msg.sessionId);
+            if (!session) return;
+            await updateSession(msg.sessionId, {
+              providerCostUsd: addCostUsd(session.providerCostUsd, usd),
+            });
+          },
           onSegments: async (segments) => {
             const stored = msg.redaction
               ? redactSegments(segments, { extraTerms: msg.redaction.extraTerms })

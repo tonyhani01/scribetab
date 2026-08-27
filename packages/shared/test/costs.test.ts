@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addCostUsd,
   audioTranscribedMs,
   estimateTokens,
   formatUsd,
@@ -70,6 +71,17 @@ describe('estimateTokens', () => {
     expect(estimateTokens('abcd')).toBe(1);
     expect(estimateTokens('abcdefgh')).toBe(2);
   });
+});
+
+describe('addCostUsd', () => {
+  it('sums known components and skips unknowns',
+    () => {
+      expect(addCostUsd(0.00003036, 0.0001)).toBe(0.00013);
+      expect(addCostUsd(0.00003036, undefined)).toBe(0.00003);
+      expect(addCostUsd(undefined, 0.0001)).toBe(0.0001);
+      expect(addCostUsd(undefined, undefined)).toBeUndefined();
+    },
+  );
 });
 
 describe('formatUsd', () => {

@@ -85,6 +85,7 @@ function LiveView() {
   const [state, setState] = useState<CaptureState>('idle');
   const [configured, setConfigured] = useState(true);
   const [issue, setIssue] = useState<TranscriptionIssue>(null);
+  const [lastTranscriptionError, setLastTranscriptionError] = useState<string | null>(null);
   const [micStatus, setMicStatus] = useState<string>('off');
   const [hostStatus, setHostStatus] = useState<NativeHostStatus>({ state: 'idle' });
   const [syncing, setSyncing] = useState(false);
@@ -95,11 +96,16 @@ function LiveView() {
 
   useEffect(() => {
     void chrome.storage.local
-      .get(['currentSessionId', 'captureState', 'transcriptionConfigured', 'transcriptionIssue', 'micStatus', 'nativeHostStatus', 'captureNotice'])
+      .get(['currentSessionId', 'captureState', 'transcriptionConfigured', 'transcriptionIssue', 'lastTranscriptionError', 'micStatus', 'nativeHostStatus', 'captureNotice'])
       .then(async (v) => {
         setState((v.captureState as CaptureState) ?? 'idle');
         setConfigured((v.transcriptionConfigured as boolean) ?? true);
         setIssue((v.transcriptionIssue as TranscriptionIssue) ?? null);
+        setLastTranscriptionError(
+          typeof v.lastTranscriptionError === 'string' && v.lastTranscriptionError
+            ? v.lastTranscriptionError
+            : null,
+        );
         setMicStatus((v.micStatus as string) ?? 'off');
         if (v.nativeHostStatus) setHostStatus(v.nativeHostStatus as NativeHostStatus);
         setNotice(typeof v.captureNotice === 'string' && v.captureNotice ? v.captureNotice : null);
@@ -114,6 +120,10 @@ function LiveView() {
       if (c.transcriptionConfigured) setConfigured(Boolean(c.transcriptionConfigured.newValue));
       if ('transcriptionIssue' in c) {
         setIssue((c.transcriptionIssue.newValue as TranscriptionIssue) ?? null);
+      }
+      if ('lastTranscriptionError' in c) {
+        const err = c.lastTranscriptionError.newValue;
+        setLastTranscriptionError(typeof err === 'string' && err ? err : null);
       }
       if (c.micStatus) setMicStatus(String(c.micStatus.newValue ?? 'off'));
       if (c.nativeHostStatus) setHostStatus((c.nativeHostStatus.newValue as NativeHostStatus) ?? { state: 'idle' });
@@ -185,6 +195,11 @@ function LiveView() {
           <a href="#" onClick={(e) => { e.preventDefault(); void chrome.runtime.openOptionsPage(); }}>
             Open settings
           </a>
+        </p>
+      )}
+      {lastTranscriptionError && (
+        <p data-testid="live-transcription-error" style={{ color: 'crimson', fontSize: 13 }}>
+          {lastTranscriptionError}
         </p>
       )}
 

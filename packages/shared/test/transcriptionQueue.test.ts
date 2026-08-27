@@ -88,10 +88,12 @@ describe('TranscriptionQueue', () => {
   it('emits a gap segment after all retries fail — never silent loss', async () => {
     const delays: number[] = [];
     const got: TranscriptSegment[][] = [];
+    const errors: string[] = [];
     const q = new TranscriptionQueue({
       sessionId: 's1',
-      transcribe: vi.fn().mockRejectedValue(new Error('down')),
+      transcribe: vi.fn().mockRejectedValue(new Error('google: HTTP 400 bad model')),
       onSegments: (s) => { got.push(s); },
+      onError: (m) => { errors.push(m); },
       sleep: async (ms) => { delays.push(ms); },
       makeId: ids,
     });
@@ -101,6 +103,21 @@ describe('TranscriptionQueue', () => {
     expect(got[0]).toEqual([expect.objectContaining({
       text: FAILED_SEGMENT_TEXT, startMs: 135_000, endMs: 180_000, source: 'audio',
     })]);
+    expect(errors[errors.length - 1]).toBe('google: HTTP 400 bad model');
+  });
+
+  it('forwards provider-computed costUsd', async () => {
+    const costs: number[] = [];
+    const q = new TranscriptionQueue({
+      sessionId: 's1',
+      transcribe: vi.fn().mockResolvedValue({ text: 'hi', costUsd: 0.00003036 }),
+      onSegments: () => {},
+      onCostUsd: (n) => { costs.push(n); },
+      makeId: ids,
+    });
+    q.enqueue(job(0));
+    await q.drain();
+    expect(costs).toEqual([0.00003036]);
   });
 
   it('processes jobs strictly in order', async () => {

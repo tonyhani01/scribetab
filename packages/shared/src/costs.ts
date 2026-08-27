@@ -90,8 +90,10 @@ export function audioTranscribedMs(
   return ms;
 }
 
+/** Sum known cost components. Unknown (undefined) values are skipped, not contagious. */
 export function addCostUsd(a: number | undefined, b: number | undefined): number | undefined {
-  if (a === undefined || b === undefined) return undefined;
+  if (a === undefined) return b === undefined ? undefined : roundUsd(b);
+  if (b === undefined) return roundUsd(a);
   return roundUsd(a + b);
 }
 

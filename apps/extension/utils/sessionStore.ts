@@ -11,6 +11,8 @@ export type StoredSession = MeetingSession & {
   summaryMarkdown?: string;
   /** null = computed but unknown (UI: n/a). */
   costUsd?: number | null;
+  /** Accrued provider-computed STT cost (e.g. OpenRouter usage.cost), STT-only. */
+  providerCostUsd?: number;
   intelligence?: IntelligenceState | null;
   audioStartedAtMs?: number;
   captionsOnly?: boolean;
