@@ -109,6 +109,37 @@ describe('exportSrt', () => {
     const srt = exportSrt(session, segments);
     expect(srt.indexOf('Hello team')).toBeLessThan(srt.indexOf('Second line'));
   });
+
+  it('collapses blank lines and neutralizes --> in cue text', () => {
+    const messy: TranscriptSegment[] = [
+      {
+        id: 'm',
+        sessionId: 'sess-1',
+        startMs: 0,
+        endMs: 1000,
+        text: 'line one\n\nline two --> still text',
+        source: 'audio',
+      },
+    ];
+    const srt = exportSrt(session, messy);
+    expect(srt).not.toMatch(/\n\nline/);
+    expect(srt).toContain('line one\nline two -- > still text');
+    expect(srt).not.toContain('--> still');
+  });
+
+  it('skips cues with non-finite, reversed, or zero-length timestamps', () => {
+    const bad: TranscriptSegment[] = [
+      { id: 'nan', sessionId: 'sess-1', startMs: Number.NaN, endMs: 1000, text: 'nan', source: 'audio' },
+      { id: 'rev', sessionId: 'sess-1', startMs: 2000, endMs: 1000, text: 'reversed', source: 'audio' },
+      { id: 'zero', sessionId: 'sess-1', startMs: 500, endMs: 500, text: 'zero', source: 'audio' },
+      { id: 'ok', sessionId: 'sess-1', startMs: 0, endMs: 1000, text: 'kept', source: 'audio' },
+    ];
+    const srt = exportSrt(session, bad);
+    expect(srt).toContain('1\n00:00:00,000 --> 00:00:01,000\nkept\n');
+    expect(srt).not.toContain('nan');
+    expect(srt).not.toContain('reversed');
+    expect(srt).not.toContain('zero');
+  });
 });
 
 describe('exportVtt', () => {
@@ -126,5 +157,53 @@ describe('exportVtt', () => {
   it('orders cues by startMs', () => {
     const vtt = exportVtt(session, segments);
     expect(vtt.indexOf('Hello team')).toBeLessThan(vtt.indexOf('Second line'));
+  });
+
+  it('escapes &, <, > in cue text and voice-span speaker names', () => {
+    const tagged: TranscriptSegment[] = [
+      {
+        id: 'e',
+        sessionId: 'sess-1',
+        startMs: 0,
+        endMs: 1000,
+        text: 'A & B <C>',
+        speaker: 'Ann & Bob <mod>',
+        source: 'audio',
+      },
+    ];
+    const vtt = exportVtt(session, tagged);
+    expect(vtt).toContain('<v Ann &amp; Bob &lt;mod&gt;>A &amp; B &lt;C&gt;');
+    expect(vtt).not.toContain('A & B');
+    expect(vtt).not.toContain('<C>');
+  });
+
+  it('collapses blank lines and neutralizes --> in cue text', () => {
+    const messy: TranscriptSegment[] = [
+      {
+        id: 'm',
+        sessionId: 'sess-1',
+        startMs: 0,
+        endMs: 1000,
+        text: 'alpha\n\nbeta --> gamma',
+        source: 'audio',
+      },
+    ];
+    const vtt = exportVtt(session, messy);
+    expect(vtt).toContain('alpha\nbeta -- &gt; gamma');
+    expect(vtt).not.toContain('--> gamma');
+  });
+
+  it('skips cues with non-finite, reversed, or zero-length timestamps', () => {
+    const bad: TranscriptSegment[] = [
+      { id: 'nan', sessionId: 'sess-1', startMs: Number.POSITIVE_INFINITY, endMs: 1000, text: 'inf', source: 'audio' },
+      { id: 'rev', sessionId: 'sess-1', startMs: 5, endMs: 1, text: 'reversed', source: 'audio' },
+      { id: 'zero', sessionId: 'sess-1', startMs: 0, endMs: 0, text: 'zero', source: 'audio' },
+      { id: 'ok', sessionId: 'sess-1', startMs: 0, endMs: 1000, text: 'kept', source: 'audio' },
+    ];
+    const vtt = exportVtt(session, bad);
+    expect(vtt).toContain('00:00:00.000 --> 00:00:01.000\nkept');
+    expect(vtt).not.toContain('inf');
+    expect(vtt).not.toContain('reversed');
+    expect(vtt).not.toContain('zero');
   });
 });
