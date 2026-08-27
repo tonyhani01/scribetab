@@ -44,4 +44,5 @@ export type ToSidePanel = {
 export interface Ack {
   ok: boolean;
   error?: string;
+  hostMissing?: boolean;
 }

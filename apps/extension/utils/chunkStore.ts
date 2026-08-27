@@ -54,6 +54,33 @@ export async function deleteChunksForSession(sessionId: string): Promise<void> {
   });
 }
 
+export async function getChunk(sessionId: string, index: number): Promise<ChunkRow | undefined> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const req = tx.objectStore(STORE).get([sessionId, index]);
+    req.onsuccess = () => resolve(req.result as ChunkRow | undefined);
+    req.onerror = () => reject(req.error);
+    tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'));
+  });
+}
+
+export async function listChunkIndexes(sessionId: string): Promise<number[]> {
+  const db = await openDb();
+  const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const req = tx.objectStore(STORE).index('bySession').getAllKeys(sessionId);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+    tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'));
+  });
+  const indexes: number[] = [];
+  for (const key of keys) {
+    if (Array.isArray(key) && typeof key[1] === 'number') indexes.push(key[1]);
+  }
+  return indexes.sort((a, b) => a - b);
+}
+
 export async function sessionHasChunks(sessionId: string): Promise<boolean> {
   const db = await openDb();
   return new Promise((resolve, reject) => {

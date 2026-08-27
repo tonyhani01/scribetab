@@ -113,8 +113,19 @@ async function completeSession(
 ): Promise<void> {
   if (!sessionId) return;
   const s = await getSettings();
-  await finalizeSession(sessionId, { retainAudio: s.retainAudio, status });
+  const flipped = await finalizeSession(sessionId, { retainAudio: s.retainAudio, status });
   await checkQuota().catch(() => {});
+  // Offscreen drain() finishes before CAPTURE_ENDED / STOP ack, so transcripts are complete.
+  if (flipped && status === 'complete') {
+    try {
+      await maybeSyncSession(sessionId);
+    } catch (e) {
+      await persistHostStatus({
+        state: 'error',
+        message: e instanceof Error ? e.message : String(e),
+      }).catch(() => {});
+    }
+  }
 }
 
 async function handleStart(): Promise<Ack> {
@@ -306,7 +317,6 @@ export default defineBackground(() => {
               lastError: msg.error ?? null,
             });
           }
-          void maybeSyncSession(msg.sessionId);
           sendResponse({ ok: true });
           break;
         }
