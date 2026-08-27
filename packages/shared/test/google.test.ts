@@ -30,6 +30,19 @@ describe('arrayBufferToBase64', () => {
     expect(decoded[0]).toBe(9);
     expect(decoded[199_999]).toBe(7);
   });
+
+  it('round-trips at the 0x8000 chunk boundary and ±1', () => {
+    for (const n of [0x7fff, 0x8000, 0x8001]) {
+      const bytes = new Uint8Array(n);
+      bytes[0] = 1;
+      bytes[n - 1] = 2;
+      const encoded = arrayBufferToBase64(bytes.buffer);
+      const decoded = Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0));
+      expect(decoded.length).toBe(n);
+      expect(decoded[0]).toBe(1);
+      expect(decoded[n - 1]).toBe(2);
+    }
+  });
 });
 
 describe('googleProvider', () => {
@@ -163,5 +176,130 @@ describe('googleProvider', () => {
     await expect(googleProvider.transcribe(req, { apiKey: '' })).rejects.toThrow(
       /apiKey is required/,
     );
+  });
+
+  it('rejects 0-byte audio without a network call', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      googleProvider.transcribe({ audio: new ArrayBuffer(0), mimeType: 'audio/wav' }, { apiKey: 'k' }),
+    ).rejects.toThrow(/empty audio/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('throws on an unrecognized 200 body so the queue can mark failure', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okJson({ candidates: [{ foo: 'bar' }] })));
+    await expect(googleProvider.transcribe(req, { apiKey: 'k' })).rejects.toThrow(
+      /google: unrecognized response.*candidates/,
+    );
+  });
+
+  it('returns empty text only for an explicit empty output_text', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okJson({ output_text: '' })));
+    await expect(googleProvider.transcribe(req, { apiKey: 'k' })).resolves.toEqual({
+      text: '',
+      segments: undefined,
+    });
+  });
+
+  it('maps numeric word_info offsets and skips unparseable ones', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        okJson({
+          output_text: 'Hello thanks',
+          steps: [
+            {
+              content: [
+                {
+                  annotations: [
+                    { type: 'word_info', text: 'Hello', start_offset: 0.1, end_offset: 0.45 },
+                    { type: 'word_info', text: 'skip', start_offset: 'n/a', end_offset: 1 },
+                    {
+                      type: 'word_info',
+                      text: 'thanks',
+                      start_offset: 1.0,
+                      end_offset: 1.4,
+                      speaker: 'spk_2',
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+    const result = await googleProvider.transcribe(req, { apiKey: 'k' });
+    expect(result.segments).toEqual([
+      { startMs: 100, endMs: 450, text: 'Hello' },
+      { startMs: 1000, endMs: 1400, text: 'thanks' },
+    ]);
+  });
+
+  it('treats steps without content as no annotations', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(okJson({ output_text: 'only text', steps: [{ id: 's1' }] })),
+    );
+    const result = await googleProvider.transcribe(req, { apiKey: 'k' });
+    expect(result).toEqual({ text: 'only text', segments: undefined });
+  });
+
+  it('skips blank annotation text and falls back to output_text', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        okJson({
+          output_text: 'kept',
+          steps: [
+            {
+              content: [
+                {
+                  annotations: [
+                    { type: 'word_info', text: '  ', start_offset: '0s', end_offset: '0.2s' },
+                    { type: 'word_info', start_offset: '0.2s', end_offset: '0.4s' },
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+    const result = await googleProvider.transcribe(req, { apiKey: 'k' });
+    expect(result).toEqual({ text: 'kept', segments: undefined });
+  });
+
+  it('splits segments on silence gaps >1.5s and length >12s, clamping endMs', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        okJson({
+          output_text: 'a b c d',
+          steps: [
+            {
+              content: [
+                {
+                  annotations: [
+                    { type: 'word_info', text: 'a', start_offset: '0s', end_offset: '0.2s' },
+                    { type: 'word_info', text: 'b', start_offset: '2.0s', end_offset: '2.2s' },
+                    { type: 'word_info', text: 'c', start_offset: '2.3s', end_offset: '14.5s' },
+                    { type: 'word_info', text: 'd', start_offset: '15.0s', end_offset: '14.0s' },
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+    const result = await googleProvider.transcribe(req, { apiKey: 'k' });
+    expect(result.segments).toEqual([
+      { startMs: 0, endMs: 200, text: 'a' },
+      { startMs: 2000, endMs: 2200, text: 'b' },
+      { startMs: 2300, endMs: 14500, text: 'c' },
+      { startMs: 15000, endMs: 15000, text: 'd' },
+    ]);
   });
 });

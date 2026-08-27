@@ -24,7 +24,42 @@ describe('openrouterProvider', () => {
     expect(init.headers.Authorization).toBe('Bearer or-key');
     const form = init.body as FormData;
     expect(form.get('model')).toBe('openai/whisper-large-v3');
+    expect(form.get('response_format')).toBe('verbose_json');
     expect(form.get('file')).toBeInstanceOf(Blob);
+  });
+
+  it('maps verbose_json segments (seconds → ms) and usage.cost', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        okJson({
+          text: 'hello there',
+          language: 'en',
+          duration: 4.048,
+          segments: [
+            { start: 0, end: 1.5, text: ' hello' },
+            { start: 1.5, end: 4.048, text: ' there' },
+          ],
+          usage: { seconds: 4.048, cost: 0.00003036 },
+        }),
+      ),
+    );
+    const result = await openrouterProvider.transcribe(req, { apiKey: 'or-key' });
+    expect(result.text).toBe('hello there');
+    expect(result.costUsd).toBe(0.00003036);
+    expect(result.segments).toEqual([
+      { startMs: 0, endMs: 1500, text: ' hello' },
+      { startMs: 1500, endMs: 4048, text: ' there' },
+    ]);
+  });
+
+  it('rejects 0-byte audio without a network call', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      openrouterProvider.transcribe({ audio: new ArrayBuffer(0), mimeType: 'audio/wav' }, { apiKey: 'k' }),
+    ).rejects.toThrow(/empty audio/);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('ignores cfg.baseUrl so a stale custom URL cannot receive the key', async () => {

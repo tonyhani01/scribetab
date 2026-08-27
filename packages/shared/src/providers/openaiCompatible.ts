@@ -16,6 +16,7 @@ export interface OpenAiCompatibleOptions {
 interface VerboseJson {
   text?: string;
   segments?: { start: number; end: number; text: string }[];
+  usage?: { cost?: unknown; seconds?: unknown };
 }
 
 const TIMEOUT_MS = 120_000;
@@ -34,6 +35,9 @@ export function openAiCompatible(opts: OpenAiCompatibleOptions): TranscriptionPr
       if (!baseUrl) throw new Error(`${opts.id}: baseUrl is required`);
       if ((opts.requiresApiKey ?? true) && !cfg.apiKey) {
         throw new Error(`${opts.id}: apiKey is required`);
+      }
+      if (req.audio.byteLength === 0) {
+        throw new Error(`${opts.id}: empty audio`);
       }
 
       const form = new FormData();
@@ -56,6 +60,7 @@ export function openAiCompatible(opts: OpenAiCompatibleOptions): TranscriptionPr
         throw new Error(`${opts.id}: HTTP ${res.status} ${body}`);
       }
       const json = (await res.json()) as VerboseJson;
+      const costUsd = parseCostUsd(json.usage?.cost);
       return {
         text: json.text ?? '',
         segments: json.segments?.map((s) => ({
@@ -63,7 +68,13 @@ export function openAiCompatible(opts: OpenAiCompatibleOptions): TranscriptionPr
           endMs: Math.round(s.end * 1000),
           text: s.text,
         })),
+        ...(costUsd !== undefined ? { costUsd } : {}),
       };
     },
   };
+}
+
+function parseCostUsd(v: unknown): number | undefined {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return undefined;
+  return v;
 }

@@ -6,9 +6,14 @@ import type {
   TranscriptionProvider,
 } from '../types.js';
 
-const PINNED_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
+/** Pinned Gemini API origin — adapters and host-permission URLs share this. */
+export const GOOGLE_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+const PINNED_URL = `${GOOGLE_API_BASE}/interactions`;
 const DEFAULT_MODEL = 'gemini-3.5-transcribe';
 const TIMEOUT_MS = 120_000;
+const GAP_SPLIT_MS = 1_500;
+const MAX_SEGMENT_MS = 12_000;
+const EXCERPT_MAX = 200;
 
 interface WordInfo {
   type?: string;
@@ -40,6 +45,7 @@ export const googleProvider: TranscriptionProvider = {
   id: 'google',
   async transcribe(req: TranscribeRequest, cfg: ProviderConfig): Promise<TranscribeResult> {
     if (!cfg.apiKey) throw new Error('google: apiKey is required');
+    if (req.audio.byteLength === 0) throw new Error('google: empty audio');
 
     const input: Record<string, string>[] = [
       {
@@ -85,12 +91,30 @@ export const googleProvider: TranscriptionProvider = {
       throw new Error('google: malformed response');
     }
 
-    return {
-      text: json.output_text ?? '',
-      segments: segmentsFromWordInfo(json),
-    };
+    const outputText = typeof json.output_text === 'string' ? json.output_text : undefined;
+    const segments = segmentsFromWordInfo(json);
+    const hasUsableSegments = Boolean(segments && segments.length > 0);
+
+    if (!hasUsableSegments && outputText === undefined) {
+      throw new Error(`google: unrecognized response ${excerpt(json)}`);
+    }
+
+    if (hasUsableSegments) {
+      const text = outputText?.trim() ? outputText : segments!.map((s) => s.text).join(' ');
+      return { text, segments };
+    }
+
+    return { text: outputText ?? '', segments: undefined };
   },
 };
+
+function excerpt(json: unknown): string {
+  try {
+    return JSON.stringify(json).slice(0, EXCERPT_MAX);
+  } catch {
+    return '';
+  }
+}
 
 function parseOffsetSeconds(v: unknown): number | undefined {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
@@ -101,22 +125,21 @@ function parseOffsetSeconds(v: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-/** Coarse-group consecutive word_info annotations (same speaker) into segments. */
+/** Coarse-group word_info annotations into segments (speaker, silence, length). */
 function segmentsFromWordInfo(json: InteractionsResponse): TranscribeResult['segments'] {
   const words: { startMs: number; endMs: number; text: string; speaker?: string }[] = [];
   for (const step of json.steps ?? []) {
     for (const content of step.content ?? []) {
       for (const a of content.annotations ?? []) {
         if (a.type !== 'word_info') continue;
+        const text = typeof a.text === 'string' ? a.text.trim() : '';
+        if (!text) continue;
         const start = parseOffsetSeconds(a.start_offset);
         const end = parseOffsetSeconds(a.end_offset);
         if (start === undefined || end === undefined) continue;
-        words.push({
-          startMs: Math.round(start * 1000),
-          endMs: Math.round(end * 1000),
-          text: a.text ?? '',
-          speaker: a.speaker,
-        });
+        const startMs = Math.round(start * 1000);
+        const endMs = Math.max(startMs, Math.round(end * 1000));
+        words.push({ startMs, endMs, text, speaker: a.speaker });
       }
     }
   }
@@ -130,14 +153,16 @@ function segmentsFromWordInfo(json: InteractionsResponse): TranscribeResult['seg
     speaker: words[0]!.speaker,
   };
   for (const w of words.slice(1)) {
-    if (w.speaker === cur.speaker) {
-      cur.endMs = w.endMs;
-      cur.text = cur.text ? `${cur.text} ${w.text}` : w.text;
-    } else {
-      segs.push({ startMs: cur.startMs, endMs: cur.endMs, text: cur.text });
+    const gap = w.startMs - cur.endMs;
+    const spanMs = Math.max(w.endMs, cur.endMs) - cur.startMs;
+    if (w.speaker !== cur.speaker || gap > GAP_SPLIT_MS || spanMs > MAX_SEGMENT_MS) {
+      segs.push({ startMs: cur.startMs, endMs: Math.max(cur.endMs, cur.startMs), text: cur.text });
       cur = { startMs: w.startMs, endMs: w.endMs, text: w.text, speaker: w.speaker };
+    } else {
+      cur.endMs = Math.max(cur.endMs, w.endMs, cur.startMs);
+      cur.text = cur.text ? `${cur.text} ${w.text}` : w.text;
     }
   }
-  segs.push({ startMs: cur.startMs, endMs: cur.endMs, text: cur.text });
+  segs.push({ startMs: cur.startMs, endMs: Math.max(cur.endMs, cur.startMs), text: cur.text });
   return segs;
 }

@@ -11,4 +11,5 @@ export const openrouterProvider = openAiCompatible({
   id: 'openrouter',
   defaultBaseUrl: 'https://openrouter.ai/api/v1',
   defaultModel: 'openai/whisper-large-v3',
+  form: { response_format: 'verbose_json' },
 });
