@@ -14,6 +14,8 @@ export type StoredSession = MeetingSession & {
   /** Accrued provider-computed STT cost (e.g. OpenRouter usage.cost), STT-only. */
   providerCostUsd?: number;
   intelligence?: IntelligenceState | null;
+  /** Why the last summary attempt failed (kept while intelligence stays pending). */
+  intelligenceError?: string | null;
   audioStartedAtMs?: number;
   captionsOnly?: boolean;
 };

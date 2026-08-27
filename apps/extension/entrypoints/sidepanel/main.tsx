@@ -442,8 +442,13 @@ function LibraryView() {
             <> · {formatUsd(open.costUsd)} est.</>
           )}
         </p>
-        {open.intelligence === 'pending' && (
+        {open.intelligence === 'pending' && !open.intelligenceError && (
           <p class="st-hint">Generating summary…</p>
+        )}
+        {open.intelligence === 'pending' && open.intelligenceError && (
+          <p data-testid="intelligence-error" class="st-banner st-banner--error">
+            Summary failed: {open.intelligenceError} — use Regenerate summary to retry.
+          </p>
         )}
         {open.intelligence === 'needs-permission' && (
           <p style={{ fontSize: 13 }}>
