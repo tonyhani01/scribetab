@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExportActionsAck, ExportActionsMessage } from '@scribetab/shared';
 import { closeDb } from '../utils/db';
 import { isHostMissingError } from '../utils/nativeSync';
-import { createSession, getSession } from '../utils/sessionStore';
+import { createSession, getSession, updateSession } from '../utils/sessionStore';
 import {
   EXPORT_ACK_TIMEOUT_MS,
   exportActionsViaHost,
@@ -57,6 +57,9 @@ function mockPort(opts: { autoAck?: boolean; ack?: ExportActionsAck } = {}) {
     },
     fireDisconnect() {
       for (const fn of disconnectListeners) fn();
+    },
+    fireMessage(msg: unknown) {
+      for (const fn of messageListeners) fn(msg);
     },
   };
   return port;
@@ -238,6 +241,48 @@ describe('EXPORT_ACTIONS handler contract', () => {
       at: expect.any(String),
     });
     expect(row?.actionExports?.a2).toBeUndefined();
+  });
+
+  it('merges actionExports onto a re-read session after ack', async () => {
+    port = mockPort({ autoAck: false });
+    vi.stubGlobal('chrome', {
+      runtime: {
+        get lastError() {
+          return undefined;
+        },
+        connectNative: () => port,
+      },
+    });
+    const pending = exportSelectedActionItems('sess-exp', ['a1', 'a3']);
+    await vi.waitFor(() => expect(port.posted).toHaveLength(1));
+    await updateSession('sess-exp', {
+      actionExports: {
+        concurrent: { destination: 'notion', at: '2026-08-28T09:00:00.000Z' },
+      },
+    });
+    port.fireMessage({
+      ok: true,
+      sessionId: 'sess-exp',
+      results: [
+        { id: 'a1', ok: true },
+        { id: 'a3', ok: true },
+      ],
+    } satisfies ExportActionsAck);
+    const ack = await pending;
+    expect(ack.ok).toBe(true);
+    const row = await getSession('sess-exp');
+    expect(row?.actionExports?.concurrent).toEqual({
+      destination: 'notion',
+      at: '2026-08-28T09:00:00.000Z',
+    });
+    expect(row?.actionExports?.a1).toEqual({
+      destination: 'notion',
+      at: expect.any(String),
+    });
+    expect(row?.actionExports?.a3).toEqual({
+      destination: 'notion',
+      at: expect.any(String),
+    });
   });
 
   it('does not patch the cache when no items match', async () => {

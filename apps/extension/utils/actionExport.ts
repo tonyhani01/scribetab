@@ -121,7 +121,8 @@ export async function exportSelectedActionItems(
   const okIds = ack.results.filter((r) => r.ok).map((r) => r.id);
   if (okIds.length) {
     const at = new Date().toISOString();
-    const patch = { ...(session.actionExports ?? {}) };
+    const fresh = await getSession(sessionId);
+    const patch = { ...(fresh?.actionExports ?? {}) };
     for (const id of okIds) patch[id] = { destination: 'notion' as const, at };
     await updateSession(sessionId, { actionExports: patch });
   }
