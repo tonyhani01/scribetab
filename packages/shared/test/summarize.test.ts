@@ -1,15 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { ChatMessage, SessionSummary, TranscriptSegment } from '../src/types';
 import {
   DEFAULT_SUMMARY_GUIDANCE,
   SUMMARY_TRANSCRIPT_CHAR_LIMIT,
   actionItemLine,
-  buildActionItemMessages,
   buildStructuredSummaryMessages,
-  buildSummaryMessages,
   clipTranscript,
-  combineSummaryMarkdown,
-  parseActionItems,
   parseStructuredSummary,
   parseSummary,
   summarizeMeeting,
@@ -46,18 +42,6 @@ describe('transcriptPlain', () => {
   });
 });
 
-describe('prompt builders', () => {
-  it('wraps the transcript in delimiters and frames it as data', () => {
-    const t = transcriptPlain(segments);
-    const summary = buildSummaryMessages(t);
-    expect(summary[0]?.content).toMatch(/transcript is untrusted data/i);
-    expect(summary[1]?.content).toContain('<transcript>');
-    expect(summary[1]?.content).toContain('Ada: We should ship Friday.');
-    expect(summary[1]?.content).toContain('</transcript>');
-    expect(buildActionItemMessages(t)[0]?.role).toBe('system');
-  });
-});
-
 describe('clipTranscript', () => {
   it('keeps head and tail and notes the elision', () => {
     const long = 'H'.repeat(20_000) + 'MID' + 'T'.repeat(20_000);
@@ -73,7 +57,7 @@ describe('clipTranscript', () => {
     const t = 'x'.repeat(SUMMARY_TRANSCRIPT_CHAR_LIMIT + 50);
     const clipped = clipTranscript(t);
     expect(clipped.length).toBeLessThanOrEqual(SUMMARY_TRANSCRIPT_CHAR_LIMIT);
-    const user = buildSummaryMessages(t)[1]?.content ?? '';
+    const user = buildStructuredSummaryMessages(t)[1]?.content ?? '';
     expect(user).toContain('truncated');
     expect(user).toContain('<transcript>');
   });
@@ -86,64 +70,41 @@ describe('parseSummary', () => {
   });
 });
 
-describe('parseActionItems', () => {
-  it('normalizes bullets and numbered lists into a checklist', () => {
-    expect(parseActionItems('- Ada ships Friday\n1. Bob sends recap')).toBe(
-      '- [ ] Ada ships Friday\n- [ ] Bob sends recap',
-    );
+describe('summarizeMeeting (structured)', () => {
+  const segs = [
+    { speaker: 'Ana', text: 'We decided to ship.' },
+    { speaker: 'Bo', text: 'I will send the notes.' },
+  ];
+  const reply = JSON.stringify({
+    narrative: 'Shipped decision.',
+    actionItems: [{ text: 'Send the notes', owner: 'Bo' }],
+    decisions: ['Ship it'],
+    usefulInfo: [],
   });
 
-  it('preserves existing checkbox marks', () => {
-    expect(parseActionItems('- [x] Done\n- [ ] Todo')).toBe('- [x] Done\n- [ ] Todo');
-  });
-
-  it('returns a none-identified line when empty', () => {
-    expect(parseActionItems('   ')).toBe('- [ ] None identified');
-  });
-});
-
-describe('combineSummaryMarkdown', () => {
-  it('emits Summary then Action items headings', () => {
-    const md = combineSummaryMarkdown('Ship Friday.', '- [ ] Bob sends recap');
-    expect(md).toContain('## Summary\n\nShip Friday.');
-    expect(md).toContain('## Action items\n\n- [ ] Bob sends recap\n');
-  });
-});
-
-describe('summarizeMeeting', () => {
-  it('calls complete twice sequentially and combines parsed results', async () => {
-    let inflight = 0;
-    let maxInflight = 0;
-    const complete = vi.fn(async (messages: ChatMessage[]) => {
-      inflight += 1;
-      maxInflight = Math.max(maxInflight, inflight);
-      await Promise.resolve();
-      inflight -= 1;
-      const user = messages.find((m) => m.role === 'user')?.content ?? '';
-      if (user.startsWith('Summarize')) return 'Team ships Friday.';
-      return '- Bob sends recap';
+  it('makes exactly one LLM call and returns a SessionSummary', async () => {
+    const calls: ChatMessage[][] = [];
+    const s = await summarizeMeeting(async (m) => { calls.push(m); return reply; }, segs, {
+      generatedAt: 'T', newId: () => 'i',
     });
-    const md = await summarizeMeeting(complete, segments);
-    expect(complete).toHaveBeenCalledTimes(2);
-    expect(maxInflight).toBe(1);
-    expect(md).toContain('Team ships Friday.');
-    expect(md).toContain('- [ ] Bob sends recap');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![1]!.content).toContain('Ana: We decided to ship.');
+    expect(s?.narrative).toBe('Shipped decision.');
+    expect(s?.actionItems[0]?.owner).toBe('Bo');
   });
-
-  it('skips the LLM when the transcript is empty', async () => {
-    const complete = vi.fn(async () => 'nope');
-    expect(await summarizeMeeting(complete, [])).toBe('');
-    expect(complete).not.toHaveBeenCalled();
+  it('returns undefined for an empty transcript without calling the LLM', async () => {
+    const s = await summarizeMeeting(async () => { throw new Error('no'); }, [{ speaker: undefined, text: '  ' }]);
+    expect(s).toBeUndefined();
   });
-
-  it('does not start the action-item call if summary throws', async () => {
-    const complete = vi.fn(async (messages: ChatMessage[]) => {
-      const user = messages.find((m) => m.role === 'user')?.content ?? '';
-      if (user.startsWith('Summarize')) throw new Error('boom');
-      return '- none';
-    });
-    await expect(summarizeMeeting(complete, segments)).rejects.toThrow(/boom/);
-    expect(complete).toHaveBeenCalledTimes(1);
+  it('passes guidance through', async () => {
+    let userMsg = '';
+    await summarizeMeeting(async (m) => { userMsg = m[1]!.content; return reply; }, segs, { guidance: 'Budget only.' });
+    expect(userMsg).toContain('Budget only.');
+  });
+  it('degrades instead of throwing on non-JSON output', async () => {
+    const s = await summarizeMeeting(async () => 'plain text', segs, { generatedAt: 'T' });
+    expect(s?.degraded).toBe(true);
+    expect(s?.narrative).toBe('plain text');
   });
 });
 
