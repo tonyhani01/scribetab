@@ -18,13 +18,17 @@ export function isOverTarget(ratio: number): boolean {
   return ratio > TARGET_RATIO;
 }
 
-/** Oldest completed session that still has audio — never recording/failed. */
+function hasDroppableAudio(s: MeetingSession): boolean {
+  return s.status === 'complete' || s.status === 'failed';
+}
+
+/** Oldest completed or failed session that still has audio — never recording. */
 export function nextSessionToDropAudio(
   sessions: readonly MeetingSession[],
   withAudio: ReadonlySet<string>,
 ): MeetingSession | undefined {
   return sessions
-    .filter((s) => s.status === 'complete' && withAudio.has(s.id))
+    .filter((s) => hasDroppableAudio(s) && withAudio.has(s.id))
     .slice()
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id))[0];
 }
@@ -39,7 +43,8 @@ export interface QuotaReport {
 
 /**
  * If usage is above 80% of quota, delete audioChunks of the oldest completed
- * sessions (never segments or session rows) until usage is at or below 70%.
+ * or failed sessions (never segments or session rows) until usage is at or
+ * below 70%. Stops if a deletion does not reduce estimated usage.
  */
 export async function enforceQuota(
   estimate: () => Promise<{ usage: number; quota: number }>,
@@ -50,20 +55,23 @@ export async function enforceQuota(
 
   if (isOverWarn(ratio)) {
     const sessions = await listSessions();
+    const withAudio = new Set<string>();
+    for (const s of sessions) {
+      if (!hasDroppableAudio(s)) continue;
+      if (await sessionHasChunks(s.id)) withAudio.add(s.id);
+    }
     while (isOverTarget(ratio)) {
-      const withAudio = new Set<string>();
-      for (const s of sessions) {
-        if (s.status !== 'complete') continue;
-        if (deletedSessionIds.includes(s.id)) continue;
-        if (await sessionHasChunks(s.id)) withAudio.add(s.id);
-      }
       const victim = nextSessionToDropAudio(sessions, withAudio);
       if (!victim) break;
+      const usageBefore = usage;
       await deleteChunksForSession(victim.id);
+      withAudio.delete(victim.id);
       deletedSessionIds.push(victim.id);
       ({ usage, quota } = await estimate());
+      if (!(usage < usageBefore)) break;
       ratio = usageRatio(usage, quota);
     }
+    ratio = usageRatio(usage, quota);
   }
 
   const warning = isOverWarn(ratio);
