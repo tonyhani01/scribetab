@@ -13,7 +13,7 @@ export type ExportFormat = 'md' | 'json' | 'srt' | 'vtt';
 export function extrasFromSession(session: MeetingSession & ExportExtras): ExportExtras {
   const extras: ExportExtras = {};
   if (session.summaryMarkdown !== undefined) extras.summaryMarkdown = session.summaryMarkdown;
-  if (session.costUsd !== undefined) extras.costUsd = session.costUsd;
+  if (session.costUsd !== undefined) extras.costUsd = session.costUsd; // includes null → n/a
   return extras;
 }
 

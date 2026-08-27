@@ -19,6 +19,7 @@ describe('extrasFromSession', () => {
         costUsd: 0.01,
       }),
     ).toEqual({ summaryMarkdown: '## Summary', costUsd: 0.01 });
+    expect(extrasFromSession({ ...session, costUsd: null })).toEqual({ costUsd: null });
   });
 });
 

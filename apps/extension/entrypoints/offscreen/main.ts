@@ -1,4 +1,4 @@
-import { SilenceChunker, TranscriptionQueue, encodeWav, getTranscriptionProvider, redact } from '@scribetab/shared';
+import { SilenceChunker, TranscriptionQueue, encodeWav, getTranscriptionProvider, redactSegments } from '@scribetab/shared';
 import type { Ack, ToOffscreen, ToSidePanel } from '@/utils/messages';
 import { putChunk } from '@/utils/chunkStore';
 import { offscreenStopApplies } from '@/utils/sessionIdentity';
@@ -146,10 +146,7 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
             }),
           onSegments: async (segments) => {
             const stored = msg.redaction
-              ? segments.map((s) => ({
-                  ...s,
-                  text: redact(s.text, { extraTerms: msg.redaction!.extraTerms }),
-                }))
+              ? redactSegments(segments, { extraTerms: msg.redaction.extraTerms })
               : segments;
             await putSegments(stored);
             segmentCount += stored.length;

@@ -3,6 +3,7 @@ import { useEffect, useState } from 'preact/hooks';
 import {
   LLM_PROVIDER_IDS,
   TRANSCRIPTION_PROVIDER_IDS,
+  isLlmProviderId,
   llmEndpoint,
   originPattern,
   transcriptionEndpoint,
@@ -181,9 +182,10 @@ function App() {
         id="llmProvider"
         style={input}
         value={s.llmProviderId}
-        onChange={(e) =>
-          set('llmProviderId', (e.currentTarget as HTMLSelectElement).value as Settings['llmProviderId'])
-        }
+        onChange={(e) => {
+          const v = (e.currentTarget as HTMLSelectElement).value;
+          set('llmProviderId', isLlmProviderId(v) ? v : '');
+        }}
       >
         <option value="">Off (no summary)</option>
         {LLM_PROVIDER_IDS.map((id) => (

@@ -3,10 +3,14 @@ import { deleteChunksForSession } from './chunkStore';
 import { SESSIONS_STORE as STORE, openDb } from './db';
 import { deleteSegmentsForSession } from './segmentStore';
 
+export type IntelligenceState = 'pending' | 'needs-permission';
+
 /** Extension-side session row. Extra fields are not on the locked MeetingSession. */
 export type StoredSession = MeetingSession & {
   summaryMarkdown?: string;
-  costUsd?: number;
+  /** null = computed but unknown (UI: n/a). */
+  costUsd?: number | null;
+  intelligence?: IntelligenceState | null;
 };
 
 function txDone(tx: IDBTransaction): Promise<void> {

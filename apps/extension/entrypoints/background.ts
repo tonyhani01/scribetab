@@ -1,6 +1,10 @@
 import { originPattern, transcriptionEndpoint } from '@scribetab/shared';
-import { getChunksForSession } from '@/utils/chunkStore';
-import { audioDurationMs, runFinalizeIntelligence } from '@/utils/intelligence';
+import {
+  llmConfigured,
+  retryPendingIntelligence,
+  runFinalizeIntelligence,
+  scheduleFinalizeIntelligence,
+} from '@/utils/intelligence';
 import type { Ack, ToBackground, ToOffscreen, TranscriptionSettingsPayload } from '@/utils/messages';
 import { persistHostStatus, syncSessionToHost } from '@/utils/nativeSync';
 import { platformFromUrl, titleFromTab } from '@/utils/platform';
@@ -12,7 +16,14 @@ import {
   statusFromCaptureEnded,
   statusFromOffscreenAck,
 } from '@/utils/sessionIdentity';
-import { createSession, failStaleRecordings, finalizeSession, getSession, listSessions } from '@/utils/sessionStore';
+import {
+  createSession,
+  failStaleRecordings,
+  finalizeSession,
+  getSession,
+  listSessions,
+  updateSession,
+} from '@/utils/sessionStore';
 import { getSettings } from '@/utils/settings';
 
 let creatingOffscreen: Promise<void> | null = null;
@@ -95,7 +106,7 @@ async function transcriptionPayload(): Promise<TranscriptionSettingsPayload | nu
     apiKey: s.apiKey,
     model: s.model || undefined,
     language: s.language || undefined,
-    baseUrl: s.baseUrl || undefined,
+    baseUrl: s.providerId === 'custom' ? s.baseUrl || undefined : undefined,
   };
 }
 
@@ -115,12 +126,10 @@ async function completeSession(
 ): Promise<void> {
   if (!sessionId) return;
   const s = await getSettings();
-  // STT minutes must be measured before finalize may delete audioChunks.
-  const sttDurationMs =
-    status === 'complete' ? audioDurationMs(await getChunksForSession(sessionId)) : 0;
   const flipped = await finalizeSession(sessionId, { retainAudio: s.retainAudio, status });
   if (flipped && status === 'complete') {
-    await runFinalizeIntelligence(sessionId, s, { sttDurationMs }).catch(() => {});
+    // Do not await the LLM — STOP ack must return promptly. Pending is durable.
+    await scheduleFinalizeIntelligence(sessionId, s);
   }
   await checkQuota().catch(() => {});
   // Offscreen drain() finishes before CAPTURE_ENDED / STOP ack, so transcripts are complete.
@@ -288,6 +297,7 @@ export default defineBackground(() => {
     const exceptId = bootExceptId(captureState, currentSessionId, offscreenAlive);
     const retainAudio = (await getSettings()).retainAudio;
     await failStaleRecordings(exceptId, retainAudio);
+    void retryPendingIntelligence();
   })();
 
   chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
@@ -325,6 +335,22 @@ export default defineBackground(() => {
               capturedTabId: null,
               lastError: msg.error ?? null,
             });
+          }
+          sendResponse({ ok: true });
+          break;
+        }
+        case 'REGENERATE_SUMMARY': {
+          const settings = await getSettings();
+          if (!llmConfigured(settings)) {
+            sendResponse({ ok: false, error: 'No LLM configured' });
+            break;
+          }
+          await updateSession(msg.sessionId, { intelligence: 'pending' });
+          await runFinalizeIntelligence(msg.sessionId, settings);
+          const row = await getSession(msg.sessionId);
+          if (row?.intelligence === 'needs-permission') {
+            sendResponse({ ok: false, error: 'needs-permission' });
+            break;
           }
           sendResponse({ ok: true });
           break;

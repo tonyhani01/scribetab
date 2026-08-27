@@ -1,14 +1,15 @@
 import { render } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { TranscriptSegment } from '@scribetab/shared';
-import { formatClock, formatUsd } from '@scribetab/shared';
+import { formatClock, formatUsd, llmEndpoint, originPattern } from '@scribetab/shared';
 import type MiniSearch from 'minisearch';
 import type { Ack, CaptureState, ToSidePanel } from '@/utils/messages';
 import type { NativeHostStatus } from '@/utils/nativeSync';
 import { downloadExport, type ExportFormat } from '@/utils/exportDownload';
 import { getAllSegments, getSegments } from '@/utils/segmentStore';
 import { createSegmentIndex, snippetAround, type SearchDoc } from '@/utils/search';
-import { listSessions, type StoredSession } from '@/utils/sessionStore';
+import { getSession, listSessions, type StoredSession } from '@/utils/sessionStore';
+import { getSettings } from '@/utils/settings';
 
 function fmt(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -264,6 +265,61 @@ function LibraryView() {
     }
   };
 
+  const refreshOpen = async (id: string) => {
+    const row = await getSession(id);
+    if (row) {
+      setSessions((prev) => {
+        const i = prev.findIndex((s) => s.id === id);
+        if (i < 0) return prev;
+        const next = prev.slice();
+        next[i] = row;
+        return next;
+      });
+    }
+    const segs = await getSegments(id);
+    if (openIdRef.current === id) setOpenSegments(segs);
+  };
+
+  const regenerateSummary = async () => {
+    if (!open) return;
+    setBusy(true);
+    try {
+      await chrome.runtime.sendMessage({
+        target: 'background',
+        type: 'REGENERATE_SUMMARY',
+        sessionId: open.id,
+      } satisfies { target: 'background'; type: 'REGENERATE_SUMMARY'; sessionId: string });
+      await refreshOpen(open.id);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const grantLlmAndRegenerate = async () => {
+    if (!open) return;
+    setBusy(true);
+    try {
+      const s = await getSettings();
+      if (s.llmProviderId === '') return;
+      const origin = originPattern(
+        llmEndpoint(
+          s.llmProviderId,
+          s.llmProviderId === 'custom' ? s.llmBaseUrl.trim() || undefined : undefined,
+        ),
+      );
+      const granted = await chrome.permissions.request({ origins: [origin] });
+      if (!granted) return;
+      await chrome.runtime.sendMessage({
+        target: 'background',
+        type: 'REGENERATE_SUMMARY',
+        sessionId: open.id,
+      });
+      await refreshOpen(open.id);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (open) {
     return (
       <section>
@@ -273,10 +329,21 @@ function LibraryView() {
         <h1 style={{ fontSize: 15, margin: '0 0 4px' }}>{open.title}</h1>
         <p style={{ fontSize: 12, color: '#555', margin: '0 0 8px' }}>
           {dateLabel(open.startedAt)} · {durationLabel(open)} · {open.platform} · {open.status}
-          {typeof open.costUsd === 'number' && (
+          {open.costUsd !== undefined && (
             <> · {formatUsd(open.costUsd)} est.</>
           )}
         </p>
+        {open.intelligence === 'pending' && (
+          <p style={{ fontSize: 13, color: '#555' }}>Generating summary…</p>
+        )}
+        {open.intelligence === 'needs-permission' && (
+          <p style={{ fontSize: 13 }}>
+            <button disabled={busy} onClick={() => void grantLlmAndRegenerate()}>
+              Grant permission
+            </button>{' '}
+            to generate a summary for this meeting.
+          </p>
+        )}
         {open.summaryMarkdown && (
           <article
             style={{
@@ -296,6 +363,9 @@ function LibraryView() {
               Export .{f}
             </button>
           ))}
+          <button disabled={busy} onClick={() => void regenerateSummary()}>
+            Regenerate summary
+          </button>
         </div>
         <SegmentList segments={openSegments} empty="No transcript segments for this meeting." />
       </section>

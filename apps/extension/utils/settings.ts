@@ -1,3 +1,5 @@
+import type { LlmProviderId } from '@scribetab/shared';
+
 export interface Settings {
   providerId: '' | 'openai' | 'groq' | 'deepgram' | 'mistral' | 'custom';
   apiKey: string;      // chrome.storage.local ONLY — never sync, never any server
@@ -7,7 +9,7 @@ export interface Settings {
   micEnabled: boolean;
   retainAudio: boolean; // when false, audioChunks are deleted on session finalize
   nativeHostEnabled: boolean; // sync finalized sessions to com.scribetab.host
-  llmProviderId: '' | 'openai' | 'custom';
+  llmProviderId: '' | LlmProviderId;
   llmApiKey: string;
   llmModel: string;
   llmBaseUrl: string;  // custom LLM only (Ollama / LM Studio)

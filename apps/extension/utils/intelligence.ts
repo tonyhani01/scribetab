@@ -1,90 +1,136 @@
 import {
+  addCostUsd,
+  audioTranscribedMs,
   estimateTokens,
   getLlmProvider,
   llmCostUsd,
-  pcmWavDurationMs,
-  redact,
+  llmEndpoint,
+  originPattern,
+  redactSegments,
   sttCostUsd,
   summarizeMeeting,
   type ChatMessage,
 } from '@scribetab/shared';
-import { getChunksForSession, type ChunkRow } from './chunkStore';
 import { getSegments, putSegments } from './segmentStore';
-import { updateSession } from './sessionStore';
-import type { Settings } from './settings';
+import { getSession, listSessions, updateSession } from './sessionStore';
+import { getSettings, type Settings } from './settings';
 
-export function audioDurationMs(chunks: ChunkRow[]): number {
-  let maxEnd = 0;
-  for (const c of chunks) {
-    const end =
-      (c.startOffsetSamples / c.sampleRate) * 1000 +
-      pcmWavDurationMs(c.wav.byteLength, c.sampleRate);
-    if (end > maxEnd) maxEnd = end;
-  }
-  return Math.round(maxEnd);
-}
-
-function llmConfigured(settings: Settings): boolean {
+export function llmConfigured(settings: Settings): boolean {
   if (settings.llmProviderId === '') return false;
   if (settings.llmProviderId === 'custom' && !settings.llmBaseUrl.trim()) return false;
   if (settings.llmProviderId !== 'custom' && !settings.llmApiKey) return false;
   return true;
 }
 
+export function llmOrigin(settings: Settings): string {
+  return llmEndpoint(
+    settings.llmProviderId,
+    settings.llmProviderId === 'custom' ? settings.llmBaseUrl.trim() || undefined : undefined,
+  );
+}
+
+export async function llmOriginGranted(settings: Settings): Promise<boolean> {
+  try {
+    return await chrome.permissions.contains({ origins: [originPattern(llmOrigin(settings))] });
+  } catch {
+    return false;
+  }
+}
+
 /**
- * After a successful complete-finalize: optional at-rest redaction, LLM
- * summary + action items, and a session cost total (STT minutes + LLM tokens).
- * Failures here must not fail capture finalize — the transcript is already saved.
+ * Durable "work remains" marker. Awaited (cheap IDB write) so STOP can return
+ * without waiting on the LLM; a SW death only delays the summary.
  */
-export async function runFinalizeIntelligence(
+export async function markIntelligencePending(sessionId: string, settings: Settings): Promise<void> {
+  if (!llmConfigured(settings)) return;
+  await updateSession(sessionId, { intelligence: 'pending' });
+}
+
+export async function scheduleFinalizeIntelligence(
   sessionId: string,
   settings: Settings,
-  opts: { sttDurationMs?: number } = {},
 ): Promise<void> {
+  await markIntelligencePending(sessionId, settings);
+  void runFinalizeIntelligence(sessionId, settings).catch(() => {});
+}
+
+export async function retryPendingIntelligence(): Promise<void> {
+  const settings = await getSettings();
+  const sessions = await listSessions();
+  for (const s of sessions) {
+    if (s.status !== 'complete' || s.intelligence !== 'pending') continue;
+    if (!llmConfigured(settings)) {
+      await updateSession(s.id, { intelligence: null }).catch(() => {});
+      continue;
+    }
+    await runFinalizeIntelligence(s.id, settings).catch(() => {});
+  }
+}
+
+/**
+ * After a successful complete-finalize: optional at-rest redaction, LLM
+ * summary + action items, and a session cost total (transcribed STT minutes
+ * + LLM tokens). Failures here must not fail capture finalize.
+ */
+export async function runFinalizeIntelligence(sessionId: string, settings: Settings): Promise<void> {
   const extraTerms = settings.redactTerms;
   let segments = await getSegments(sessionId);
 
   if (settings.redactAtRest && segments.length > 0) {
-    segments = segments.map((s) => ({ ...s, text: redact(s.text, { extraTerms }) }));
+    segments = redactSegments(segments, { extraTerms });
     await putSegments(segments);
   }
 
-  const chunks = await getChunksForSession(sessionId);
-  const durationMs = opts.sttDurationMs ?? audioDurationMs(chunks);
-  let costUsd = settings.providerId ? sttCostUsd(settings.providerId, durationMs) : 0;
+  const durationMs = audioTranscribedMs(segments);
+  const stt = settings.providerId
+    ? sttCostUsd(settings.providerId, durationMs, settings.model || undefined)
+    : 0;
 
+  let costUsd: number | null | undefined = stt === undefined ? null : stt;
   let summaryMarkdown: string | undefined;
+  let intelligence: 'pending' | 'needs-permission' | null = null;
+
   if (llmConfigured(settings) && segments.length > 0) {
-    const forLlm = segments.map((s) => ({
-      ...s,
-      text: redact(s.text, { extraTerms }),
-    }));
-    const provider = getLlmProvider(settings.llmProviderId);
-    const cfg = {
-      apiKey: settings.llmApiKey,
-      baseUrl: settings.llmBaseUrl.trim() || undefined,
-      model: settings.llmModel.trim() || undefined,
-    };
-    const complete = async (messages: ChatMessage[]) => {
-      const out = await provider.complete(messages, cfg);
-      const prompt = messages.map((m) => m.content).join('\n');
-      costUsd += llmCostUsd(
-        settings.llmProviderId,
-        estimateTokens(prompt),
-        estimateTokens(out),
-      );
-      return out;
-    };
-    try {
-      const md = await summarizeMeeting(complete, forLlm);
-      if (md) summaryMarkdown = md;
-    } catch {
-      // Keep STT cost; skip summary. Capture already finalized.
+    if (!(await llmOriginGranted(settings))) {
+      intelligence = 'needs-permission';
+    } else {
+      const forLlm = settings.redactAtRest
+        ? segments
+        : redactSegments(segments, { extraTerms });
+      const provider = getLlmProvider(settings.llmProviderId);
+      const cfg = {
+        apiKey: settings.llmApiKey,
+        baseUrl: settings.llmProviderId === 'custom' ? settings.llmBaseUrl.trim() || undefined : undefined,
+        model: settings.llmModel.trim() || undefined,
+      };
+      const complete = async (messages: ChatMessage[]) => {
+        const out = await provider.complete(messages, cfg);
+        const prompt = messages.map((m) => m.content).join('\n');
+        const added = llmCostUsd(
+          settings.llmProviderId,
+          estimateTokens(prompt),
+          estimateTokens(out),
+          settings.llmModel || undefined,
+        );
+        costUsd = costUsd === null ? null : addCostUsd(costUsd, added);
+        if (costUsd === undefined) costUsd = null;
+        return out;
+      };
+      try {
+        const md = await summarizeMeeting(complete, forLlm);
+        if (md) summaryMarkdown = md;
+        intelligence = null;
+      } catch {
+        // Keep accumulated cost (including a successful first call). Retry later.
+        intelligence = 'pending';
+      }
     }
   }
 
+  const existing = await getSession(sessionId);
   await updateSession(sessionId, {
-    costUsd,
+    costUsd: costUsd === undefined ? existing?.costUsd ?? null : costUsd,
+    intelligence,
     ...(summaryMarkdown ? { summaryMarkdown } : {}),
   });
 }
