@@ -86,3 +86,20 @@ export interface HostSyncAck {
   sessionId: string;
   error?: string;            // host replies after sync_end (and on any failure)
 }
+
+export type ExportActionsMessage = {
+  type: 'export_actions';
+  protocolVersion: 1;
+  sessionId: string;
+  items: ActionItem[];
+};
+
+export interface ExportActionsAck {
+  ok: boolean;
+  sessionId: string;
+  error?: string;                 // transport/config-level failure
+  results: { id: string; ok: boolean; error?: string }[];
+  pageUrl?: string;
+}
+
+export type HostMessage = HostSyncMessage | ExportActionsMessage;
