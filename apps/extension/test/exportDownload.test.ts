@@ -28,5 +28,8 @@ describe('export filenames', () => {
     expect(sessionSlug('Weekly Standup!!')).toBe('weekly-standup');
     expect(exportFilename(session, 'md')).toBe('scribetab-2026-08-27-weekly-standup.md');
     expect(exportFilename(session, 'vtt')).toBe('scribetab-2026-08-27-weekly-standup.vtt');
+    expect(exportFilename(session, 'notebooklm')).toBe(
+      'scribetab-notebooklm-2026-08-27-weekly-standup.md',
+    );
   });
 });

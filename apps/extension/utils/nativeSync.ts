@@ -1,6 +1,7 @@
 import type { HostSyncAck, HostSyncMessage, MeetingSession } from '@scribetab/shared';
 import { getChunk, listChunkIndexes } from './chunkStore';
 import { getSegments } from './segmentStore';
+import type { StoredSession } from './sessionStore';
 import { getSettings } from './settings';
 
 export const NATIVE_HOST_NAME = 'com.scribetab.host';
@@ -133,11 +134,13 @@ async function streamToPort(
           }
         }
 
+        const summaryMarkdown = (session as StoredSession).summaryMarkdown?.trim();
         const begin: HostSyncMessage = {
           type: 'sync_begin',
           protocolVersion: 1,
           session,
           segments,
+          ...(summaryMarkdown ? { summaryMarkdown } : {}),
           ...(includeAudio
             ? { audio: { format: 'wav' as const, sampleRate, totalChunks: indexes.length } }
             : {}),

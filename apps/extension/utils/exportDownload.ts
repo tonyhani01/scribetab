@@ -1,6 +1,7 @@
 import {
   exportJson,
   exportMarkdown,
+  exportNotebookLm,
   exportSrt,
   exportVtt,
   type ExportExtras,
@@ -8,7 +9,7 @@ import {
   type TranscriptSegment,
 } from '@scribetab/shared';
 
-export type ExportFormat = 'md' | 'json' | 'srt' | 'vtt';
+export type ExportFormat = 'md' | 'json' | 'srt' | 'vtt' | 'notebooklm';
 
 export function extrasFromSession(session: MeetingSession & ExportExtras): ExportExtras {
   const extras: ExportExtras = {};
@@ -28,7 +29,9 @@ export function sessionSlug(title: string): string {
 
 export function exportFilename(session: MeetingSession, format: ExportFormat): string {
   const day = session.startedAt.slice(0, 10);
-  return `scribetab-${day}-${sessionSlug(session.title)}.${format}`;
+  const slug = sessionSlug(session.title);
+  if (format === 'notebooklm') return `scribetab-notebooklm-${day}-${slug}.md`;
+  return `scribetab-${day}-${slug}.${format}`;
 }
 
 export function exportBody(
@@ -40,6 +43,7 @@ export function exportBody(
   if (format === 'md') return exportMarkdown(session, segments, extras);
   if (format === 'json') return exportJson(session, segments, extras);
   if (format === 'srt') return exportSrt(session, segments);
+  if (format === 'notebooklm') return exportNotebookLm(session, segments, extras);
   return exportVtt(session, segments);
 }
 

@@ -388,6 +388,9 @@ function LibraryView() {
               Export .{f}
             </button>
           ))}
+          <button disabled={busy} onClick={() => void exportOne('notebooklm')}>
+            Export for NotebookLM
+          </button>
           <button disabled={busy} onClick={() => void regenerateSummary()}>
             Regenerate summary
           </button>
