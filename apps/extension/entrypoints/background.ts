@@ -1,5 +1,6 @@
 import { originPattern, transcriptionEndpoint } from '@scribetab/shared';
 import type { Ack, ToBackground, ToOffscreen, TranscriptionSettingsPayload } from '@/utils/messages';
+import { persistHostStatus, syncSessionToHost } from '@/utils/nativeSync';
 import { platformFromUrl, titleFromTab } from '@/utils/platform';
 import { checkQuota } from '@/utils/quota';
 import {
@@ -9,7 +10,7 @@ import {
   statusFromCaptureEnded,
   statusFromOffscreenAck,
 } from '@/utils/sessionIdentity';
-import { createSession, failStaleRecordings, finalizeSession } from '@/utils/sessionStore';
+import { createSession, failStaleRecordings, finalizeSession, getSession, listSessions } from '@/utils/sessionStore';
 import { getSettings } from '@/utils/settings';
 
 let creatingOffscreen: Promise<void> | null = null;
@@ -98,14 +99,33 @@ async function transcriptionPayload(): Promise<TranscriptionSettingsPayload | nu
 
 let opInFlight = false; // serializes start/stop within one SW lifetime
 
+async function maybeSyncSession(sessionId: string | undefined): Promise<void> {
+  if (!sessionId) return;
+  const session = await getSession(sessionId);
+  if (!session || session.status !== 'complete') return;
+  const status = await syncSessionToHost(session);
+  await persistHostStatus(status);
+}
+
 async function completeSession(
   sessionId: string | undefined,
   status: 'complete' | 'failed',
 ): Promise<void> {
   if (!sessionId) return;
   const s = await getSettings();
-  await finalizeSession(sessionId, { retainAudio: s.retainAudio, status });
+  const flipped = await finalizeSession(sessionId, { retainAudio: s.retainAudio, status });
   await checkQuota().catch(() => {});
+  // Offscreen drain() finishes before CAPTURE_ENDED / STOP ack, so transcripts are complete.
+  if (flipped && status === 'complete') {
+    try {
+      await maybeSyncSession(sessionId);
+    } catch (e) {
+      await persistHostStatus({
+        state: 'error',
+        message: e instanceof Error ? e.message : String(e),
+      }).catch(() => {});
+    }
+  }
 }
 
 async function handleStart(): Promise<Ack> {
@@ -298,6 +318,30 @@ export default defineBackground(() => {
             });
           }
           sendResponse({ ok: true });
+          break;
+        }
+        case 'SYNC_ALL': {
+          const { captureState } = await chrome.storage.local.get('captureState');
+          if (captureState === 'recording' || captureState === 'starting' || captureState === 'stopping') {
+            sendResponse({ ok: false, error: 'Busy recording' });
+            break;
+          }
+          const completed = (await listSessions()).filter((s) => s.status === 'complete');
+          if (completed.length === 0) {
+            sendResponse({ ok: false, error: 'Nothing to sync' });
+            break;
+          }
+          let last: Awaited<ReturnType<typeof syncSessionToHost>> = { state: 'idle' };
+          for (const session of completed) {
+            last = await syncSessionToHost(session);
+            await persistHostStatus(last);
+            if (last.state !== 'ok' && last.state !== 'idle') break;
+          }
+          sendResponse({
+            ok: last.state === 'ok',
+            error: last.message,
+            hostMissing: last.state === 'missing',
+          } satisfies Ack);
           break;
         }
       }

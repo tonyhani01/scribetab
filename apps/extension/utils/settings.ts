@@ -6,6 +6,7 @@ export interface Settings {
   baseUrl: string;     // custom provider only
   micEnabled: boolean;
   retainAudio: boolean; // when false, audioChunks are deleted on session finalize
+  nativeHostEnabled: boolean; // sync finalized sessions to com.scribetab.host
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -16,6 +17,7 @@ export const DEFAULT_SETTINGS: Settings = {
   baseUrl: '',
   micEnabled: false,
   retainAudio: true,
+  nativeHostEnabled: true,
 };
 
 const KEY = 'settings';

@@ -1,5 +1,5 @@
-export { exportJson } from './json';
-export { exportMarkdown } from './markdown';
-export { exportSrt } from './srt';
-export { exportVtt } from './vtt';
-export { formatClock, formatSrtTime, formatVttTime } from './timestamps';
+export { exportJson } from './json.js';
+export { exportMarkdown } from './markdown.js';
+export { exportSrt } from './srt.js';
+export { exportVtt } from './vtt.js';
+export { formatClock, formatSrtTime, formatVttTime } from './timestamps.js';

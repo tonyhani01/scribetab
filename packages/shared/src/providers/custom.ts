@@ -1,4 +1,4 @@
-import { openAiCompatible } from './openaiCompatible';
+import { openAiCompatible } from './openaiCompatible.js';
 
 // The local-model story: any OpenAI-compatible server (whisper.cpp server,
 // Speaches, LM Studio) on a user-supplied baseUrl. No response_format extra

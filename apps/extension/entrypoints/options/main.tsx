@@ -129,6 +129,15 @@ function App() {
       <label style={{ ...row, fontWeight: 400 }}>
         <input
           type="checkbox"
+          checked={s.nativeHostEnabled}
+          onChange={(e) => set('nativeHostEnabled', (e.currentTarget as HTMLInputElement).checked)}
+        />{' '}
+        Sync finalized meetings to the native host (<code>com.scribetab.host</code>)
+      </label>
+
+      <label style={{ ...row, fontWeight: 400 }}>
+        <input
+          type="checkbox"
           checked={s.retainAudio}
           onChange={(e) => set('retainAudio', (e.currentTarget as HTMLInputElement).checked)}
         />{' '}

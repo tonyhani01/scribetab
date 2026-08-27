@@ -1,6 +1,6 @@
-import type { MeetingSession, TranscriptSegment } from '../types';
-import { escapeVtt, preparedCues } from './cues';
-import { formatVttTime } from './timestamps';
+import type { MeetingSession, TranscriptSegment } from '../types.js';
+import { escapeVtt, preparedCues } from './cues.js';
+import { formatVttTime } from './timestamps.js';
 
 export function exportVtt(_session: MeetingSession, segments: TranscriptSegment[]): string {
   const ordered = preparedCues(segments);

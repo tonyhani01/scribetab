@@ -7,8 +7,9 @@ the only network traffic is the API call to the transcription/LLM endpoint
 *you* configure (cloud key or localhost model). Transcripts are exposed to AI
 agents and notetaking apps via MCP.
 
-**Status: early development.** Phases 1–3 (scaffold, capture engine, live
-transcription with BYOK providers + local models) are implemented. See
-`docs/superpowers/specs/` and `docs/superpowers/plans/` for the design and roadmap.
+**Status: early development.** Phases 1–5 (scaffold, capture, live transcription,
+native host + MCP) are implemented. See `docs/superpowers/specs/` and
+`docs/superpowers/plans/` for the design and roadmap. Native host:
+`npx scribetab-host install` (dev extension ID `cambjpbepplcihlihagiheggdkfcpmef`).
 
 License: GPL-3.0-only

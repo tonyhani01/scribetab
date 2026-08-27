@@ -1,9 +1,9 @@
-import type { TranscriptionProvider } from '../types';
-import { customProvider } from './custom';
-import { deepgramProvider } from './deepgram';
-import { groqProvider } from './groq';
-import { mistralProvider } from './mistral';
-import { openaiProvider } from './openai';
+import type { TranscriptionProvider } from '../types.js';
+import { customProvider } from './custom.js';
+import { deepgramProvider } from './deepgram.js';
+import { groqProvider } from './groq.js';
+import { mistralProvider } from './mistral.js';
+import { openaiProvider } from './openai.js';
 
 const providers: Record<string, TranscriptionProvider> = {
   openai: openaiProvider,
@@ -38,4 +38,4 @@ export function transcriptionEndpoint(providerId: string, baseUrl?: string): str
 }
 
 export { customProvider, deepgramProvider, groqProvider, mistralProvider, openaiProvider };
-export { openAiCompatible } from './openaiCompatible';
+export { openAiCompatible } from './openaiCompatible.js';

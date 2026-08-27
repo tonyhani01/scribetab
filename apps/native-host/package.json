@@ -1,0 +1,27 @@
+{
+  "name": "scribetab-host",
+  "version": "0.0.1",
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "bin": {
+    "scribetab-host": "./dist/host.bin.js",
+    "scribetab-mcp": "./dist/mcp.bin.js"
+  },
+  "files": ["dist"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "pretest": "pnpm --filter @scribetab/shared build && tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@scribetab/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

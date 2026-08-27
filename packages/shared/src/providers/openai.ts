@@ -1,4 +1,4 @@
-import { openAiCompatible } from './openaiCompatible';
+import { openAiCompatible } from './openaiCompatible.js';
 
 export const openaiProvider = openAiCompatible({
   id: 'openai',

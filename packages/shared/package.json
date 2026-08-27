@@ -3,8 +3,24 @@
   "version": "0.0.1",
   "license": "GPL-3.0-only",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": {
+        "types": "./src/index.ts",
+        "import": "./src/index.ts",
+        "default": "./src/index.ts"
+      },
+      "types": "./dist/index.d.ts",
+      "node": "./dist/index.js",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "src"],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

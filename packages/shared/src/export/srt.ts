@@ -1,6 +1,6 @@
-import type { MeetingSession, TranscriptSegment } from '../types';
-import { preparedCues } from './cues';
-import { formatSrtTime } from './timestamps';
+import type { MeetingSession, TranscriptSegment } from '../types.js';
+import { preparedCues } from './cues.js';
+import { formatSrtTime } from './timestamps.js';
 
 export function exportSrt(_session: MeetingSession, segments: TranscriptSegment[]): string {
   const cues = preparedCues(segments);

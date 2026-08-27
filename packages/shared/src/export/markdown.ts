@@ -1,6 +1,6 @@
-import type { MeetingSession, TranscriptSegment } from '../types';
-import { orderedSegments } from './order';
-import { formatClock } from './timestamps';
+import type { MeetingSession, TranscriptSegment } from '../types.js';
+import { orderedSegments } from './order.js';
+import { formatClock } from './timestamps.js';
 
 export function exportMarkdown(session: MeetingSession, segments: TranscriptSegment[]): string {
   const lines: string[] = [
