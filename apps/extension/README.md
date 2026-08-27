@@ -25,9 +25,9 @@ or another extension — users rebind at `chrome://extensions/shortcuts`.
 ## Permissions
 
 See [`docs/store-listing.md`](../../docs/store-listing.md). The `tabs`
-permission is used only to read the active tab URL for the meeting badge
-(`REC?`) and to decide whether the popup can offer capture. Meeting-site host
-permissions are not added for the badge.
+permission is used to observe URLs of tabs for badge detection (`REC?` on
+Meet/Teams/Zoom, `REC` while capturing) and to decide whether the popup can
+offer capture. Meeting-site host permissions are not added for the badge.
 
 ## Screenshots
 

@@ -12,7 +12,7 @@ ScribeTab records the active browser tab (Google Meet, Teams web, Zoom web, YouT
 
 You bring your own transcription and (optional) LLM provider. API keys stay in this browser profile. Audio and transcripts are not sent to ScribeTab — there are no ScribeTab servers. Cloud STT/LLM calls go only to the origin you configure and grant. A localhost OpenAI-compatible server (whisper.cpp, Speaches, LM Studio, Ollama) never leaves the machine.
 
-Optional native host (`npx scribetab-host install`) writes meetings to `~/ScribeTab/meetings/` and can copy Markdown into Obsidian or create a Notion page. MCP tools let an agent read those files.
+Optional native host (`node apps/native-host/dist/host.bin.js install`; `npx scribetab-host install` once published) writes meetings to `~/ScribeTab/meetings/` and can copy Markdown into Obsidian or create a Notion page. MCP tools let an agent read those files.
 
 Hotkeys (rebind at chrome://extensions/shortcuts): Alt+Shift+R start, Alt+Shift+S stop, Alt+Shift+T side panel. A `REC?` badge appears on known meeting tabs.
 
@@ -38,7 +38,7 @@ Source: GPL-3.0-only.
 | `activeTab` | Act on the tab the user invoked the extension on. |
 | `sidePanel` | Live transcript + library UI. |
 | `nativeMessaging` | Optional sync to `com.scribetab.host`. Unused if the host is not installed. |
-| `tabs` | Read the tab URL/title so the action badge can show `REC?` on Meet/Teams/Zoom/YouTube and so the popup can hide capture on `chrome://` pages. Least privilege vs site host permissions (those would allow injecting into meeting sites). The Meet content script already matches `https://meet.google.com/*` only. |
+| `tabs` | Observe tab URLs (and titles) for badge detection: `REC?` on Meet/Teams/Zoom, `REC` on the captured tab, and to hide capture on `chrome://` pages. Least privilege vs site host permissions (those would allow injecting into meeting sites). The Meet content script already matches `https://meet.google.com/*` only. |
 | `optional_host_permissions` (`http://*/*`, `https://*/*`) | Granted per origin from options (Save / Test connection) for the STT or LLM endpoint the user typed — cloud or localhost. Never granted for all sites up front. |
 
 Commands (`chrome.commands`) need no extra permission.

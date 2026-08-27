@@ -2,10 +2,11 @@
 
 Open-source, BYOK-first AI meeting transcriber. Captures audio straight from
 browser tabs (Google Meet, Teams web, Zoom web, YouTube) — one click, no
-screen-share picker, no bot in your call. Everything stays on your machine;
-the only network traffic is the API call to the transcription/LLM endpoint
-*you* configure (cloud key or localhost model). Transcripts are exposed to AI
-agents and notetaking apps via MCP.
+screen-share picker, no bot in your call. Capture, transcripts, and keys stay
+on this machine unless you opt into a network path: the STT/LLM provider *you*
+configure (cloud key or localhost), and optional Notion page create from the
+native host (`api.notion.com`). Transcripts are exposed to AI agents and
+notetaking apps via MCP.
 
 **Status: v1.0.0.** Capture, live transcription, library/search/export, native
 host + MCP, Meet caption speakers, summaries, and Obsidian/Notion/NotebookLM
@@ -73,10 +74,11 @@ Writes meetings to `~/ScribeTab/meetings/<date>-<slug>/`.
 
 ```
 pnpm --filter scribetab-host build
-npx scribetab-host install
+node apps/native-host/dist/host.bin.js install
 ```
 
-Use `--extension-id <id>` if you are not on the packed development ID. Details:
+Use `--extension-id <id>` if you are not on the packed development ID. After the
+host package is published, `npx scribetab-host install` works the same. Details:
 [`apps/native-host/README.md`](apps/native-host/README.md).
 
 Obsidian / Notion (off by default):
