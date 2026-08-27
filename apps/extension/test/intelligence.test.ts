@@ -253,6 +253,7 @@ describe('runFinalizeIntelligence', () => {
     const row = await getSession('s1');
     expect(row?.summary?.degraded).toBe(true);
     expect(row?.summaryMarkdown).toContain('plain text');
+    expect(row?.intelligence).toBeNull();
   });
 
   it('does not fetch when the LLM origin is not permitted', async () => {
