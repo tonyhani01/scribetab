@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'preact/hooks';
 import { getSettings, saveSettings } from '@/utils/settings';
 
+const DISMISS_KEY = 'consentDismissedSessionId';
+
 export function ConsentBanner({ recording }: { recording: boolean }) {
   const [show, setShow] = useState(false);
 
@@ -9,7 +11,32 @@ export function ConsentBanner({ recording }: { recording: boolean }) {
       setShow(false);
       return;
     }
-    void getSettings().then((s) => setShow(s.consentReminder));
+    let cancelled = false;
+    void (async () => {
+      const s = await getSettings();
+      if (cancelled) return;
+      if (!s.consentReminder) {
+        setShow(false);
+        return;
+      }
+      const { currentSessionId } = await chrome.storage.local.get('currentSessionId');
+      let dismissed: string | undefined;
+      try {
+        const v = await chrome.storage.session.get(DISMISS_KEY);
+        dismissed = typeof v[DISMISS_KEY] === 'string' ? v[DISMISS_KEY] : undefined;
+      } catch {
+        dismissed = undefined;
+      }
+      if (cancelled) return;
+      if (typeof currentSessionId === 'string' && dismissed === currentSessionId) {
+        setShow(false);
+        return;
+      }
+      setShow(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [recording]);
 
   if (!show) return null;
@@ -24,7 +51,23 @@ export function ConsentBanner({ recording }: { recording: boolean }) {
         Get consent from everyone in the meeting before recording. Audio is sent only to the
         transcription provider you configured.
       </p>
-      <button type="button" onClick={() => setShow(false)}>
+      <button
+        type="button"
+        data-testid="consent-dismiss"
+        onClick={() => {
+          void chrome.storage.local.get('currentSessionId').then(async (v) => {
+            const id = typeof v.currentSessionId === 'string' ? v.currentSessionId : '';
+            if (id) {
+              try {
+                await chrome.storage.session.set({ [DISMISS_KEY]: id });
+              } catch {
+                // session storage unavailable — hide for this view only
+              }
+            }
+            setShow(false);
+          });
+        }}
+      >
         Dismiss
       </button>{' '}
       <button
