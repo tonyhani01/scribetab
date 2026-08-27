@@ -1,7 +1,7 @@
 # Live feedback UX + compressed audio storage — design
 
 Date: 2026-08-27
-Status: awaiting owner sign-off
+Status: approved 2026-08-27 — all recommendations accepted; Opus setting: 16 kbps mono + DTX
 Owner feedback driving this:
 
 1. "I dont like the feedback at all. Chunking transcripts is not good at all, generating
