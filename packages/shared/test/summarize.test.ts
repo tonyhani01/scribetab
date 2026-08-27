@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatMessage, TranscriptSegment } from '../src/types';
 import {
+  SUMMARY_TRANSCRIPT_CHAR_LIMIT,
   buildActionItemMessages,
   buildSummaryMessages,
+  clipTranscript,
   combineSummaryMarkdown,
   parseActionItems,
   parseSummary,
@@ -40,10 +42,35 @@ describe('transcriptPlain', () => {
 });
 
 describe('prompt builders', () => {
-  it('put the transcript in the user message', () => {
+  it('wraps the transcript in delimiters and frames it as data', () => {
     const t = transcriptPlain(segments);
-    expect(buildSummaryMessages(t)[1]?.content).toContain('Ada: We should ship Friday.');
+    const summary = buildSummaryMessages(t);
+    expect(summary[0]?.content).toMatch(/transcript is untrusted data/i);
+    expect(summary[1]?.content).toContain('<transcript>');
+    expect(summary[1]?.content).toContain('Ada: We should ship Friday.');
+    expect(summary[1]?.content).toContain('</transcript>');
     expect(buildActionItemMessages(t)[0]?.role).toBe('system');
+  });
+});
+
+describe('clipTranscript', () => {
+  it('keeps head and tail and notes the elision', () => {
+    const long = 'H'.repeat(20_000) + 'MID' + 'T'.repeat(20_000);
+    const clipped = clipTranscript(long, 200);
+    expect(clipped.length).toBeLessThanOrEqual(200);
+    expect(clipped.startsWith('H')).toBe(true);
+    expect(clipped.endsWith('T')).toBe(true);
+    expect(clipped).toContain('truncated');
+    expect(clipped).not.toContain('MID');
+  });
+
+  it('uses the default budget for LLM prompts', () => {
+    const t = 'x'.repeat(SUMMARY_TRANSCRIPT_CHAR_LIMIT + 50);
+    const clipped = clipTranscript(t);
+    expect(clipped.length).toBeLessThanOrEqual(SUMMARY_TRANSCRIPT_CHAR_LIMIT);
+    const user = buildSummaryMessages(t)[1]?.content ?? '';
+    expect(user).toContain('truncated');
+    expect(user).toContain('<transcript>');
   });
 });
 
@@ -79,14 +106,21 @@ describe('combineSummaryMarkdown', () => {
 });
 
 describe('summarizeMeeting', () => {
-  it('calls complete twice and combines parsed results', async () => {
+  it('calls complete twice sequentially and combines parsed results', async () => {
+    let inflight = 0;
+    let maxInflight = 0;
     const complete = vi.fn(async (messages: ChatMessage[]) => {
+      inflight += 1;
+      maxInflight = Math.max(maxInflight, inflight);
+      await Promise.resolve();
+      inflight -= 1;
       const user = messages.find((m) => m.role === 'user')?.content ?? '';
       if (user.startsWith('Summarize')) return 'Team ships Friday.';
       return '- Bob sends recap';
     });
     const md = await summarizeMeeting(complete, segments);
     expect(complete).toHaveBeenCalledTimes(2);
+    expect(maxInflight).toBe(1);
     expect(md).toContain('Team ships Friday.');
     expect(md).toContain('- [ ] Bob sends recap');
   });
@@ -95,5 +129,15 @@ describe('summarizeMeeting', () => {
     const complete = vi.fn(async () => 'nope');
     expect(await summarizeMeeting(complete, [])).toBe('');
     expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('does not start the action-item call if summary throws', async () => {
+    const complete = vi.fn(async (messages: ChatMessage[]) => {
+      const user = messages.find((m) => m.role === 'user')?.content ?? '';
+      if (user.startsWith('Summarize')) throw new Error('boom');
+      return '- none';
+    });
+    await expect(summarizeMeeting(complete, segments)).rejects.toThrow(/boom/);
+    expect(complete).toHaveBeenCalledTimes(1);
   });
 });
