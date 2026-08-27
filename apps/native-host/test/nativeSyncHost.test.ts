@@ -265,6 +265,96 @@ describe('NativeSyncHost export_actions', () => {
     });
   });
 
+  it('rejects more than 200 items with a failed export ack', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      await saveConfig(
+        {
+          obsidianEnabled: false,
+          notionEnabled: true,
+          notion: { token: 'ntn_secret_value', parentPageId: 'parent' },
+        },
+        env,
+        'linux',
+      );
+      const { stdout, messages } = capturingStdout();
+      let fetches = 0;
+      const fetchImpl: typeof fetch = async () => {
+        fetches += 1;
+        return new Response('{}', { status: 200 });
+      };
+      const host = new NativeSyncHost(stdout, env, { fetchImpl, platform: 'linux' });
+      const many = Array.from({ length: 201 }, (_, i) => ({ id: `i${i}`, text: `t${i}` }));
+      await host.handle({
+        type: 'export_actions',
+        protocolVersion: 1,
+        sessionId: session.id,
+        items: many,
+      });
+      const ack = messages()[0] as ExportActionsAck;
+      expect(ack.ok).toBe(false);
+      expect(ack.error).toMatch(/200/);
+      expect(ack.results).toEqual([]);
+      expect(fetches).toBe(0);
+    });
+  });
+
+  it('truncates oversized item text before building Notion blocks', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      await saveConfig(
+        {
+          obsidianEnabled: false,
+          notionEnabled: true,
+          notion: { token: 'ntn_secret_value', parentPageId: 'parent' },
+        },
+        env,
+        'linux',
+      );
+      await saveNotionPageMap(
+        { [session.id]: { pageId: 'aa-bb-cc', status: 'ok' } },
+        env,
+        'linux',
+      );
+      const { stdout, messages } = capturingStdout();
+      const bodies: string[] = [];
+      const fetchImpl: typeof fetch = async (_input, init) => {
+        bodies.push(String(init?.body ?? ''));
+        return new Response('{}', { status: 200 });
+      };
+      const host = new NativeSyncHost(stdout, env, { fetchImpl, platform: 'linux' });
+      await host.handle({
+        type: 'export_actions',
+        protocolVersion: 1,
+        sessionId: session.id,
+        items: [
+          {
+            id: 'big',
+            text: 'x'.repeat(10_000),
+            owner: 'o'.repeat(500),
+            due: 'd'.repeat(500),
+          },
+        ],
+      });
+      const ack = messages()[0] as ExportActionsAck;
+      expect(ack.ok).toBe(true);
+      expect(bodies).toHaveLength(1);
+      const children = (
+        JSON.parse(bodies[0]!) as {
+          children: Array<{
+            type: string;
+            to_do?: { rich_text: Array<{ text: { content: string } }> };
+          }>;
+        }
+      ).children;
+      const todo = children.find((c) => c.type === 'to_do');
+      const parts = todo?.to_do?.rich_text ?? [];
+      expect(parts.length).toBeLessThanOrEqual(3);
+      const combined = parts.map((p) => p.text.content).join('');
+      expect(combined.length).toBeLessThanOrEqual(4000 + 200 + 200 + 6);
+    });
+  });
+
   it('tells the user to sync first when the session is unknown', async () => {
     await withHome(async (home) => {
       const env = linuxEnv(home);

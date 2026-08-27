@@ -21,6 +21,9 @@ import {
 
 const MAX_ACK_ERROR = 1000;
 const MAX_ACK_ID = 80;
+const MAX_EXPORT_ITEMS = 200;
+const MAX_ITEM_TEXT = 4000;
+const MAX_ITEM_META = 200;
 
 export type NativeSyncHostOpts = {
   fetchImpl?: typeof fetch;
@@ -50,9 +53,9 @@ function parseExportItems(raw: unknown): ActionItem[] | undefined {
     if (!it || typeof it !== 'object' || Array.isArray(it)) return undefined;
     const rec = it as Record<string, unknown>;
     if (typeof rec.id !== 'string' || typeof rec.text !== 'string') return undefined;
-    const item: ActionItem = { id: rec.id, text: rec.text };
-    if (typeof rec.owner === 'string') item.owner = rec.owner;
-    if (typeof rec.due === 'string') item.due = rec.due;
+    const item: ActionItem = { id: rec.id, text: rec.text.slice(0, MAX_ITEM_TEXT) };
+    if (typeof rec.owner === 'string') item.owner = rec.owner.slice(0, MAX_ITEM_META);
+    if (typeof rec.due === 'string') item.due = rec.due.slice(0, MAX_ITEM_META);
     out.push(item);
   }
   return out;
@@ -222,6 +225,10 @@ export class NativeSyncHost {
       const items = parseExportItems(msg.items);
       if (!items) {
         await fail('export_actions items must be an array of {id, text} strings');
+        return;
+      }
+      if (items.length > MAX_EXPORT_ITEMS) {
+        await fail(`export_actions accepts at most ${MAX_EXPORT_ITEMS} items`);
         return;
       }
       const cfg = await loadConfig(this.env, this.opts.platform);
