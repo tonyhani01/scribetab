@@ -17,8 +17,9 @@ License: GPL-3.0-only
 ## Features
 
 - Tab audio capture with optional mic mix (echo-cancelled)
-- Live transcript in the side panel via OpenAI, Groq, Deepgram, Mistral, or a
-  custom OpenAI-compatible server (whisper.cpp, Speaches, LM Studio)
+- Live transcript in the side panel via OpenAI, Groq, Deepgram, Mistral,
+  OpenRouter, Google Gemini, or a custom OpenAI-compatible server
+  (whisper.cpp, Speaches, LM Studio)
 - Captions-only mode on Google Meet (zero STT cost)
 - Library search, Markdown/JSON/SRT/VTT export, NotebookLM-ready Markdown
 - Optional summaries and action items (OpenAI or local Ollama)
@@ -52,6 +53,8 @@ and are sent only to the origin you grant.
 | Kind | Provider | Notes |
 | --- | --- | --- |
 | STT | openai / groq / mistral | OpenAI-compatible `audio/transcriptions` |
+| STT | openrouter | OpenAI-compatible `audio/transcriptions`; default `openai/whisper-large-v3` |
+| STT | google | Gemini 3.5 Transcribe (`gemini-3.5-transcribe`, public preview) via Interactions API |
 | STT | deepgram | `POST /v1/listen` |
 | STT | custom | Set base URL, e.g. `http://localhost:8080/v1` |
 | LLM | openai | Summaries on finalize |
