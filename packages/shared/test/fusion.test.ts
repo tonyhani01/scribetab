@@ -104,6 +104,25 @@ describe('fuseSpeakers', () => {
     expect(fuseSpeakers(segments, captions)[0]?.speaker).toBe('Ada');
   });
 
+  it('unions overlapping cues per speaker so duplicates cannot exceed the segment', () => {
+    const segments = [seg({ id: 'a', startMs: 0, endMs: 1000 })];
+    const captions = [
+      cue({ speaker: 'Ada', startMs: 0, endMs: 400 }),
+      cue({ speaker: 'Ada', startMs: 100, endMs: 500 }), // overlap with Ada — union 500ms
+      cue({ speaker: 'Bob', startMs: 0, endMs: 501 }),
+    ];
+    // Without union Ada would score 800ms and win; with union Bob's 501ms wins.
+    expect(fuseSpeakers(segments, captions)[0]?.speaker).toBe('Bob');
+  });
+
+  it('fuses with non-zero caption/audio skew', () => {
+    const segments = [seg({ id: 'a', startMs: 500, endMs: 1500 })];
+    const captions = [cue({ speaker: 'Ada', startMs: 500, endMs: 1500 })];
+    expect(fuseSpeakers(segments, captions)[0]?.speaker).toBe('Ada');
+    const miss = fuseSpeakers(segments, [cue({ speaker: 'Ada', startMs: 0, endMs: 400 })]);
+    expect(miss[0]?.speaker).toBeUndefined();
+  });
+
   it('fuses a list of segments independently', () => {
     const segments = [
       seg({ id: 'a', startMs: 0, endMs: 1000 }),
