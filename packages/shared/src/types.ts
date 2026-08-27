@@ -51,6 +51,24 @@ export interface LlmProvider {
   complete(messages: ChatMessage[], cfg: ProviderConfig): Promise<string>;
 }
 
+export interface ActionItem {
+  id: string;               // crypto.randomUUID(); assigned client-side
+  text: string;
+  owner?: string;
+  due?: string;             // verbatim phrase, never an inferred date
+}
+
+export interface SessionSummary {
+  version: 1;
+  narrative: string;        // markdown paragraphs
+  actionItems: ActionItem[];
+  decisions: string[];
+  usefulInfo: string[];
+  generatedAt: string;      // ISO 8601
+  model?: string;
+  degraded?: true;          // set when JSON extraction failed (raw text fallback)
+}
+
 export type HostSyncMessage =
   | {
       type: 'sync_begin';

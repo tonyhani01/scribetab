@@ -1,4 +1,4 @@
-import type { ChatMessage, TranscriptSegment } from './types.js';
+import type { ActionItem, ChatMessage, SessionSummary, TranscriptSegment } from './types.js';
 
 /** Head+tail budget for the transcript sent to the LLM. */
 export const SUMMARY_TRANSCRIPT_CHAR_LIMIT = 24_000;
@@ -93,6 +93,28 @@ export function combineSummaryMarkdown(summary: string, actionItems: string): st
   const s = summary.trim();
   const a = actionItems.trim() || '- [ ] None identified';
   const parts = ['## Summary', '', s || '(no summary)', '', '## Action items', '', a];
+  return parts.join('\n') + '\n';
+}
+
+export function actionItemLine(item: ActionItem): string {
+  const owner = item.owner?.trim();
+  const due = item.due?.trim();
+  let line = item.text.trim();
+  if (owner) line = `${owner} — ${line}`;
+  if (due) line = `${line} (${due})`;
+  return line;
+}
+
+export function summaryToMarkdown(s: SessionSummary): string {
+  const parts: string[] = ['## Summary', '', s.narrative.trim() || '(no summary)', ''];
+  const items = s.actionItems.map((i) => `- [ ] ${actionItemLine(i)}`);
+  parts.push('## Action items', '', items.length ? items.join('\n') : '- [ ] None identified');
+  if (s.decisions.length) {
+    parts.push('', '## Decisions', '', s.decisions.map((d) => `- ${d.trim()}`).join('\n'));
+  }
+  if (s.usefulInfo.length) {
+    parts.push('', '## Useful info', '', s.usefulInfo.map((u) => `- ${u.trim()}`).join('\n'));
+  }
   return parts.join('\n') + '\n';
 }
 

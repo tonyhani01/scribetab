@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ChatMessage, TranscriptSegment } from '../src/types';
+import type { ChatMessage, SessionSummary, TranscriptSegment } from '../src/types';
 import {
   SUMMARY_TRANSCRIPT_CHAR_LIMIT,
+  actionItemLine,
   buildActionItemMessages,
   buildSummaryMessages,
   clipTranscript,
@@ -9,6 +10,7 @@ import {
   parseActionItems,
   parseSummary,
   summarizeMeeting,
+  summaryToMarkdown,
   transcriptPlain,
 } from '../src/summarize';
 
@@ -139,5 +141,51 @@ describe('summarizeMeeting', () => {
     });
     await expect(summarizeMeeting(complete, segments)).rejects.toThrow(/boom/);
     expect(complete).toHaveBeenCalledTimes(1);
+  });
+});
+
+const base: SessionSummary = {
+  version: 1,
+  narrative: 'We agreed on the Q3 plan.',
+  actionItems: [
+    { id: 'a1', text: 'Send the deck', owner: 'Sam', due: 'by Friday' },
+    { id: 'a2', text: 'Book the room' },
+  ],
+  decisions: ['Ship v2 in September'],
+  usefulInfo: ['Budget code: X-42'],
+  generatedAt: '2026-08-28T00:00:00.000Z',
+};
+
+describe('actionItemLine', () => {
+  it('composes owner — text (due)', () => {
+    expect(actionItemLine(base.actionItems[0]!)).toBe('Sam — Send the deck (by Friday)');
+  });
+  it('is just text when owner/due absent', () => {
+    expect(actionItemLine(base.actionItems[1]!)).toBe('Book the room');
+  });
+  it('handles due without owner', () => {
+    expect(actionItemLine({ id: 'x', text: 'Ping legal', due: 'next week' })).toBe('Ping legal (next week)');
+  });
+});
+
+describe('summaryToMarkdown', () => {
+  it('renders all sections with ## headings and checklist items', () => {
+    const md = summaryToMarkdown(base);
+    expect(md).toContain('## Summary\n\nWe agreed on the Q3 plan.');
+    expect(md).toContain('## Action items\n\n- [ ] Sam — Send the deck (by Friday)\n- [ ] Book the room');
+    expect(md).toContain('## Decisions\n\n- Ship v2 in September');
+    expect(md).toContain('## Useful info\n\n- Budget code: X-42');
+    expect(md.endsWith('\n')).toBe(true);
+  });
+  it('omits empty sections but always emits Summary and Action items', () => {
+    const md = summaryToMarkdown({ ...base, decisions: [], usefulInfo: [] });
+    expect(md).not.toContain('## Decisions');
+    expect(md).not.toContain('## Useful info');
+    expect(md).toContain('## Summary');
+  });
+  it('falls back to placeholders when empty', () => {
+    const md = summaryToMarkdown({ ...base, narrative: '', actionItems: [] });
+    expect(md).toContain('(no summary)');
+    expect(md).toContain('- [ ] None identified');
   });
 });
