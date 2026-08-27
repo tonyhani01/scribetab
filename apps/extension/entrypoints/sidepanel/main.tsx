@@ -188,7 +188,7 @@ function LiveView() {
                 } else if (!res?.ok) {
                   setHostStatus({ state: 'error', message: res?.error ?? 'Sync failed' });
                 } else {
-                  setHostStatus({ state: 'ok' });
+                  setHostStatus({ state: 'ok', warning: res.warning });
                 }
               })
               .finally(() => setSyncing(false));
@@ -206,6 +206,11 @@ function LiveView() {
         )}
         {hostStatus.state === 'ok' && (
           <p style={{ color: 'green', fontSize: 12 }}>Synced to ~/ScribeTab/meetings</p>
+        )}
+        {hostStatus.state === 'ok' && hostStatus.warning && (
+          <p style={{ color: '#8a6d00', background: '#fff8e1', padding: 8, fontSize: 12 }}>
+            Integrations: {hostStatus.warning}
+          </p>
         )}
       </footer>
     </section>

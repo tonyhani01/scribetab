@@ -31,7 +31,7 @@ function deleteDb(): Promise<void> {
 
 type Posted = { type: string; index?: number };
 
-function mockPort(opts: { autoAck?: boolean; onDisconnect?: string } = {}) {
+function mockPort(opts: { autoAck?: boolean; followUpError?: string } = {}) {
   const messageListeners: Array<(msg: unknown) => void> = [];
   const disconnectListeners: Array<() => void> = [];
   const posted: Posted[] = [];
@@ -42,6 +42,15 @@ function mockPort(opts: { autoAck?: boolean; onDisconnect?: string } = {}) {
       if (opts.autoAck !== false && msg.type === 'sync_end') {
         queueMicrotask(() => {
           for (const fn of messageListeners) fn({ ok: true, sessionId: session.id });
+          queueMicrotask(() => {
+            for (const fn of messageListeners) {
+              fn({
+                ok: true,
+                sessionId: session.id,
+                ...(opts.followUpError ? { error: opts.followUpError } : {}),
+              });
+            }
+          });
         });
       }
     },
@@ -214,5 +223,12 @@ describe('syncSessionToHost', () => {
     const result = await syncSessionToHost(session);
     expect(result.state).toBe('ok');
     expect(port.posted.map((m) => m.type)).toEqual(['sync_begin', 'sync_end']);
+  });
+
+  it('surfaces integration warnings without failing core sync', async () => {
+    port = mockPort({ followUpError: 'Notion: 401' });
+    const result = await syncSessionToHost(session);
+    expect(result.state).toBe('ok');
+    expect(result.warning).toBe('Notion: 401');
   });
 });

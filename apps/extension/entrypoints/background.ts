@@ -629,6 +629,7 @@ export default defineBackground(() => {
           sendResponse({
             ok: last.state === 'ok',
             error: last.message,
+            warning: last.warning,
             hostMissing: last.state === 'missing',
           } satisfies Ack);
           break;

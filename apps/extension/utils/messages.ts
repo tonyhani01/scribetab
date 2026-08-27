@@ -76,6 +76,7 @@ export type ToSidePanel =
 export interface Ack {
   ok: boolean;
   error?: string;
+  warning?: string;
   hostMissing?: boolean;
   captured?: boolean;
 }

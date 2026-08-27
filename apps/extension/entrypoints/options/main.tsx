@@ -276,7 +276,7 @@ function App() {
       <pre style={{ fontSize: 12, background: '#f6f6f6', padding: 8, overflow: 'auto' }}>{`scribetab-host config set obsidianEnabled true
 scribetab-host config set obsidianVaultPath /path/to/vault
 scribetab-host config set notionEnabled true
-scribetab-host config set notion.token secret
+scribetab-host config set notion.token -
 scribetab-host config set notion.parentPageId PAGE_ID`}</pre>
       <p style={{ color: '#555', fontSize: 13 }}>
         Config file:

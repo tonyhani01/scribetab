@@ -7,10 +7,12 @@ import { getSettings } from './settings';
 export const NATIVE_HOST_NAME = 'com.scribetab.host';
 export const MAX_AUDIO_CHUNK = 8 * 1024 * 1024;
 export const ACK_TIMEOUT_MS = 30_000;
+export const INTEGRATION_FOLLOWUP_MS = 70_000;
 
 export type NativeHostStatus = {
   state: 'idle' | 'ok' | 'missing' | 'error';
   message?: string;
+  warning?: string;
 };
 
 export function isHostForbiddenError(message: string): boolean {
@@ -56,7 +58,7 @@ type NativePort = {
  */
 export async function syncSessionToHost(
   session: MeetingSession,
-  opts: { ackTimeoutMs?: number } = {},
+  opts: { ackTimeoutMs?: number; integrationFollowupMs?: number } = {},
 ): Promise<NativeHostStatus> {
   const settings = await getSettings();
   if (!settings.nativeHostEnabled) {
@@ -75,7 +77,7 @@ export async function syncSessionToHost(
     return classifyDisconnect(message);
   }
 
-  return streamToPort(port, session, settings.retainAudio, ackTimeoutMs);
+  return streamToPort(port, session, settings.retainAudio, ackTimeoutMs, opts.integrationFollowupMs);
 }
 
 async function streamToPort(
@@ -83,8 +85,10 @@ async function streamToPort(
   session: MeetingSession,
   retainAudio: boolean,
   ackTimeoutMs: number,
+  integrationFollowupMs = INTEGRATION_FOLLOWUP_MS,
 ): Promise<NativeHostStatus> {
   let settled = false;
+  let coreAck: HostSyncAck | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const settle = (status: NativeHostStatus): NativeHostStatus => {
@@ -103,11 +107,30 @@ async function streamToPort(
     const finish = (status: NativeHostStatus) => resolve(settle(status));
 
     port.onMessage.addListener((msg: HostSyncAck) => {
-      if (msg?.ok) finish({ state: 'ok', message: msg.error });
-      else finish({ state: 'error', message: msg?.error ?? 'Host sync failed' });
+      if (!msg?.ok) {
+        finish({ state: 'error', message: msg?.error ?? 'Host sync failed' });
+        return;
+      }
+      if (!coreAck) {
+        coreAck = msg;
+        if (timer !== undefined) clearTimeout(timer);
+        timer = setTimeout(() => {
+          finish({ state: 'ok', message: coreAck?.error });
+        }, integrationFollowupMs);
+        return;
+      }
+      finish({
+        state: 'ok',
+        message: coreAck.error,
+        ...(msg.error ? { warning: msg.error } : {}),
+      });
     });
 
     port.onDisconnect.addListener(() => {
+      if (coreAck) {
+        finish({ state: 'ok', message: coreAck.error });
+        return;
+      }
       const err = chrome.runtime.lastError?.message ?? 'Native host disconnected';
       finish(classifyDisconnect(err));
     });
