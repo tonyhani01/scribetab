@@ -7,6 +7,7 @@ import {
   EXPORT_ACK_TIMEOUT_MS,
   exportActionsViaHost,
   exportSelectedActionItems,
+  nextSelection,
 } from '../utils/actionExport';
 
 function deleteDb(): Promise<void> {
@@ -65,6 +66,58 @@ const items = [
   { id: 'a1', text: 'Send the notes', owner: 'Bo' },
   { id: 'a2', text: 'Book the room' },
 ];
+
+describe('nextSelection', () => {
+  const prev = new Set(['a1', 'a2']);
+
+  it('keeps the selection on a transport-level failure', () => {
+    const ack: ExportActionsAck = {
+      ok: false,
+      sessionId: 's',
+      error: 'host missing',
+      results: [],
+    };
+    const out = nextSelection(prev, ack);
+    expect(out.sel).toBe(prev);
+    expect(out.retryCount).toBeNull();
+    expect(out.transportError).toBe('host missing');
+  });
+
+  it('falls back to Export failed when the transport ack has no error', () => {
+    const out = nextSelection(prev, { ok: false, sessionId: 's', results: [] });
+    expect(out.sel).toBe(prev);
+    expect(out.retryCount).toBeNull();
+    expect(out.transportError).toBe('Export failed');
+  });
+
+  it('clears the selection when every result is ok', () => {
+    const out = nextSelection(prev, {
+      ok: true,
+      sessionId: 's',
+      results: [
+        { id: 'a1', ok: true },
+        { id: 'a2', ok: true },
+      ],
+    });
+    expect([...out.sel]).toEqual([]);
+    expect(out.retryCount).toBeNull();
+    expect(out.transportError).toBeNull();
+  });
+
+  it('keeps only failed ids on a partial failure', () => {
+    const out = nextSelection(prev, {
+      ok: false,
+      sessionId: 's',
+      results: [
+        { id: 'a1', ok: true },
+        { id: 'a2', ok: false, error: '500' },
+      ],
+    });
+    expect([...out.sel]).toEqual(['a2']);
+    expect(out.retryCount).toBe(1);
+    expect(out.transportError).toBeNull();
+  });
+});
 
 describe('exportActionsViaHost', () => {
   let port: ReturnType<typeof mockPort>;

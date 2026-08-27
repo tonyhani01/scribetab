@@ -4,6 +4,25 @@ import { getSession, updateSession } from './sessionStore';
 
 export const EXPORT_ACK_TIMEOUT_MS = 90_000;
 
+export function nextSelection(
+  prev: Set<string>,
+  ack: ExportActionsAck,
+): { sel: Set<string>; retryCount: number | null; transportError: string | null } {
+  if (!ack.ok && ack.results.length === 0) {
+    return {
+      sel: prev,
+      retryCount: null,
+      transportError: ack.error ?? 'Export failed',
+    };
+  }
+  const failed = ack.results.filter((r) => !r.ok);
+  return {
+    sel: new Set(failed.map((r) => r.id)),
+    retryCount: failed.length === 0 ? null : failed.length,
+    transportError: null,
+  };
+}
+
 type NativePort = {
   postMessage: (msg: ExportActionsMessage) => void;
   disconnect: () => void;

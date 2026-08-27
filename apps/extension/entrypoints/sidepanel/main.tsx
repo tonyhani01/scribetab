@@ -11,6 +11,7 @@ import { getAllSegments, getSegments } from '@/utils/segmentStore';
 import { createSegmentIndex, snippetAround, type SearchDoc } from '@/utils/search';
 import { getSession, listSessions, type StoredSession } from '@/utils/sessionStore';
 import { getSettings } from '@/utils/settings';
+import { nextSelection } from '@/utils/actionExport';
 import { humanError } from '@/utils/userError';
 
 function fmt(ms: number): string {
@@ -666,14 +667,9 @@ function SummaryView({
                 const map: Record<string, { ok: boolean; error?: string }> = {};
                 for (const r of ack.results) map[r.id] = r;
                 setLastResults(map);
-                const failed = ack.results.filter((r) => !r.ok);
-                if (failed.length) {
-                  setSel(new Set(failed.map((r) => r.id)));
-                  setRetryCount(failed.length);
-                } else {
-                  setSel(new Set());
-                  setRetryCount(null);
-                }
+                const next = nextSelection(sel, ack);
+                setSel(next.sel);
+                setRetryCount(next.retryCount);
               })();
             }}
           >
