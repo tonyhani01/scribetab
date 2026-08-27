@@ -486,6 +486,7 @@ function LibraryView() {
         )}
         {open.summary ? (
           <SummaryView
+            key={open.id}
             sessionId={open.id}
             summary={open.summary}
             exports={open.actionExports ?? {}}
@@ -628,6 +629,7 @@ function SummaryView({
                       checked={exported ? false : sel.has(a.id)}
                       onChange={(e) => {
                         const on = (e.currentTarget as HTMLInputElement).checked;
+                        setRetryCount(null);
                         setSel((prev) => {
                           const next = new Set(prev);
                           if (on) next.add(a.id);
