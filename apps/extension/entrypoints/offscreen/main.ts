@@ -1,6 +1,7 @@
 import { SilenceChunker, TranscriptionQueue, encodeWav, getTranscriptionProvider } from '@scribetab/shared';
 import type { Ack, ToOffscreen, ToSidePanel } from '@/utils/messages';
 import { putChunk } from '@/utils/chunkStore';
+import { offscreenStopApplies } from '@/utils/sessionIdentity';
 import { putSegments } from '@/utils/segmentStore';
 
 interface Engine {
@@ -28,7 +29,7 @@ function notifyBackground(
     | { target: 'background'; type: 'CHUNK_SAVED'; count: number }
     | { target: 'background'; type: 'SEGMENT_SAVED'; count: number }
     | { target: 'background'; type: 'MIC_STATUS'; status: 'active' | 'denied' | 'off' }
-    | { target: 'background'; type: 'CAPTURE_ENDED'; reason: string; error?: string },
+    | { target: 'background'; type: 'CAPTURE_ENDED'; sessionId: string; reason: string; error?: string },
 ): void {
   void chrome.runtime.sendMessage(msg).catch(() => {
     // SW may be restarting; state converges via storage on its next event.
@@ -193,6 +194,7 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
 async function runFinalize(reason: string): Promise<void> {
   if (!engine) return;
   finalized = true;
+  const sessionId = captureSessionId;
   const { ctx, stream, micStream, node, chunker, sampleRate } = engine;
   engine = null;
   try {
@@ -201,16 +203,20 @@ async function runFinalize(reason: string): Promise<void> {
     const rest = chunker.flush();
     if (rest && rest.length > 0) enqueueChunk(rest, sampleRate);
     await writeChain;
+    if (queue) await queue.drain().catch(() => {});
     if (writeError) throw writeError;
   } finally {
     stream.getTracks().forEach((t) => t.stop());
     micStream?.getTracks().forEach((t) => t.stop());
     await ctx.close().catch(() => {});
+    const error =
+      writeError?.message ?? (reason === 'processor-error' ? 'processor-error' : undefined);
     notifyBackground({
       target: 'background',
       type: 'CAPTURE_ENDED',
+      sessionId,
       reason,
-      error: writeError ? writeError.message : undefined,
+      error,
     });
   }
 }
@@ -234,6 +240,10 @@ chrome.runtime.onMessage.addListener((raw: unknown, _s, sendResponse) => {
         sendResponse({ ok: true } satisfies Ack);
         break;
       case 'OFFSCREEN_STOP':
+        if (!offscreenStopApplies(msg.sessionId, captureSessionId)) {
+          sendResponse({ ok: true } satisfies Ack);
+          break;
+        }
         await finalize('user-stop');
         sendResponse(
           (writeError
