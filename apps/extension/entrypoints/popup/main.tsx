@@ -4,6 +4,9 @@ import { ConsentBanner } from '@/components/ConsentBanner';
 import type { Ack, CaptureState } from '@/utils/messages';
 import { assembleRecording } from '@/utils/assemble';
 import { isCapturableUrl } from '@/utils/platform';
+import { listSessions } from '@/utils/sessionStore';
+import { monthlySpend, type MonthlySpend } from '@/utils/costMeter';
+import { formatUsd } from '@scribetab/shared';
 import { humanError } from '@/utils/userError';
 import '@/assets/theme.css';
 
@@ -31,11 +34,19 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [capturable, setCapturable] = useState(true);
+  const [spend, setSpend] = useState<MonthlySpend | null>(null);
+
+  const refreshSpend = () => {
+    void listSessions()
+      .then((rows) => setSpend(monthlySpend(rows)))
+      .catch(() => setSpend(null));
+  };
 
   useEffect(() => {
     void chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
       setCapturable(isCapturableUrl(tab?.url));
     });
+    refreshSpend();
     chrome.storage.local.get(['captureState', 'chunkCount', 'lastError', 'captureNotice']).then((v) => {
       setState((v.captureState as CaptureState) ?? 'idle');
       setChunks((v.chunkCount as number) ?? 0);
@@ -44,7 +55,10 @@ function App() {
     });
     const onChange = (c: Record<string, chrome.storage.StorageChange>, area: string) => {
       if (area !== 'local') return;
-      if (c.captureState) setState((c.captureState.newValue as CaptureState) ?? 'idle');
+      if (c.captureState) {
+        setState((c.captureState.newValue as CaptureState) ?? 'idle');
+        if (c.captureState.newValue === 'idle') refreshSpend();
+      }
       if (c.chunkCount) setChunks((c.chunkCount.newValue as number) ?? 0);
       if (c.lastError?.newValue) setError(String(c.lastError.newValue));
       if (c.captureNotice) {
@@ -168,6 +182,15 @@ function App() {
             {chunks}
           </span>
         </div>
+        {spend !== null && spend.sessionCount > 0 && (
+          <div class="st-row" data-testid="month-spend" title="Estimated from provider list prices">
+            <span>Spend this month</span>
+            <span class="st-meta">
+              {formatUsd(spend.totalUsd)} est. · {spend.sessionCount}{' '}
+              {spend.sessionCount === 1 ? 'session' : 'sessions'}
+            </span>
+          </div>
+        )}
         {notice && <p class="st-banner st-banner--warn">{notice}</p>}
         {error && (
           <p data-testid="popup-error" class="st-banner st-banner--error">

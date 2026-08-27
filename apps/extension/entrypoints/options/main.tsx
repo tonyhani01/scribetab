@@ -26,6 +26,9 @@ import {
   validateHttpUrl,
 } from '@/utils/providerProbe';
 import { humanError } from '@/utils/userError';
+import { listSessions } from '@/utils/sessionStore';
+import { monthlySpend, type MonthlySpend } from '@/utils/costMeter';
+import { formatUsd } from '@scribetab/shared';
 import '@/assets/theme.css';
 
 const MODEL_PLACEHOLDERS: Record<string, string> = {
@@ -61,9 +64,13 @@ function App() {
   const [sttProbe, setSttProbe] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [llmProbe, setLlmProbe] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [probing, setProbing] = useState<'stt' | 'llm' | null>(null);
+  const [spend, setSpend] = useState<MonthlySpend | null>(null);
 
   useEffect(() => {
     void getSettings().then(setS);
+    void listSessions()
+      .then((rows) => setSpend(monthlySpend(rows)))
+      .catch(() => setSpend(null));
   }, []);
 
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) =>
@@ -438,6 +445,49 @@ scribetab-host config set notion.parentPageId PAGE_ID`}</pre>
           Windows <code>%APPDATA%\ScribeTab\config.json</code>.
           NotebookLM has no public API — use <strong>Export for NotebookLM</strong> in the Library.
         </p>
+      </section>
+
+      <section class="st-section" data-testid="usage-section">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <h2>Usage</h2>
+          <span class="st-hint">
+            {new Date().toLocaleString(undefined, { month: 'long', year: 'numeric' })}
+          </span>
+        </div>
+        {spend === null || spend.sessionCount === 0 ? (
+          <p class="st-hint" style={{ margin: '8px 0 0' }}>
+            No sessions yet this month. Costs are estimated from provider list prices as you record.
+          </p>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+              <div class="st-card" style={{ flexGrow: 1, background: 'var(--st-bg)' }}>
+                <div class="st-hint">Total spend</div>
+                <div style={{ fontSize: 18, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                  {formatUsd(spend.totalUsd)}
+                </div>
+              </div>
+              <div class="st-card" style={{ flexGrow: 1, background: 'var(--st-bg)' }}>
+                <div class="st-hint">Sessions</div>
+                <div style={{ fontSize: 18, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                  {spend.sessionCount}
+                </div>
+              </div>
+              <div class="st-card" style={{ flexGrow: 1, background: 'var(--st-bg)' }}>
+                <div class="st-hint">Avg / session</div>
+                <div style={{ fontSize: 18, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                  {spend.knownCount > 0 ? formatUsd(spend.totalUsd / spend.knownCount) : 'n/a'}
+                </div>
+              </div>
+            </div>
+            <p class="st-hint" style={{ margin: '10px 0 0' }}>
+              Estimated from provider list prices
+              {spend.knownCount < spend.sessionCount &&
+                ` · ${spend.sessionCount - spend.knownCount} session(s) without a known cost`}
+              .
+            </p>
+          </>
+        )}
       </section>
 
       <div style={{ marginTop: 16 }}>
