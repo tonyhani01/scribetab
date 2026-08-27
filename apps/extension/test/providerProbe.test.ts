@@ -40,9 +40,9 @@ describe('probe request URLs', () => {
     expect(req.headers.Authorization).toBe('Token dg');
   });
 
-  it('probes OpenRouter /models with Bearer auth on the pinned host', () => {
+  it('probes OpenRouter /key with Bearer auth on the pinned host', () => {
     const req = sttProbeRequest('openrouter', 'or-key', 'http://evil.example/v1');
-    expect(req.url).toBe('https://openrouter.ai/api/v1/models');
+    expect(req.url).toBe('https://openrouter.ai/api/v1/key');
     expect(req.headers.Authorization).toBe('Bearer or-key');
   });
 
@@ -81,6 +81,33 @@ describe('probeTranscription', () => {
     });
     expect(res.ok).toBe(false);
     expect(res.message).toMatch(/rejected/i);
+  });
+
+  it('classifies OpenRouter HTTP 401 as a bad key', async () => {
+    const fetchImpl = vi.fn(async () => new Response('nope', { status: 401 }));
+    const res = await probeTranscription({
+      providerId: 'openrouter',
+      apiKey: 'or-bad',
+      baseUrl: '',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(fetchImpl.mock.calls[0]![0]).toBe('https://openrouter.ai/api/v1/key');
+    expect(res.ok).toBe(false);
+    expect(res.message).toMatch(/rejected/i);
+  });
+
+  it('classifies OpenRouter fetch failure as a network error', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    const res = await probeTranscription({
+      providerId: 'openrouter',
+      apiKey: 'or-key',
+      baseUrl: '',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.message).toMatch(/could not reach/i);
   });
 
   it('succeeds on HTTP 200', async () => {
