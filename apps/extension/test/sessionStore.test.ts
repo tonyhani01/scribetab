@@ -140,4 +140,45 @@ describe('sessionStore', () => {
     expect((await getSession('stale'))?.status).toBe('failed');
     expect((await getSession('live'))?.status).toBe('recording');
   });
+
+  it('finalize deletes audio for failed sessions when retainAudio is false', async () => {
+    await createSession(session());
+    await putChunk({
+      sessionId: 's1',
+      index: 0,
+      sampleRate: 16000,
+      startOffsetSamples: 0,
+      wav: new ArrayBuffer(8),
+      createdAt: 1,
+    });
+    await finalizeSession('s1', { retainAudio: false, status: 'failed' });
+    expect((await getSession('s1'))?.status).toBe('failed');
+    expect(await sessionHasChunks('s1')).toBe(false);
+  });
+
+  it('crash sweep deletes audio when retainAudio is false', async () => {
+    await createSession(session({ id: 'stale' }));
+    await putChunk({
+      sessionId: 'stale',
+      index: 0,
+      sampleRate: 16000,
+      startOffsetSamples: 0,
+      wav: new ArrayBuffer(8),
+      createdAt: 1,
+    });
+    await failStaleRecordings(undefined, false);
+    expect((await getSession('stale'))?.status).toBe('failed');
+    expect(await sessionHasChunks('stale')).toBe(false);
+  });
+
+  it('concurrent finalizeSession only one writer proceeds', async () => {
+    await createSession(session());
+    const results = await Promise.all([
+      finalizeSession('s1', { retainAudio: true, status: 'complete' }),
+      finalizeSession('s1', { retainAudio: true, status: 'failed' }),
+    ]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    const got = await getSession('s1');
+    expect(got?.status === 'complete' || got?.status === 'failed').toBe(true);
+  });
 });
