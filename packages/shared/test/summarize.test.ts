@@ -231,6 +231,14 @@ describe('parseStructuredSummary', () => {
   it('falls back when JSON parses but is not an object', () => {
     expect(parseStructuredSummary('[1,2,3]', P).degraded).toBe(true);
   });
+  it('treats a content-free object as degraded', () => {
+    const s = parseStructuredSummary('{"foo":1}', P);
+    expect(s.degraded).toBe(true);
+    expect(s.narrative).toBe('');
+    expect(s.actionItems).toEqual([]);
+    expect(s.decisions).toEqual([]);
+    expect(s.usefulInfo).toEqual([]);
+  });
   it('extracts JSON when a stray brace follows the object', () => {
     const raw = '{"narrative":"A","actionItems":[]} Hope that helps :}';
     const s = parseStructuredSummary(raw, P);

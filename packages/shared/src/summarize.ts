@@ -192,13 +192,14 @@ export function parseStructuredSummary(
   const obj = extractJsonObject(raw);
   if (!obj) return degradedFallback(raw, common);
   const rec = obj as Record<string, unknown>;
-  return {
-    ...common,
-    narrative: typeof rec.narrative === 'string' ? rec.narrative.trim() : '',
-    actionItems: toActionItems(rec.actionItems, newId),
-    decisions: stringArray(rec.decisions),
-    usefulInfo: stringArray(rec.usefulInfo),
-  };
+  const narrative = typeof rec.narrative === 'string' ? rec.narrative.trim() : '';
+  const actionItems = toActionItems(rec.actionItems, newId);
+  const decisions = stringArray(rec.decisions);
+  const usefulInfo = stringArray(rec.usefulInfo);
+  if (!narrative && actionItems.length === 0 && decisions.length === 0 && usefulInfo.length === 0) {
+    return degradedFallback(raw, common);
+  }
+  return { ...common, narrative, actionItems, decisions, usefulInfo };
 }
 
 export function parseSummary(raw: string): string {
