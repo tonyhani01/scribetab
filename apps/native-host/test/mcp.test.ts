@@ -80,5 +80,16 @@ describe('MCP stdio server', () => {
     const body = textOf(got as { content: Array<{ type: string; text?: string }> });
     expect(body).toContain('hello from disk');
     expect(body).toContain('MCP Demo');
+
+    const noQuery = await client.callTool({ name: 'search_transcripts', arguments: {} });
+    expect((noQuery as { isError?: boolean }).isError).toBe(true);
+    expect(textOf(noQuery as { content: Array<{ type: string; text?: string }> })).toMatch(/query is required/);
+
+    const badFmt = await client.callTool({
+      name: 'export_transcript',
+      arguments: { id: 'mcp-session-1', format: 'docx' },
+    });
+    expect((badFmt as { isError?: boolean }).isError).toBe(true);
+    expect(textOf(badFmt as { content: Array<{ type: string; text?: string }> })).toMatch(/format must be md or json/);
   });
 });

@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -8,6 +8,7 @@ import {
   appendAudioChunk,
   beginSync,
   commitSync,
+  sweepOrphanTmpDirs,
 } from '../src/sessionWriter.js';
 import { withHome } from './helpers.js';
 
@@ -67,4 +68,53 @@ describe('sessionWriter atomic rename', () => {
       expect(existsSync(abandoned.tmpDir)).toBe(false);
     });
   });
+
+  it('overwrites the same sessionId dir instead of creating -2',
+    async () => {
+      await withHome(async (home) => {
+        const meetings = join(home, 'ScribeTab', 'meetings');
+        const first = await beginSync(meetings, session, segments);
+        const dest = await commitSync(first, meetings);
+        const updated = { ...session, title: 'Atomic Test Reloaded' };
+        const second = await beginSync(meetings, updated, segments);
+        const dest2 = await commitSync(second, meetings);
+        expect(dest2).toBe(dest);
+        const dirs = (await readdir(meetings)).filter((n) => !n.startsWith('.'));
+        expect(dirs).toEqual(['2026-08-27-atomic-test']);
+        const json = JSON.parse(await readFile(join(dest2, 'transcript.json'), 'utf8')) as {
+          session: MeetingSession;
+        };
+        expect(json.session.title).toBe('Atomic Test Reloaded');
+      });
+    },
+  );
+
+  it('sweeps orphaned .tmp-* dirs',
+    async () => {
+      await withHome(async (home) => {
+        const meetings = join(home, 'ScribeTab', 'meetings');
+        await mkdir(join(meetings, '.tmp-orphan'), { recursive: true });
+        await writeFile(join(meetings, '.tmp-orphan', 'x'), 'y');
+        await sweepOrphanTmpDirs(meetings);
+        expect(existsSync(join(meetings, '.tmp-orphan'))).toBe(false);
+      });
+    },
+  );
+
+  it('skips audio larger than 8 MiB and still writes the transcript',
+    async () => {
+      await withHome(async (home) => {
+        const meetings = join(home, 'ScribeTab', 'meetings');
+        const sync = await beginSync(meetings, session, segments, {
+          audio: { format: 'wav', sampleRate: 16000, totalChunks: 1 },
+        });
+        const huge = Buffer.alloc(8 * 1024 * 1024 + 1, 1);
+        await appendAudioChunk(sync, 0, huge.toString('base64'));
+        expect(sync.audioSkipped).toMatch(/exceeds 8 MiB/);
+        const dest = await commitSync(sync, meetings);
+        expect(existsSync(join(dest, 'transcript.md'))).toBe(true);
+        expect(existsSync(join(dest, 'audio.wav'))).toBe(false);
+      });
+    },
+  );
 });

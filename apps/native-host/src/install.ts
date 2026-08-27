@@ -1,8 +1,16 @@
-import { chmod, mkdir, unlink, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { chmod, cp, lstat, mkdir, readdir, unlink, writeFile } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { DEFAULT_EXTENSION_ID, HOST_NAME } from './constants.js';
-import { homeDir, scribetabRoot } from './paths.js';
+import { homeDir } from './paths.js';
+
+export const EXTENSION_ID_RE = /^[a-p]{32}$/;
+
+export function validateExtensionId(id: string): void {
+  if (!EXTENSION_ID_RE.test(id)) {
+    throw new Error(`Invalid extension id (expected 32 chars a-p): ${id.slice(0, 32)}`);
+  }
+}
 
 export interface InstallOptions {
   extensionId?: string;
@@ -22,18 +30,33 @@ export function chromeNativeMessagingDir(
     return join(home, 'Library', 'Application Support', 'Google', 'Chrome', 'NativeMessagingHosts');
   }
   if (platform === 'win32') {
-    return join(scribetabRoot(env), 'NativeMessagingHosts');
+    return join(stableHostDir(platform, env), 'NativeMessagingHosts');
   }
   return join(home, '.config', 'google-chrome', 'NativeMessagingHosts');
+}
+
+export function stableHostDir(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const home = homeDir(env);
+  if (platform === 'darwin') {
+    return join(home, 'Library', 'Application Support', 'ScribeTab', 'host');
+  }
+  if (platform === 'win32') {
+    const appData = env.APPDATA || join(home, 'AppData', 'Roaming');
+    return join(appData, 'ScribeTab', 'host');
+  }
+  const xdg = env.XDG_DATA_HOME || join(home, '.local', 'share');
+  return join(xdg, 'ScribeTab', 'host');
 }
 
 export function windowsRegistryKey(): string {
   return `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`;
 }
 
-function launcherPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
-  const bin = join(scribetabRoot(env), 'bin');
-  return platform === 'win32' ? join(bin, 'scribetab-host.cmd') : join(bin, 'scribetab-host');
+function launcherPath(platform: NodeJS.Platform, destRoot: string): string {
+  return platform === 'win32' ? join(destRoot, 'scribetab-host.cmd') : join(destRoot, 'scribetab-host');
 }
 
 function unixLauncher(nodePath: string, hostScript: string): string {
@@ -66,24 +89,64 @@ function defaultRegistryWriter(key: string, value: string): void {
   }
 }
 
+async function copyHostToStable(hostScript: string, destRoot: string): Promise<string> {
+  const destDist = join(destRoot, 'dist');
+  await mkdir(destDist, { recursive: true });
+  try {
+    await lstat(hostScript);
+  } catch {
+    return hostScript;
+  }
+  const distDir = dirname(hostScript);
+  try {
+    const entries = await readdir(distDir);
+    for (const name of entries) {
+      await cp(join(distDir, name), join(destDist, name), { recursive: true, dereference: true });
+    }
+  } catch {
+    await cp(hostScript, join(destDist, basename(hostScript))).catch(() => {});
+  }
+  const pkgRoot = join(distDir, '..');
+  try {
+    await lstat(join(pkgRoot, 'node_modules'));
+    await cp(join(pkgRoot, 'node_modules'), join(destRoot, 'node_modules'), {
+      recursive: true,
+      dereference: true,
+    });
+  } catch {
+    // npx package without a copyable node_modules — launcher still points at copied dist
+  }
+  try {
+    await cp(join(pkgRoot, 'package.json'), join(destRoot, 'package.json'));
+  } catch {
+    // optional
+  }
+  return join(destDist, basename(hostScript));
+}
+
 export async function installNativeHost(opts: InstallOptions = {}): Promise<{
   manifestPath: string;
   launcherPath: string;
   extensionId: string;
+  hostScript: string;
 }> {
   const platform = opts.platform ?? process.platform;
   const env = opts.env ?? process.env;
   const extensionId = opts.extensionId || DEFAULT_EXTENSION_ID;
+  validateExtensionId(extensionId);
   const hostScript = opts.hostScript;
   const nodePath = opts.nodePath ?? process.execPath;
   if (!hostScript) throw new Error('hostScript path is required');
 
-  const launch = launcherPath(env, platform);
-  await mkdir(dirname(launch), { recursive: true });
+  const destRoot = stableHostDir(platform, env);
+  await mkdir(destRoot, { recursive: true });
+  const copied = await copyHostToStable(hostScript, destRoot);
+
+  const launch = launcherPath(platform, destRoot);
   if (platform === 'win32') {
-    await writeFile(launch, winLauncher(nodePath, hostScript), 'utf8');
+    await writeFile(launch, winLauncher(nodePath, copied), 'utf8');
   } else {
-    await writeFile(launch, unixLauncher(nodePath, hostScript), 'utf8');
+    await writeFile(launch, unixLauncher(nodePath, copied), 'utf8');
     await chmod(launch, 0o755);
   }
 
@@ -98,7 +161,7 @@ export async function installNativeHost(opts: InstallOptions = {}): Promise<{
     write(windowsRegistryKey(), manifestPath);
   }
 
-  return { manifestPath, launcherPath: launch, extensionId };
+  return { manifestPath, launcherPath: launch, extensionId, hostScript: copied };
 }
 
 export async function uninstallNativeHost(opts: InstallOptions = {}): Promise<{
@@ -107,8 +170,9 @@ export async function uninstallNativeHost(opts: InstallOptions = {}): Promise<{
 }> {
   const platform = opts.platform ?? process.platform;
   const env = opts.env ?? process.env;
+  const destRoot = stableHostDir(platform, env);
   const manifestPath = join(chromeNativeMessagingDir(platform, env), `${HOST_NAME}.json`);
-  const launch = launcherPath(env, platform);
+  const launch = launcherPath(platform, destRoot);
   await unlink(manifestPath).catch(() => {});
   await unlink(launch).catch(() => {});
   if (platform === 'win32') {

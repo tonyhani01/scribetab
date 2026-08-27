@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -89,10 +88,10 @@ export function createMcpServer(env: NodeJS.ProcessEnv = process.env): Server {
           return textResult(JSON.stringify(all.map(listSummary), null, 2));
         }
         case 'get_transcript': {
-          const id = String(args.id ?? '');
+          const id = typeof args.id === 'string' ? args.id : '';
           if (!id) return textResult('id is required', true);
           const m = await getMeeting(root(), id);
-          if (!m) return textResult(`No meeting found for id=${id}`, true);
+          if (!m) return textResult('No meeting found for id', true);
           return textResult(meetingToText(m));
         }
         case 'get_latest_transcript': {
@@ -101,20 +100,23 @@ export function createMcpServer(env: NodeJS.ProcessEnv = process.env): Server {
           return textResult(meetingToText(m));
         }
         case 'search_transcripts': {
-          const query = String(args.query ?? '');
-          const hits = await searchMeetings(root(), query);
+          if (typeof args.query !== 'string' || !args.query.trim()) {
+            return textResult('query is required', true);
+          }
+          const hits = await searchMeetings(root(), args.query);
           return textResult(JSON.stringify(hits.map(listSummary), null, 2));
         }
         case 'export_transcript': {
-          const id = String(args.id ?? '');
-          const format = String(args.format ?? 'md');
+          const id = typeof args.id === 'string' ? args.id : '';
           if (!id) return textResult('id is required', true);
+          const format = args.format === undefined ? 'md' : args.format;
+          if (format !== 'md' && format !== 'json') {
+            return textResult('format must be md or json', true);
+          }
           const m = await getMeeting(root(), id);
-          if (!m) return textResult(`No meeting found for id=${id}`, true);
+          if (!m) return textResult('No meeting found for id', true);
           if (format === 'json') {
-            return textResult(
-              JSON.stringify({ session: m.session, segments: m.segments }, null, 2),
-            );
+            return textResult(JSON.stringify({ session: m.session, segments: m.segments }, null, 2));
           }
           return textResult(m.transcriptMd);
         }
@@ -139,8 +141,8 @@ Usage:
   scribetab-mcp --help
 `;
 
-async function main(): Promise<void> {
-  const cmd = process.argv[2];
+export async function runMcpCli(args: string[] = process.argv.slice(2)): Promise<void> {
+  const cmd = args[0];
   if (cmd === '--help' || cmd === '-h') {
     process.stdout.write(HELP);
     return;
@@ -148,12 +150,4 @@ async function main(): Promise<void> {
   const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-}
-
-const isEntry = process.argv[1] && /mcp\.(js|ts)$/.test(process.argv[1].replaceAll('\\', '/'));
-if (isEntry) {
-  main().catch((e) => {
-    process.stderr.write(`${e instanceof Error ? e.stack ?? e.message : String(e)}\n`);
-    process.exit(1);
-  });
 }

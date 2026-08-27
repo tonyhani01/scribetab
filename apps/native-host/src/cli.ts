@@ -1,8 +1,10 @@
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_EXTENSION_ID, HOST_NAME } from './constants.js';
-import { decodeNativeMessages } from './framing.js';
-import { installNativeHost, uninstallNativeHost } from './install.js';
+import { decodeNativeMessages, isEpipe } from './framing.js';
+import { installNativeHost, uninstallNativeHost, validateExtensionId } from './install.js';
+import { meetingsDir } from './paths.js';
 import { NativeSyncHost } from './protocol.js';
+import { sweepOrphanTmpDirs } from './sessionWriter.js';
 
 export const HELP = `scribetab-host — Chrome native messaging host for ScribeTab
 
@@ -13,12 +15,12 @@ Usage:
   scribetab-host uninstall
   scribetab-host --help
 
-Install writes the Chrome NativeMessagingHosts manifest for the current user:
+Install copies the host into a stable per-user directory (npx cache is evictable)
+and writes the Chrome NativeMessagingHosts manifest:
 
   macOS:  ~/Library/Application Support/Google/Chrome/NativeMessagingHosts/${HOST_NAME}.json
   Linux:  ~/.config/google-chrome/NativeMessagingHosts/${HOST_NAME}.json
-  Windows: %USERPROFILE%\\ScribeTab\\NativeMessagingHosts\\${HOST_NAME}.json
-           + HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}
+  Windows: %APPDATA%\\ScribeTab\\host\\ + HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}
 
 allowed_origins uses chrome-extension://${DEFAULT_EXTENSION_ID}/
 (the development ID from the packed key in the extension manifest).
@@ -27,17 +29,27 @@ Pass --extension-id to override (required once the Web Store ID is assigned).
 Meetings are written to ~/ScribeTab/meetings/<date>-<slug>/.
 `;
 
-function parseExtensionId(args: string[]): string | undefined {
+export function parseExtensionId(args: string[]): string | undefined {
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
-    if (a === '--extension-id') return args[i + 1];
-    if (a.startsWith('--extension-id=')) return a.slice('--extension-id='.length);
+    if (a === '--extension-id') {
+      const v = args[i + 1];
+      if (!v || v.startsWith('-')) {
+        throw new Error('--extension-id requires a value');
+      }
+      return v;
+    }
+    if (a.startsWith('--extension-id=')) {
+      const v = a.slice('--extension-id='.length);
+      if (!v) throw new Error('--extension-id requires a value');
+      return v;
+    }
   }
   return undefined;
 }
 
 export function hostScriptPath(): string {
-  return fileURLToPath(new URL('./host.js', import.meta.url));
+  return fileURLToPath(new URL('./host.bin.js', import.meta.url));
 }
 
 export async function runNativeLoop(
@@ -46,9 +58,18 @@ export async function runNativeLoop(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
   const host = new NativeSyncHost(stdout, env);
-  stdin.resume();
-  for await (const msg of decodeNativeMessages(stdin as AsyncIterable<Uint8Array>)) {
-    await host.handle(msg);
+  try {
+    await sweepOrphanTmpDirs(meetingsDir(env)).catch(() => {});
+    stdin.resume();
+    for await (const msg of decodeNativeMessages(stdin as AsyncIterable<Uint8Array>)) {
+      await host.handle(msg);
+    }
+  } catch (e) {
+    await host.shutdown();
+    if (isEpipe(e)) return;
+    throw e;
+  } finally {
+    await host.shutdown();
   }
 }
 
@@ -59,8 +80,10 @@ export async function runHostCli(args: string[]): Promise<void> {
     return;
   }
   if (cmd === 'install') {
+    const extensionId = parseExtensionId(args.slice(1)) ?? DEFAULT_EXTENSION_ID;
+    validateExtensionId(extensionId);
     const result = await installNativeHost({
-      extensionId: parseExtensionId(args.slice(1)),
+      extensionId,
       hostScript: hostScriptPath(),
       nodePath: process.execPath,
     });

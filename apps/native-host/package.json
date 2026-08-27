@@ -4,8 +4,8 @@
   "license": "GPL-3.0-only",
   "type": "module",
   "bin": {
-    "scribetab-host": "./dist/host.js",
-    "scribetab-mcp": "./dist/mcp.js"
+    "scribetab-host": "./dist/host.bin.js",
+    "scribetab-mcp": "./dist/mcp.bin.js"
   },
   "files": ["dist"],
   "engines": { "node": ">=20" },

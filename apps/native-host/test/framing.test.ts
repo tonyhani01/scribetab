@@ -16,4 +16,16 @@ describe('native messaging framing', () => {
     for await (const m of decodeNativeMessages(chunks())) out.push(m);
     expect(out).toEqual([msg]);
   });
+
+  it('throws on truncated framing at EOF', async () => {
+    const framed = encodeNativeMessage({ ok: true });
+    async function* trunc() {
+      yield framed.subarray(0, 2);
+    }
+    await expect(async () => {
+      for await (const _ of decodeNativeMessages(trunc())) {
+        // drain
+      }
+    }).rejects.toThrow(/truncated/);
+  });
 });

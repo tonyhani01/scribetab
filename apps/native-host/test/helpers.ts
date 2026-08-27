@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { encodeNativeMessage } from '../src/framing.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-export const HOST_JS = join(here, '..', 'dist', 'host.js');
-export const MCP_JS = join(here, '..', 'dist', 'mcp.js');
+export const HOST_JS = join(here, '..', 'dist', 'host.bin.js');
+export const MCP_JS = join(here, '..', 'dist', 'mcp.bin.js');
+export const HOST_LEGACY_JS = join(here, '..', 'dist', 'host.js');
 
 export async function tempHome(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'scribetab-home-'));

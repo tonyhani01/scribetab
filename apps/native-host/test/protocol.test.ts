@@ -95,4 +95,38 @@ describe('native messaging protocol (child process)', () => {
     await new Promise((r) => child!.once('exit', r));
     child = undefined;
   });
+
+  it('re-syncs the same sessionId into one directory', async () => {
+    home = await tempHome();
+    child = spawnHost(home);
+    const payload = {
+      type: 'sync_begin' as const,
+      protocolVersion: 1 as const,
+      session,
+      segments,
+    };
+    sendNative(child, payload);
+    sendNative(child, { type: 'sync_end', sessionId: session.id });
+    expect((await readNativeMessage(child) as HostSyncAck).ok).toBe(true);
+
+    sendNative(child, {
+      ...payload,
+      session: { ...session, title: 'Protocol Sync Again' },
+    });
+    sendNative(child, { type: 'sync_end', sessionId: session.id });
+    expect((await readNativeMessage(child) as HostSyncAck).ok).toBe(true);
+
+    const root = join(home, 'ScribeTab', 'meetings');
+    const { readdir } = await import('node:fs/promises');
+    const dirs = (await readdir(root)).filter((n) => !n.startsWith('.'));
+    expect(dirs).toEqual(['2026-08-27-protocol-sync']);
+    const json = JSON.parse(
+      await readFile(join(root, dirs[0]!, 'transcript.json'), 'utf8'),
+    ) as { session: MeetingSession };
+    expect(json.session.title).toBe('Protocol Sync Again');
+
+    child.stdin.end();
+    await new Promise((r) => child!.once('exit', r));
+    child = undefined;
+  });
 });

@@ -5,9 +5,12 @@ import {
   abortSync,
   appendAudioChunk,
   beginSync,
-  commitSync,
   type InFlightSync,
+  commitSync,
 } from './sessionWriter.js';
+
+const MAX_ACK_ERROR = 1000;
+const MAX_ACK_ID = 80;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null;
@@ -21,8 +24,13 @@ function sessionIdOf(msg: unknown): string {
   return 'unknown';
 }
 
+function cap(s: string, n: number): string {
+  return s.length <= n ? s : s.slice(0, n);
+}
+
 export class NativeSyncHost {
   private inflight: InFlightSync | null = null;
+  private silenced = false;
   private readonly env: NodeJS.ProcessEnv;
 
   constructor(
@@ -33,6 +41,7 @@ export class NativeSyncHost {
   }
 
   async handle(raw: unknown): Promise<void> {
+    if (this.silenced) return;
     try {
       await this.dispatch(raw as HostSyncMessage);
     } catch (e) {
@@ -41,15 +50,29 @@ export class NativeSyncHost {
     }
   }
 
+  async shutdown(): Promise<void> {
+    await abortSync(this.inflight);
+    this.inflight = null;
+  }
+
   private async fail(sessionId: string, error: string): Promise<void> {
     await abortSync(this.inflight);
     this.inflight = null;
-    const ack: HostSyncAck = { ok: false, sessionId, error };
+    this.silenced = true;
+    const ack: HostSyncAck = {
+      ok: false,
+      sessionId: cap(sessionId, MAX_ACK_ID),
+      error: cap(error, MAX_ACK_ERROR),
+    };
     await writeNativeMessage(this.stdout, ack);
   }
 
-  private async ok(sessionId: string): Promise<void> {
-    const ack: HostSyncAck = { ok: true, sessionId };
+  private async ok(sessionId: string, error?: string): Promise<void> {
+    const ack: HostSyncAck = {
+      ok: true,
+      sessionId: cap(sessionId, MAX_ACK_ID),
+      ...(error ? { error: cap(error, MAX_ACK_ERROR) } : {}),
+    };
     await writeNativeMessage(this.stdout, ack);
   }
 
@@ -77,7 +100,7 @@ export class NativeSyncHost {
       case 'sync_audio_chunk': {
         if (!this.inflight) throw new Error('sync_audio_chunk without sync_begin');
         if (msg.sessionId !== this.inflight.sessionId) {
-          throw new Error(`sessionId mismatch: ${msg.sessionId}`);
+          throw new Error('sessionId mismatch');
         }
         await appendAudioChunk(this.inflight, msg.index, msg.wavBase64);
         return;
@@ -85,12 +108,13 @@ export class NativeSyncHost {
       case 'sync_end': {
         if (!this.inflight) throw new Error('sync_end without sync_begin');
         if (msg.sessionId !== this.inflight.sessionId) {
-          throw new Error(`sessionId mismatch: ${msg.sessionId}`);
+          throw new Error('sessionId mismatch');
         }
         const sessionId = this.inflight.sessionId;
+        const skipped = this.inflight.audioSkipped;
         await commitSync(this.inflight, meetingsDir(this.env));
         this.inflight = null;
-        await this.ok(sessionId);
+        await this.ok(sessionId, skipped ? `audio skipped: ${skipped}` : undefined);
         return;
       }
       default:
