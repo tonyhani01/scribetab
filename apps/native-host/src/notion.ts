@@ -292,6 +292,8 @@ export async function appendActionItems(opts: {
   const platform = opts.platform ?? process.platform;
   const deadline = opts.deadline ?? Date.now() + NOTION_INTEGRATION_BUDGET_MS;
   const now = opts.now ?? (() => new Date().toISOString());
+  // Single host process serializes handle() calls; concurrent host processes
+  // may clobber records (accepted, matches notionPages.json).
   const map = await loadNotionActionMap(env, platform);
   const existing = map[opts.sessionId];
   const rec: NotionActionRecord =
