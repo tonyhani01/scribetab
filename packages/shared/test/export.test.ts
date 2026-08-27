@@ -100,6 +100,23 @@ describe('exportJson', () => {
     expect(parsed.session).toEqual(session);
     expect('summaryMarkdown' in parsed.session).toBe(false);
   });
+
+  it('includes structured summary when present', () => {
+    const summary = {
+      version: 1 as const,
+      narrative: 'Hi',
+      actionItems: [],
+      decisions: [],
+      usefulInfo: [],
+      generatedAt: '2026-08-28T00:00:00.000Z',
+    };
+    const parsed = JSON.parse(
+      exportJson(session, segments, { summaryMarkdown: '## Summary\n\nHi', summary }),
+    ) as { session: MeetingSession; summaryMarkdown: string; summary: typeof summary };
+    expect(parsed.summary).toEqual(summary);
+    expect(parsed.summaryMarkdown).toBe('## Summary\n\nHi');
+    expect(parsed.session).toEqual(session);
+  });
 });
 
 describe('exportSrt', () => {
