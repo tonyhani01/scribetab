@@ -1,4 +1,5 @@
 export interface ExportExtras {
   summaryMarkdown?: string;
-  costUsd?: number;
+  /** null = computed but unknown (n/a). */
+  costUsd?: number | null;
 }

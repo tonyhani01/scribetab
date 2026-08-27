@@ -67,7 +67,7 @@ describe('exportMarkdown', () => {
       summaryMarkdown: '## Summary\n\nShip it.\n\n## Action items\n\n- [ ] Recap',
       costUsd: 0.006,
     });
-    expect(md).toContain('- Estimated cost (USD): 0.006');
+    expect(md).toContain('- Estimated cost (USD): $0.0060');
     expect(md).toContain('## Summary');
     expect(md).toContain('Ship it.');
     expect(md.indexOf('## Summary')).toBeLessThan(md.indexOf('## Transcript'));
