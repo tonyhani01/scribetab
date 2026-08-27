@@ -7,7 +7,8 @@ the only network traffic is the API call to the transcription/LLM endpoint
 *you* configure (cloud key or localhost model). Transcripts are exposed to AI
 agents and notetaking apps via MCP.
 
-**Status: early development.** See `docs/superpowers/specs/` and
-`docs/superpowers/plans/` for the design and roadmap.
+**Status: early development.** Phases 1–3 (scaffold, capture engine, live
+transcription with BYOK providers + local models) are implemented. See
+`docs/superpowers/specs/` and `docs/superpowers/plans/` for the design and roadmap.
 
 License: GPL-3.0-only
