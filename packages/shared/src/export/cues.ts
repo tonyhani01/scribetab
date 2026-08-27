@@ -1,5 +1,5 @@
-import type { TranscriptSegment } from '../types';
-import { orderedSegments } from './order';
+import type { TranscriptSegment } from '../types.js';
+import { orderedSegments } from './order.js';
 
 /** Cue text must not contain a blank line (that terminates the cue). */
 export function sanitizeCueText(text: string): string {

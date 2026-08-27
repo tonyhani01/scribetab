@@ -1,4 +1,4 @@
-import type { TranscriptSegment } from '../types';
+import type { TranscriptSegment } from '../types.js';
 
 /** Copy and sort by session-relative start; does not mutate `segments`. */
 export function orderedSegments(segments: readonly TranscriptSegment[]): TranscriptSegment[] {
