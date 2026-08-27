@@ -84,6 +84,16 @@ export type ToSidePanel =
       type: 'SEGMENTS_UPDATED';
       sessionId: string;
       segments: TranscriptSegment[];
+    }
+  | {
+      target: 'sidepanel';
+      type: 'SUMMARY_DELTA';
+      sessionId: string;
+      /** crypto.randomUUID() per runFinalizeIntelligence invocation. */
+      runId: string;
+      phase: 'summary' | 'actions';
+      /** Accumulated text so far for this phase (not the increment). */
+      text: string;
     };
 
 export interface Ack {

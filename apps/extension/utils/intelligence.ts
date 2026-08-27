@@ -10,11 +10,16 @@ import {
   sttCostUsd,
   summarizeMeeting,
   type ChatMessage,
+  type LlmProvider,
+  type ProviderConfig,
 } from '@scribetab/shared';
+import type { ToSidePanel } from './messages';
 import { getSegments, putSegments } from './segmentStore';
 import { getSession, listSessions, updateSession } from './sessionStore';
 import { humanError } from './userError';
 import { getSettings, type Settings } from './settings';
+
+const SUMMARY_DELTA_MIN_MS = 150;
 
 export function llmConfigured(settings: Settings): boolean {
   if (settings.llmProviderId === '') return false;
@@ -44,7 +49,11 @@ export async function llmOriginGranted(settings: Settings): Promise<boolean> {
  */
 export async function markIntelligencePending(sessionId: string, settings: Settings): Promise<void> {
   if (!llmConfigured(settings)) return;
-  await updateSession(sessionId, { intelligence: 'pending' });
+  await updateSession(sessionId, {
+    intelligence: 'pending',
+    intelligenceError: null,
+    intelligenceStartedAt: Date.now(),
+  });
 }
 
 export async function scheduleFinalizeIntelligence(
@@ -64,6 +73,7 @@ export async function retryPendingIntelligence(): Promise<void> {
       await updateSession(s.id, { intelligence: null }).catch(() => {});
       continue;
     }
+    await updateSession(s.id, { intelligenceError: null, intelligenceStartedAt: Date.now() });
     await runFinalizeIntelligence(s.id, settings).catch(() => {});
   }
 }
@@ -108,8 +118,15 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
         baseUrl: settings.llmProviderId === 'custom' ? settings.llmBaseUrl.trim() || undefined : undefined,
         model: settings.llmModel.trim() || undefined,
       };
+      const runId = crypto.randomUUID();
+      const emitDelta = createDeltaEmitter(sessionId, runId);
+      let llmCalls = 0;
       const complete = async (messages: ChatMessage[]) => {
-        const out = await provider.complete(messages, cfg);
+        const phase: 'summary' | 'actions' = llmCalls === 0 ? 'summary' : 'actions';
+        llmCalls += 1;
+        const out = await completePreferringStream(provider, messages, cfg, (text) => {
+          emitDelta(phase, text);
+        });
         const prompt = messages.map((m) => m.content).join('\n');
         const added = llmCostUsd(
           settings.llmProviderId,
@@ -138,4 +155,71 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
     intelligenceError,
     ...(summaryMarkdown ? { summaryMarkdown } : {}),
   });
+}
+
+export function createDeltaEmitter(
+  sessionId: string,
+  runId: string,
+): (phase: 'summary' | 'actions', text: string) => void {
+  let lastAt = 0;
+  let lastPhase: 'summary' | 'actions' | null = null;
+  let trailing: ReturnType<typeof setTimeout> | undefined;
+  let queued: { phase: 'summary' | 'actions'; text: string } | undefined;
+
+  const send = (phase: 'summary' | 'actions', text: string) => {
+    lastAt = Date.now();
+    lastPhase = phase;
+    const msg: ToSidePanel = {
+      target: 'sidepanel',
+      type: 'SUMMARY_DELTA',
+      sessionId,
+      runId,
+      phase,
+      text,
+    };
+    try {
+      void chrome.runtime.sendMessage(msg).catch(() => {});
+    } catch {
+      // Side panel not open / tests without runtime.
+    }
+  };
+
+  return (phase, text) => {
+    const now = Date.now();
+    // Same-phase updates are throttled; a phase change always sends so the
+    // two-phase label cannot be dropped by a trailing-send-not-required policy.
+    if (phase !== lastPhase || now - lastAt >= SUMMARY_DELTA_MIN_MS) {
+      send(phase, text);
+      return;
+    }
+    queued = { phase, text };
+    if (trailing !== undefined) return;
+    trailing = setTimeout(() => {
+      trailing = undefined;
+      const next = queued;
+      queued = undefined;
+      if (next) send(next.phase, next.text);
+    }, SUMMARY_DELTA_MIN_MS - (now - lastAt));
+  };
+}
+
+async function completePreferringStream(
+  provider: LlmProvider,
+  messages: ChatMessage[],
+  cfg: ProviderConfig,
+  onAccumulated: (text: string) => void,
+): Promise<string> {
+  if (!provider.stream) return provider.complete(messages, cfg);
+  let yielded = false;
+  let acc = '';
+  try {
+    return await provider.stream(messages, cfg, (delta) => {
+      yielded = true;
+      acc += delta;
+      onAccumulated(acc);
+    });
+  } catch (e) {
+    if (yielded) throw e;
+    return provider.complete(messages, cfg);
+  }
 }

@@ -23,6 +23,7 @@ import {
 } from '@/utils/captionSession';
 import {
   llmConfigured,
+  markIntelligencePending,
   retryPendingIntelligence,
   runFinalizeIntelligence,
   scheduleFinalizeIntelligence,
@@ -660,7 +661,7 @@ export default defineBackground(() => {
             sendResponse({ ok: false, error: 'No LLM configured' });
             break;
           }
-          await updateSession(msg.sessionId, { intelligence: 'pending' });
+          await markIntelligencePending(msg.sessionId, settings);
           await runFinalizeIntelligence(msg.sessionId, settings);
           const row = await getSession(msg.sessionId);
           if (row?.intelligence === 'needs-permission') {

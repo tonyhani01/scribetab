@@ -13,6 +13,12 @@ import { getSession, listSessions, type StoredSession } from '@/utils/sessionSto
 import { getSettings } from '@/utils/settings';
 import { humanError } from '@/utils/userError';
 import { addPending, clearPending, resolveBelow, resolvePending, type PendingChunk } from '@/utils/pendingChunks';
+import {
+  EMPTY_SUMMARY_LIVE,
+  applySummaryDelta,
+  summaryLivePhase,
+  summaryLiveText,
+} from '@/utils/summaryLive';
 import '@/assets/theme.css';
 
 function fmt(ms: number): string {
@@ -327,6 +333,8 @@ function LibraryView() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [llmOrigin, setLlmOrigin] = useState<string | null>(null);
+  const [summaryLive, setSummaryLive] = useState(EMPTY_SUMMARY_LIVE);
+  const [, setTick] = useState(0);
   const openIdRef = useRef<string | null>(null);
   openIdRef.current = openId;
 
@@ -369,6 +377,11 @@ function LibraryView() {
     const onMessage = (raw: unknown) => {
       const msg = raw as ToSidePanel;
       if (msg?.target !== 'sidepanel') return;
+      if (msg.type === 'SUMMARY_DELTA') {
+        if (openIdRef.current !== msg.sessionId) return;
+        setSummaryLive((prev) => applySummaryDelta(prev, msg));
+        return;
+      }
       void reload();
       if (openIdRef.current !== msg.sessionId) return;
       if (msg.type === 'SEGMENTS_ADDED') {
@@ -399,12 +412,34 @@ function LibraryView() {
     openIdRef.current = id;
     setOpenId(id);
     setOpenSegments([]);
+    setSummaryLive(EMPTY_SUMMARY_LIVE);
     const segs = await getSegments(id);
     if (openIdRef.current === id) setOpenSegments(segs);
   };
 
   const hits = query.trim() && index ? index.search(query.trim()) : [];
   const open = sessions.find((s) => s.id === openId) ?? null;
+  const generating = Boolean(open && open.intelligence === 'pending' && !open.intelligenceError);
+
+  useEffect(() => {
+    if (!openId || !generating) return;
+    const t = window.setInterval(() => {
+      setTick((n) => n + 1);
+      const id = openIdRef.current;
+      if (!id) return;
+      void getSession(id).then((row) => {
+        if (!row || openIdRef.current !== id) return;
+        setSessions((prev) => {
+          const i = prev.findIndex((s) => s.id === id);
+          if (i < 0) return prev;
+          const next = prev.slice();
+          next[i] = row;
+          return next;
+        });
+      });
+    }, 1000);
+    return () => window.clearInterval(t);
+  }, [openId, generating]);
 
   const exportOne = async (format: ExportFormat) => {
     if (!open) return;
@@ -434,10 +469,29 @@ function LibraryView() {
     if (openIdRef.current === id) setOpenSegments(segs);
   };
 
+  const markOpenPending = () => {
+    if (!open) return;
+    const startedAt = Date.now();
+    setSummaryLive(EMPTY_SUMMARY_LIVE);
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.id === open.id
+          ? {
+              ...s,
+              intelligence: 'pending',
+              intelligenceError: null,
+              intelligenceStartedAt: startedAt,
+            }
+          : s,
+      ),
+    );
+  };
+
   const regenerateSummary = async () => {
     if (!open) return;
     setBusy(true);
     setActionError(null);
+    markOpenPending();
     try {
       const res = (await chrome.runtime.sendMessage({
         target: 'background',
@@ -467,6 +521,7 @@ function LibraryView() {
         setActionError('Permission was declined, so that provider cannot be reached.');
         return;
       }
+      markOpenPending();
       const res = (await chrome.runtime.sendMessage({
         target: 'background',
         type: 'REGENERATE_SUMMARY',
@@ -494,8 +549,18 @@ function LibraryView() {
             <> · {formatUsd(open.costUsd)} est.</>
           )}
         </p>
-        {open.intelligence === 'pending' && !open.intelligenceError && (
-          <p class="st-hint">Generating summary…</p>
+        {generating && (
+          <p class="st-hint st-gen">
+            <span class="st-gen-dot" />
+            <span>
+              {summaryLivePhase(summaryLive) === 'actions'
+                ? 'Extracting action items'
+                : 'Generating summary'}
+              {typeof open.intelligenceStartedAt === 'number'
+                ? ` · ${fmt(Math.max(0, Date.now() - open.intelligenceStartedAt))}`
+                : ''}
+            </span>
+          </p>
         )}
         {open.intelligence === 'pending' && open.intelligenceError && (
           <p data-testid="intelligence-error" class="st-banner st-banner--error">
@@ -510,20 +575,11 @@ function LibraryView() {
             to generate a summary for this meeting.
           </p>
         )}
-        {open.summaryMarkdown && (
-          <article
-            style={{
-              whiteSpace: 'pre-wrap',
-              background: 'var(--st-tint)',
-              borderRadius: 12,
-              padding: '12px 14px',
-              fontSize: 13,
-              lineHeight: 1.55,
-              marginBottom: 12,
-            }}
-          >
-            {open.summaryMarkdown}
-          </article>
+        {generating && summaryLiveText(summaryLive) && (
+          <article class="st-summary">{summaryLiveText(summaryLive)}</article>
+        )}
+        {!generating && open.summaryMarkdown && (
+          <article class="st-summary">{open.summaryMarkdown}</article>
         )}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
           {(['md', 'json', 'srt', 'vtt'] as const).map((f) => (

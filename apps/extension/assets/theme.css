@@ -427,12 +427,51 @@ input[type='checkbox'] {
   }
 }
 
+.st-summary {
+  white-space: pre-wrap;
+  background: var(--st-tint);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.55;
+  margin-bottom: 12px;
+}
+
+.st-gen {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.st-gen-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--st-accent);
+  flex-shrink: 0;
+  animation: st-gen-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes st-gen-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .st-shimmer {
     animation: none;
     background-image: none;
     background-color: var(--st-tint);
     border: 1px solid var(--st-border-strong);
+  }
+
+  .st-gen-dot {
+    animation: none;
   }
 }
 

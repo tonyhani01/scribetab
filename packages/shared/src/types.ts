@@ -49,6 +49,12 @@ export interface ChatMessage {
 export interface LlmProvider {
   readonly id: string;
   complete(messages: ChatMessage[], cfg: ProviderConfig): Promise<string>;
+  /** Incremental tokens via `onDelta`; resolves to the full assembled text. */
+  stream?(
+    messages: ChatMessage[],
+    cfg: ProviderConfig,
+    onDelta: (text: string) => void,
+  ): Promise<string>;
 }
 
 export type HostSyncMessage =

@@ -16,6 +16,8 @@ export type StoredSession = MeetingSession & {
   intelligence?: IntelligenceState | null;
   /** Why the last summary attempt failed (kept while intelligence stays pending). */
   intelligenceError?: string | null;
+  /** Wall-clock ms when intelligence flipped to pending (elapsed-time indicator). */
+  intelligenceStartedAt?: number;
   audioStartedAtMs?: number;
   captionsOnly?: boolean;
 };
