@@ -1,4 +1,5 @@
 import type { MeetingSession } from '@scribetab/shared';
+import { deleteCuesForSession } from './captionCueStore';
 import { deleteChunksForSession } from './chunkStore';
 import { SESSIONS_STORE as STORE, openDb } from './db';
 import { deleteSegmentsForSession } from './segmentStore';
@@ -11,6 +12,8 @@ export type StoredSession = MeetingSession & {
   /** null = computed but unknown (UI: n/a). */
   costUsd?: number | null;
   intelligence?: IntelligenceState | null;
+  audioStartedAtMs?: number;
+  captionsOnly?: boolean;
 };
 
 function txDone(tx: IDBTransaction): Promise<void> {
@@ -80,7 +83,7 @@ export async function finalizeSession(
   const flipped = await new Promise<boolean>((resolve, reject) => {
     const getReq = store.get(id);
     getReq.onsuccess = () => {
-      const current = getReq.result as MeetingSession | undefined;
+      const current = getReq.result as StoredSession | undefined;
       if (!current || current.status !== 'recording') {
         resolve(false);
         return;
@@ -103,6 +106,7 @@ export async function finalizeSession(
 export async function deleteSession(id: string): Promise<void> {
   await deleteChunksForSession(id);
   await deleteSegmentsForSession(id);
+  await deleteCuesForSession(id);
   const db = await openDb();
   const tx = db.transaction(STORE, 'readwrite');
   tx.objectStore(STORE).delete(id);

@@ -5,6 +5,7 @@ export * from './providers/index.js';
 export * from './originPattern.js';
 export * from './transcriptionQueue.js';
 export * from './export/index.js';
+export * from './fusion.js';
 export * from './llm/index.js';
 export * from './redact.js';
 export * from './costs.js';

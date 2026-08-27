@@ -171,6 +171,15 @@ function App() {
         Keep audio after a meeting ends (off = delete WAV chunks on finalize; transcript stays)
       </label>
 
+      <label style={{ ...row, fontWeight: 400 }}>
+        <input
+          type="checkbox"
+          checked={s.captionsOnly}
+          onChange={(e) => set('captionsOnly', (e.currentTarget as HTMLInputElement).checked)}
+        />{' '}
+        Captions-only (Google Meet): build the transcript from live captions — no transcription API calls
+      </label>
+
       <h2 style={{ fontSize: 16, marginTop: 28 }}>Summaries (LLM)</h2>
       <p style={{ color: '#555', fontSize: 13 }}>
         On finalize, a configured chat model writes a summary and action-item checklist.
