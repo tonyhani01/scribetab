@@ -1,0 +1,495 @@
+/* ScribeTab design tokens & components — see design canvas "ScribeTab UI" */
+:root {
+  --st-bg: #fafafc;
+  --st-surface: #ffffff;
+  --st-border: #eceaf4;
+  --st-border-strong: #ddd9ec;
+  --st-ink: #1c2547;
+  --st-muted: #6b7089;
+  --st-faint: #9ca0b8;
+  --st-accent: #8b7cf6;
+  --st-accent-deep: #6d5ae6;
+  --st-tint: #efeafb;
+  --st-track: #f1eff8;
+  --st-danger: #e5484d;
+  --st-danger-bg: #fdecec;
+  --st-danger-border: #f6c6c8;
+  --st-success: #2f9e68;
+  --st-warn: #8a6d00;
+  --st-warn-bg: #fff8e1;
+  --st-on-accent: #ffffff;
+  --st-shadow: 0 1px 2px rgba(28, 37, 71, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --st-bg: #131a30;
+    --st-surface: #1b2340;
+    --st-border: #262e52;
+    --st-border-strong: #323b63;
+    --st-ink: #ecedf7;
+    --st-muted: #9aa1c0;
+    --st-faint: #616a8e;
+    --st-accent: #a79bf5;
+    --st-accent-deep: #c3baf8;
+    --st-tint: #262e52;
+    --st-track: #131a30;
+    --st-danger: #e5484d;
+    --st-danger-bg: #3a1f2c;
+    --st-danger-border: #5c2a34;
+    --st-success: #4cc38a;
+    --st-warn: #d8b64a;
+    --st-warn-bg: #33301c;
+    --st-on-accent: #131a30;
+    --st-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--st-bg);
+  color: var(--st-ink);
+  font-family: -apple-system, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+}
+
+a {
+  color: var(--st-accent-deep);
+}
+
+code,
+pre {
+  font-size: 12px;
+}
+
+input[type='checkbox'] {
+  accent-color: var(--st-accent);
+}
+
+/* Brand */
+.st-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.st-brand img {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+}
+
+.st-wordmark {
+  font-family: 'Nunito', ui-rounded, 'Avenir Next', system-ui, sans-serif;
+  font-weight: 800;
+  font-size: 17px;
+  letter-spacing: -0.2px;
+  color: var(--st-ink);
+}
+
+.st-wordmark b {
+  color: var(--st-accent);
+  font-weight: 800;
+}
+
+/* Layout */
+.st-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--st-surface);
+  border-bottom: 1px solid var(--st-border);
+}
+
+.st-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--st-surface);
+  border-top: 1px solid var(--st-border);
+}
+
+.st-body {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Cards & rows */
+.st-card {
+  background: var(--st-surface);
+  border: 1px solid var(--st-border);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.st-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--st-surface);
+  border: 1px solid var(--st-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.st-row .st-meta {
+  font-size: 12px;
+  color: var(--st-muted);
+}
+
+/* Buttons */
+.st-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  background: var(--st-accent);
+  color: var(--st-on-accent);
+}
+
+.st-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.st-btn--navy {
+  background: var(--st-ink);
+  color: var(--st-bg);
+}
+
+.st-btn--danger {
+  background: var(--st-danger);
+  color: #ffffff;
+}
+
+.st-btn--quiet {
+  background: var(--st-surface);
+  border-color: var(--st-border-strong);
+  color: var(--st-ink);
+  font-weight: 500;
+}
+
+.st-btn--block {
+  display: flex;
+  width: 100%;
+}
+
+.st-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--st-border-strong);
+  background: var(--st-surface);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--st-ink);
+  cursor: pointer;
+}
+
+.st-chip:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* Record hero (popup) */
+.st-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 22px 16px 16px;
+}
+
+.st-record {
+  width: 112px;
+  height: 112px;
+  border-radius: 999px;
+  border: 14px solid var(--st-tint);
+  background: var(--st-accent);
+  color: var(--st-on-accent);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(139, 124, 246, 0.35);
+}
+
+.st-record--recording {
+  background: var(--st-danger);
+  border-color: var(--st-danger-bg);
+  box-shadow: 0 6px 18px rgba(229, 72, 77, 0.35);
+  animation: st-pulse 2s infinite;
+}
+
+.st-record:disabled {
+  opacity: 0.55;
+  cursor: default;
+  animation: none;
+}
+
+@keyframes st-pulse {
+  0% {
+    outline: 0 solid rgba(229, 72, 77, 0.35);
+  }
+  70% {
+    outline: 12px solid rgba(229, 72, 77, 0);
+  }
+  100% {
+    outline: 0 solid rgba(229, 72, 77, 0);
+  }
+}
+
+.st-hero .st-status {
+  font-size: 13px;
+  color: var(--st-muted);
+  text-align: center;
+}
+
+/* Segmented control */
+.st-seg {
+  display: flex;
+  gap: 4px;
+  background: var(--st-track);
+  border-radius: 9px;
+  padding: 3px;
+}
+
+.st-seg button {
+  flex: 1;
+  padding: 6px 0;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--st-muted);
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.st-seg button[aria-selected='true'] {
+  background: var(--st-surface);
+  box-shadow: var(--st-shadow);
+  font-weight: 600;
+  color: var(--st-ink);
+}
+
+/* Recording pill */
+.st-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--st-border);
+  color: var(--st-muted);
+  background: var(--st-surface);
+}
+
+.st-pill--rec {
+  background: var(--st-danger-bg);
+  border-color: var(--st-danger-border);
+  color: var(--st-danger);
+}
+
+.st-pill .st-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+/* Banners */
+.st-banner {
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.st-banner--warn {
+  background: var(--st-warn-bg);
+  color: var(--st-warn);
+}
+
+.st-banner--error {
+  background: var(--st-danger-bg);
+  color: var(--st-danger);
+}
+
+.st-banner--success {
+  color: var(--st-success);
+  padding: 4px 0;
+}
+
+/* Transcript */
+.st-segments {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.st-segments li {
+  display: flex;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 9px;
+}
+
+.st-segments .st-time {
+  font-size: 11px;
+  color: var(--st-faint);
+  font-variant-numeric: tabular-nums;
+  padding-top: 2px;
+  flex-shrink: 0;
+}
+
+.st-segments .st-text {
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.st-empty {
+  color: var(--st-faint);
+  font-size: 13px;
+}
+
+/* Library */
+.st-session {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  background: var(--st-surface);
+  border: 1px solid var(--st-border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: var(--st-ink);
+}
+
+.st-session .st-title {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.st-session .st-meta {
+  font-size: 12px;
+  color: var(--st-muted);
+}
+
+/* Forms (options) */
+.st-field {
+  display: block;
+  margin: 12px 0 4px;
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--st-muted);
+}
+
+.st-input,
+.st-select,
+.st-textarea {
+  width: 100%;
+  max-width: 420px;
+  padding: 8px 12px;
+  border: 1px solid var(--st-border-strong);
+  border-radius: 10px;
+  background: var(--st-surface);
+  color: var(--st-ink);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.st-input:focus,
+.st-select:focus,
+.st-textarea:focus {
+  outline: 2px solid var(--st-accent);
+  outline-offset: -1px;
+}
+
+.st-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 10px 0;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.st-check input {
+  margin-top: 2px;
+}
+
+.st-hint {
+  color: var(--st-muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.st-error-text {
+  color: var(--st-danger);
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
+.st-ok-text {
+  color: var(--st-success);
+  font-size: 12.5px;
+}
+
+.st-section {
+  background: var(--st-surface);
+  border: 1px solid var(--st-border);
+  border-radius: 14px;
+  padding: 18px 20px;
+  margin-top: 16px;
+}
+
+.st-section h2 {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+
+.st-section pre {
+  background: var(--st-bg);
+  border: 1px solid var(--st-border);
+  border-radius: 10px;
+  padding: 10px;
+  overflow: auto;
+}

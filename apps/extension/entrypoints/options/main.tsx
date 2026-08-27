@@ -26,6 +26,7 @@ import {
   validateHttpUrl,
 } from '@/utils/providerProbe';
 import { humanError } from '@/utils/userError';
+import '@/assets/theme.css';
 
 const MODEL_PLACEHOLDERS: Record<string, string> = {
   openai: 'whisper-1',
@@ -48,11 +49,11 @@ const LLM_MODEL_PLACEHOLDERS: Record<string, string> = {
   custom: 'llama3.2',
 };
 
-const row = { display: 'block', margin: '12px 0 4px', fontWeight: 600 } as const;
-const input = { width: '100%', maxWidth: 420, padding: 6 } as const;
-const hint = { color: '#555', fontSize: 13 } as const;
-const err = { color: 'crimson', fontSize: 12, margin: '4px 0 0' } as const;
-const section = { marginTop: 28, paddingTop: 8, borderTop: '1px solid #eee' } as const;
+const row = { display: 'block', margin: '12px 0 4px', fontWeight: 600, fontSize: 12.5, color: 'var(--st-muted)' } as const;
+const input = {} as const;
+const hint = { color: 'var(--st-muted)', fontSize: 12.5, lineHeight: 1.45 } as const;
+const err = { color: 'var(--st-danger)', fontSize: 12, margin: '4px 0 0' } as const;
+const section = {} as const;
 
 function App() {
   const [s, setS] = useState<Settings>(DEFAULT_SETTINGS);
@@ -172,15 +173,20 @@ function App() {
   };
 
   return (
-    <main data-testid="options-root" style={{ maxWidth: 560, margin: '24px auto', padding: 16, fontFamily: 'system-ui' }}>
-      <h1 style={{ fontSize: 20 }}>ScribeTab settings</h1>
+    <main data-testid="options-root" style={{ maxWidth: 600, margin: '24px auto', padding: 16 }}>
+      <div class="st-brand" style={{ marginBottom: 4 }}>
+        <img src="/icon-128.png" alt="" style={{ width: 34, height: 34 }} />
+        <h1 class="st-wordmark" aria-label="ScribeTab settings" style={{ margin: 0, fontSize: 20 }}>
+          scribe<b>Tab</b> <span style={{ color: 'var(--st-muted)', fontWeight: 600, fontSize: 16 }}>settings</span>
+        </h1>
+      </div>
       <p style={hint}>
         Bring your own key. Keys are stored only in this browser profile
         (<code>chrome.storage.local</code>) and are sent only to the endpoint you configure.
       </p>
 
-      <section style={{ marginTop: 20 }}>
-        <h2 style={{ fontSize: 16, margin: 0 }}>Capture</h2>
+      <section class="st-section">
+        <h2>Capture</h2>
         <label style={{ ...row, fontWeight: 400 }}>
           <input
             type="checkbox"
@@ -219,12 +225,12 @@ function App() {
         </label>
       </section>
 
-      <section style={section}>
-        <h2 style={{ fontSize: 16, margin: 0 }}>Transcription</h2>
+      <section class="st-section">
+        <h2>Transcription</h2>
         <label style={row} for="provider">Provider</label>
         <select
           id="provider"
-          style={input}
+          class="st-select"
           value={s.providerId}
           onChange={(e) => {
             const v = (e.currentTarget as HTMLSelectElement).value;
@@ -244,7 +250,7 @@ function App() {
                 <label style={row} for="baseUrl">Base URL</label>
                 <input
                   id="baseUrl"
-                  style={input}
+                  class="st-input"
                   placeholder="http://localhost:8080/v1"
                   value={s.baseUrl}
                   onInput={(e) => set('baseUrl', (e.currentTarget as HTMLInputElement).value)}
@@ -258,7 +264,7 @@ function App() {
               id="apiKey"
               type="password"
               autocomplete="off"
-              style={input}
+              class="st-input"
               value={s.apiKey}
               onInput={(e) => setS((prev) => withSttField(prev, 'apiKey', (e.currentTarget as HTMLInputElement).value))}
             />
@@ -267,7 +273,7 @@ function App() {
             <label style={row} for="model">Model (blank = default)</label>
             <input
               id="model"
-              style={input}
+              class="st-input"
               placeholder={MODEL_PLACEHOLDERS[s.providerId] ?? ''}
               value={s.model}
               onInput={(e) => setS((prev) => withSttField(prev, 'model', (e.currentTarget as HTMLInputElement).value))}
@@ -276,18 +282,18 @@ function App() {
             <label style={row} for="language">{languageLabel}</label>
             <input
               id="language"
-              style={input}
+              class="st-input"
               placeholder={s.providerId === 'google' ? 'en-US' : 'en'}
               value={s.language}
               onInput={(e) => set('language', (e.currentTarget as HTMLInputElement).value)}
             />
 
             <div style={{ marginTop: 8 }}>
-              <button type="button" disabled={probing !== null} onClick={() => void testStt()}>
+              <button type="button" class="st-btn st-btn--quiet" disabled={probing !== null} onClick={() => void testStt()}>
                 {probing === 'stt' ? 'Testing…' : 'Test STT connection'}
               </button>
               {sttProbe && (
-                <p style={{ color: sttProbe.kind === 'ok' ? 'green' : 'crimson', fontSize: 13 }}>
+                <p style={{ color: sttProbe.kind === 'ok' ? 'var(--st-success)' : 'var(--st-danger)', fontSize: 13 }}>
                   {sttProbe.text}
                 </p>
               )}
@@ -296,8 +302,8 @@ function App() {
         )}
       </section>
 
-      <section style={section}>
-        <h2 style={{ fontSize: 16, margin: 0 }}>Intelligence</h2>
+      <section class="st-section">
+        <h2>Intelligence</h2>
         <p style={hint}>
           On finalize, a configured chat model writes a summary and action-item checklist.
           Ollama / LM Studio work via the custom OpenAI-compatible base URL.
@@ -306,7 +312,7 @@ function App() {
         <label style={row} for="llmProvider">LLM provider</label>
         <select
           id="llmProvider"
-          style={input}
+          class="st-select"
           value={s.llmProviderId}
           onChange={(e) => {
             const v = (e.currentTarget as HTMLSelectElement).value;
@@ -326,7 +332,7 @@ function App() {
                 <label style={row} for="llmBaseUrl">LLM base URL</label>
                 <input
                   id="llmBaseUrl"
-                  style={input}
+                  class="st-input"
                   placeholder="http://localhost:11434/v1"
                   value={s.llmBaseUrl}
                   onInput={(e) => set('llmBaseUrl', (e.currentTarget as HTMLInputElement).value)}
@@ -342,7 +348,7 @@ function App() {
               id="llmApiKey"
               type="password"
               autocomplete="off"
-              style={input}
+              class="st-input"
               value={s.llmApiKey}
               onInput={(e) =>
                 setS((prev) => withLlmField(prev, 'llmApiKey', (e.currentTarget as HTMLInputElement).value))
@@ -353,7 +359,7 @@ function App() {
             <label style={row} for="llmModel">LLM model (blank = default)</label>
             <input
               id="llmModel"
-              style={input}
+              class="st-input"
               placeholder={LLM_MODEL_PLACEHOLDERS[s.llmProviderId] ?? ''}
               value={s.llmModel}
               onInput={(e) =>
@@ -362,11 +368,11 @@ function App() {
             />
 
             <div style={{ marginTop: 8 }}>
-              <button type="button" disabled={probing !== null} onClick={() => void testLlm()}>
+              <button type="button" class="st-btn st-btn--quiet" disabled={probing !== null} onClick={() => void testLlm()}>
                 {probing === 'llm' ? 'Testing…' : 'Test LLM connection'}
               </button>
               {llmProbe && (
-                <p style={{ color: llmProbe.kind === 'ok' ? 'green' : 'crimson', fontSize: 13 }}>
+                <p style={{ color: llmProbe.kind === 'ok' ? 'var(--st-success)' : 'var(--st-danger)', fontSize: 13 }}>
                   {llmProbe.text}
                 </p>
               )}
@@ -375,8 +381,8 @@ function App() {
         )}
       </section>
 
-      <section style={section}>
-        <h2 style={{ fontSize: 16, margin: 0 }}>Redaction</h2>
+      <section class="st-section">
+        <h2>Redaction</h2>
         <p style={hint}>
           Text-only. Emails, phone numbers, Luhn-checked cards, SSNs, and custom terms
           are stripped before LLM calls, and before storage when enabled below.
@@ -393,7 +399,8 @@ function App() {
         <label style={row} for="redactTerms">Custom terms (one per line)</label>
         <textarea
           id="redactTerms"
-          style={{ ...input, minHeight: 80, fontFamily: 'inherit' }}
+          class="st-textarea"
+          style={{ minHeight: 80 }}
           value={s.redactTerms.join('\n')}
           onInput={(e) =>
             set(
@@ -404,8 +411,8 @@ function App() {
         />
       </section>
 
-      <section style={section}>
-        <h2 style={{ fontSize: 16, margin: 0 }}>Sync / Integrations</h2>
+      <section class="st-section">
+        <h2>Sync / Integrations</h2>
         <label style={{ ...row, fontWeight: 400 }}>
           <input
             type="checkbox"
@@ -419,7 +426,7 @@ function App() {
           Configure with <code>scribetab-host config set</code> — the Notion token is stored only in
           the host config file and is sent only to <code>api.notion.com</code>.
         </p>
-        <pre style={{ fontSize: 12, background: '#f6f6f6', padding: 8, overflow: 'auto' }}>{`scribetab-host config set obsidianEnabled true
+        <pre>{`scribetab-host config set obsidianEnabled true
 scribetab-host config set obsidianVaultPath /path/to/vault
 scribetab-host config set notionEnabled true
 scribetab-host config set notion.token -
@@ -434,10 +441,10 @@ scribetab-host config set notion.parentPageId PAGE_ID`}</pre>
       </section>
 
       <div style={{ marginTop: 16 }}>
-        <button data-testid="save-settings" onClick={() => void save()}>Save</button>
+        <button class="st-btn" data-testid="save-settings" onClick={() => void save()}>Save changes</button>
       </div>
       {status && (
-        <p data-testid="save-status" style={{ color: status.kind === 'ok' ? 'green' : 'crimson', fontSize: 13 }}>
+        <p data-testid="save-status" style={{ color: status.kind === 'ok' ? 'var(--st-success)' : 'var(--st-danger)', fontSize: 13 }}>
           {status.text}
         </p>
       )}

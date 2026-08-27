@@ -5,6 +5,25 @@ import type { Ack, CaptureState } from '@/utils/messages';
 import { assembleRecording } from '@/utils/assemble';
 import { isCapturableUrl } from '@/utils/platform';
 import { humanError } from '@/utils/userError';
+import '@/assets/theme.css';
+
+function MicIcon() {
+  return (
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+      <line x1="12" y1="19" x2="12" y2="22" />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+      <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+  );
+}
 
 function App() {
   const [state, setState] = useState<CaptureState>('idle');
@@ -75,47 +94,106 @@ function App() {
 
   const busy = state === 'starting' || state === 'stopping';
   const recording = state === 'recording' || state === 'starting' || state === 'stopping';
+  const stopping = state === 'recording' || state === 'stopping';
   return (
-    <main data-testid="popup-root" style={{ minWidth: 260, padding: 12, fontFamily: 'system-ui' }}>
-      <h1 style={{ fontSize: 16, margin: '0 0 8px' }}>ScribeTab</h1>
-      {!capturable && !recording ? (
-        <p data-testid="not-capturable" style={{ fontSize: 13, color: '#555' }}>
-          This page cannot be recorded. Open a meeting tab (Meet, Teams, Zoom, YouTube) or any
-          http(s) page, then try again.
-        </p>
-      ) : state === 'recording' || state === 'stopping' ? (
-        <button disabled={busy} onClick={() => send('STOP_CAPTURE')}>
-          ■ Stop recording
+    <main data-testid="popup-root" style={{ width: 340, display: 'flex', flexDirection: 'column' }}>
+      <header class="st-header">
+        <div class="st-brand">
+          <img src="/icon-128.png" alt="" />
+          <h1 class="st-wordmark" aria-label="ScribeTab" style={{ margin: 0 }}>
+            scribe<b>Tab</b>
+          </h1>
+        </div>
+        <div style={{ flexGrow: 1 }} />
+        <button
+          type="button"
+          class="st-chip"
+          aria-label="Settings"
+          onClick={() => void chrome.runtime.openOptionsPage()}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.01a1.7 1.7 0 0 0 1.03-1.55V3.5a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.01a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1.05Z" />
+          </svg>
         </button>
-      ) : (
-        <button disabled={busy} onClick={() => send('START_CAPTURE')}>
-          ● Start recording this tab
+      </header>
+
+      <div class="st-hero">
+        {stopping ? (
+          <button
+            type="button"
+            class="st-record st-record--recording"
+            disabled={busy}
+            onClick={() => send('STOP_CAPTURE')}
+          >
+            <StopIcon />
+            Stop
+          </button>
+        ) : (
+          <button
+            type="button"
+            class="st-record"
+            disabled={busy || (!capturable && !recording)}
+            onClick={() => send('START_CAPTURE')}
+          >
+            <MicIcon />
+            Record
+          </button>
+        )}
+        <span class="st-status">
+          {stopping
+            ? 'Recording this tab'
+            : state === 'starting'
+              ? 'Starting…'
+              : capturable
+                ? 'Ready to record this tab'
+                : ''}
+        </span>
+      </div>
+
+      {!capturable && !recording && (
+        <div class="st-body" style={{ paddingTop: 0 }}>
+          <p data-testid="not-capturable" class="st-banner st-banner--warn">
+            This page cannot be recorded. Open a meeting tab (Meet, Teams, Zoom, YouTube) or any
+            http(s) page, then try again.
+          </p>
+        </div>
+      )}
+
+      <div class="st-body" style={{ paddingTop: 0 }}>
+        <ConsentBanner recording={recording} />
+        <div class="st-row">
+          <span>Saved chunks</span>
+          <span data-testid="chunk-count" class="st-meta">
+            {chunks}
+          </span>
+        </div>
+        {notice && <p class="st-banner st-banner--warn">{notice}</p>}
+        {error && (
+          <p data-testid="popup-error" class="st-banner st-banner--error">
+            {error}
+          </p>
+        )}
+      </div>
+
+      <footer class="st-footer">
+        <button
+          type="button"
+          class="st-btn st-btn--navy st-btn--block"
+          data-testid="open-side-panel"
+          onClick={() => {
+            chrome.windows.getCurrent((w) => {
+              if (w.id != null) void chrome.sidePanel.open({ windowId: w.id });
+              window.close();
+            });
+          }}
+        >
+          Open transcript panel
         </button>
-      )}
-      <ConsentBanner recording={recording} />
-      <p data-testid="chunk-count" style={{ fontSize: 12, color: '#555' }}>
-        Saved chunks: {chunks}
-      </p>
-      <button onClick={download} disabled={state !== 'idle'}>
-        Download last recording (.wav)
-      </button>
-      <button
-        data-testid="open-side-panel"
-        onClick={() => {
-          chrome.windows.getCurrent((w) => {
-            if (w.id != null) void chrome.sidePanel.open({ windowId: w.id });
-            window.close();
-          });
-        }}
-      >
-        Open transcript panel
-      </button>
-      {notice && <p style={{ color: '#8a6d00', fontSize: 12 }}>{notice}</p>}
-      {error && (
-        <p data-testid="popup-error" style={{ color: 'crimson', fontSize: 12 }}>
-          {error}
-        </p>
-      )}
+        <button type="button" class="st-btn st-btn--quiet st-btn--block" onClick={download} disabled={state !== 'idle'}>
+          Download recording (.wav)
+        </button>
+      </footer>
     </main>
   );
 }
