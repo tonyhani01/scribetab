@@ -6,6 +6,9 @@ export interface ChunkerOptions {
   minSilenceMs: number;
 }
 
+export const CHUNK_TARGET_SECONDS = 12;
+export const CHUNK_MAX_SECONDS = 20;
+
 /**
  * Accumulates PCM frames and emits chunks cut on sustained silence after
  * targetSeconds, with a hard cut at maxSeconds so a chunk can never grow

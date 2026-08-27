@@ -10,7 +10,11 @@ export interface TranscriptionJob {
 export interface TranscriptionQueueOptions {
   sessionId: string;
   transcribe: (req: TranscribeRequest) => Promise<TranscribeResult>;
-  onSegments: (segments: TranscriptSegment[]) => void | Promise<void>;
+  /** Fired once when a job actually begins processing, before the first attempt. */
+  onJobStart?: (job: TranscriptionJob) => void | Promise<void>;
+  onSegments: (segments: TranscriptSegment[], job: TranscriptionJob) => void | Promise<void>;
+  /** Fired after a job finishes processing, including silent/empty results. Not called when cancelled. */
+  onJobDone?: (job: TranscriptionJob) => void | Promise<void>;
   /** Most recent provider error, already bounded. */
   onError?: (message: string) => void | Promise<void>;
   /** Provider-computed chunk cost when present (e.g. OpenRouter usage.cost). */
@@ -85,6 +89,13 @@ export class TranscriptionQueue {
     const sleep = this.opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     const makeId = this.opts.makeId ?? (() => crypto.randomUUID());
 
+    try {
+      await this.opts.onJobStart?.(job);
+    } catch {
+      // start notifications must not change retry behavior
+    }
+    if (this.cancelled) return;
+
     let result: TranscribeResult | null = null;
     for (let attempt = 0; ; attempt++) {
       try {
@@ -126,6 +137,14 @@ export class TranscriptionQueue {
           text: FAILED_SEGMENT_TEXT,
           source: 'audio' as const,
         }];
-    if (segments.length > 0) await this.opts.onSegments(segments);
+    try {
+      if (segments.length > 0) await this.opts.onSegments(segments, job);
+    } finally {
+      try {
+        await this.opts.onJobDone?.(job);
+      } catch {
+        // done notifications must not change retry behavior
+      }
+    }
   }
 }

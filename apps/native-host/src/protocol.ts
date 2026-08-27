@@ -34,6 +34,26 @@ function cap(s: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n);
 }
 
+function chunkPayload(
+  msg: Extract<HostSyncMessage, { type: 'sync_audio_chunk' }>,
+  format: string | undefined,
+): string {
+  const hasWav = typeof msg.wavBase64 === 'string';
+  const hasData = typeof msg.dataBase64 === 'string';
+  if (hasWav === hasData) {
+    throw new Error('sync_audio_chunk requires exactly one of wavBase64 or dataBase64');
+  }
+  if (format === 'ogg-opus') {
+    if (!hasData) throw new Error('ogg-opus sync requires dataBase64');
+    return msg.dataBase64!;
+  }
+  if (format === 'wav') {
+    if (!hasWav) throw new Error('wav sync requires wavBase64');
+    return msg.wavBase64!;
+  }
+  return hasWav ? msg.wavBase64! : msg.dataBase64!;
+}
+
 export class NativeSyncHost {
   private inflight: InFlightSync | null = null;
   private silenced = false;
@@ -92,10 +112,19 @@ export class NativeSyncHost {
 
     switch (msg.type) {
       case 'sync_begin': {
-        if (msg.protocolVersion !== 1) {
+        if (msg.protocolVersion !== 1 && msg.protocolVersion !== 2) {
           throw new Error(`Unsupported protocolVersion ${String(msg.protocolVersion)}`);
         }
         if (!msg.session?.id) throw new Error('sync_begin missing session.id');
+        if (msg.audio) {
+          const format = String(msg.audio.format);
+          if (format !== 'wav' && format !== 'ogg-opus') {
+            throw new Error(`Unsupported audio format ${format}`);
+          }
+          if (format === 'ogg-opus' && msg.protocolVersion !== 2) {
+            throw new Error('ogg-opus requires protocolVersion 2');
+          }
+        }
         if (this.inflight) {
           await abortSync(this.inflight);
           this.inflight = null;
@@ -111,7 +140,7 @@ export class NativeSyncHost {
         if (msg.sessionId !== this.inflight.sessionId) {
           throw new Error('sessionId mismatch');
         }
-        await appendAudioChunk(this.inflight, msg.index, msg.wavBase64);
+        await appendAudioChunk(this.inflight, msg.index, chunkPayload(msg, this.inflight.audio?.format));
         return;
       }
       case 'sync_end': {

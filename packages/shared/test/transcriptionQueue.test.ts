@@ -172,4 +172,114 @@ describe('TranscriptionQueue', () => {
     expect(sleeps).toBe(1);            // cancelled during first backoff
     expect(onSegments).not.toHaveBeenCalled(); // no gap segment either — session was abandoned
   });
+
+  it('onJobStart fires once per job before the first attempt, including retries', async () => {
+    const order: string[] = [];
+    const transcribe = vi.fn()
+      .mockRejectedValueOnce(new Error('503'))
+      .mockResolvedValue({ text: 'ok' });
+    const q = new TranscriptionQueue({
+      sessionId: 's1',
+      transcribe: async (req) => {
+        order.push('transcribe');
+        return transcribe(req);
+      },
+      onJobStart: (job) => { order.push(`start:${job.index}`); },
+      onSegments: (_s, job) => { order.push(`segments:${job.index}`); },
+      sleep: async () => { order.push('retry'); },
+      makeId: ids,
+    });
+    q.enqueue(job(0));
+    q.enqueue(job(1));
+    await q.drain();
+    expect(order).toEqual([
+      'start:0', 'transcribe', 'retry', 'transcribe', 'segments:0',
+      'start:1', 'transcribe', 'segments:1',
+    ]);
+    expect(transcribe).toHaveBeenCalledTimes(3);
+  });
+
+  it('onSegments receives the job on success and on the failure-marker path', async () => {
+    const got: { text: string; index: number }[] = [];
+    const ok = new TranscriptionQueue({
+      sessionId: 's1',
+      transcribe: vi.fn().mockResolvedValue({ text: 'hi' }),
+      onSegments: (s, j) => { got.push({ text: s[0]!.text, index: j.index }); },
+      makeId: ids,
+    });
+    ok.enqueue(job(2, 90_000));
+    await ok.drain();
+
+    const fail = new TranscriptionQueue({
+      sessionId: 's1',
+      transcribe: vi.fn().mockRejectedValue(new Error('down')),
+      onSegments: (s, j) => { got.push({ text: s[0]!.text, index: j.index }); },
+      sleep: async () => {},
+      makeId: ids,
+    });
+    fail.enqueue(job(4, 180_000));
+    await fail.drain();
+
+    expect(got).toEqual([
+      { text: 'hi', index: 2 },
+      { text: FAILED_SEGMENT_TEXT, index: 4 },
+    ]);
+  });
+
+  it('successful empty/whitespace text skips onSegments but still calls onJobDone', async () => {
+    const onSegments = vi.fn();
+    const onJobDone = vi.fn();
+    const q = new TranscriptionQueue({
+      sessionId: 's1',
+      transcribe: vi.fn().mockResolvedValue({ text: '  ' }),
+      onSegments,
+      onJobDone,
+      makeId: ids,
+    });
+    const j = job(3);
+    q.enqueue(j);
+    await q.drain();
+    expect(onSegments).not.toHaveBeenCalled();
+    expect(onJobDone).toHaveBeenCalledTimes(1);
+    expect(onJobDone).toHaveBeenCalledWith(j);
+  });
+
+  it('onSegments rejection still fires onJobDone and proceeds to the next job', async () => {
+    const done: number[] = [];
+    const got: string[] = [];
+    let first = true;
+    const q = new TranscriptionQueue({
+      sessionId: 's1',
+      transcribe: vi.fn().mockResolvedValue({ text: 'ok' }),
+      onSegments: () => {
+        if (first) { first = false; return Promise.reject(new Error('idb full')); }
+        got.push('delivered');
+      },
+      onJobDone: (job) => { done.push(job.index); },
+      makeId: ids,
+    });
+    q.enqueue(job(0));
+    q.enqueue(job(1));
+    await q.drain();
+    expect(done).toEqual([0, 1]);
+    expect(got).toEqual(['delivered']);
+  });
+
+  it('onJobDone is not called after cancel()', async () => {
+    const onJobDone = vi.fn();
+    let sleeps = 0;
+    const q = new TranscriptionQueue({
+      sessionId: 's1',
+      transcribe: vi.fn().mockRejectedValue(new Error('down')),
+      onSegments: () => {},
+      onJobDone,
+      sleep: async () => { sleeps++; q.cancel(); },
+      makeId: ids,
+    });
+    q.enqueue(job(0));
+    q.enqueue(job(1));
+    await q.drain();
+    expect(sleeps).toBe(1);
+    expect(onJobDone).not.toHaveBeenCalled();
+  });
 });

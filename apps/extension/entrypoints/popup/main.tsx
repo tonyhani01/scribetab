@@ -31,6 +31,9 @@ function StopIcon() {
 function App() {
   const [state, setState] = useState<CaptureState>('idle');
   const [chunks, setChunks] = useState(0);
+  const [transcribed, setTranscribed] = useState(0);
+  const [transcriptionOn, setTranscriptionOn] = useState(false);
+  const [sessionCaptionsOnly, setSessionCaptionsOnly] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [capturable, setCapturable] = useState(true);
@@ -47,9 +50,12 @@ function App() {
       setCapturable(isCapturableUrl(tab?.url));
     });
     refreshSpend();
-    chrome.storage.local.get(['captureState', 'chunkCount', 'lastError', 'captureNotice']).then((v) => {
+    chrome.storage.local.get(['captureState', 'chunkCount', 'transcribedCount', 'transcriptionConfigured', 'sessionCaptionsOnly', 'lastError', 'captureNotice']).then((v) => {
       setState((v.captureState as CaptureState) ?? 'idle');
       setChunks((v.chunkCount as number) ?? 0);
+      setTranscribed((v.transcribedCount as number) ?? 0);
+      setTranscriptionOn(Boolean(v.transcriptionConfigured));
+      setSessionCaptionsOnly(Boolean(v.sessionCaptionsOnly));
       if (typeof v.lastError === 'string' && v.lastError) setError(v.lastError);
       if (typeof v.captureNotice === 'string' && v.captureNotice) setNotice(v.captureNotice);
     });
@@ -60,6 +66,9 @@ function App() {
         if (c.captureState.newValue === 'idle') refreshSpend();
       }
       if (c.chunkCount) setChunks((c.chunkCount.newValue as number) ?? 0);
+      if (c.transcribedCount) setTranscribed((c.transcribedCount.newValue as number) ?? 0);
+      if (c.transcriptionConfigured) setTranscriptionOn(Boolean(c.transcriptionConfigured.newValue));
+      if (c.sessionCaptionsOnly) setSessionCaptionsOnly(Boolean(c.sessionCaptionsOnly.newValue));
       if (c.lastError?.newValue) setError(String(c.lastError.newValue));
       if (c.captureNotice) {
         const n = c.captureNotice.newValue;
@@ -87,11 +96,11 @@ function App() {
       if (typeof currentSessionId !== 'string' || !currentSessionId) {
         throw new Error('Nothing recorded yet');
       }
-      const { blob, seconds } = await assembleRecording(currentSessionId);
+      const { blob, seconds, ext } = await assembleRecording(currentSessionId);
       const url = URL.createObjectURL(blob);
       const downloadId = await chrome.downloads.download({
         url,
-        filename: `scribetab-recording-${Math.round(seconds)}s.wav`,
+        filename: `scribetab-recording-${Math.round(seconds)}s.${ext}`,
       });
       const done = (delta: chrome.downloads.DownloadDelta) => {
         if (delta.id !== downloadId) return;
@@ -109,6 +118,7 @@ function App() {
   const busy = state === 'starting' || state === 'stopping';
   const recording = state === 'recording' || state === 'starting' || state === 'stopping';
   const stopping = state === 'recording' || state === 'stopping';
+  const showTranscribed = recording && transcriptionOn && !sessionCaptionsOnly;
   return (
     <main data-testid="popup-root" style={{ width: 340, display: 'flex', flexDirection: 'column' }}>
       <header class="st-header">
@@ -177,9 +187,9 @@ function App() {
       <div class="st-body" style={{ paddingTop: 0 }}>
         <ConsentBanner recording={recording} />
         <div class="st-row">
-          <span>Saved chunks</span>
+          <span>{showTranscribed ? 'Transcribed' : 'Saved chunks'}</span>
           <span data-testid="chunk-count" class="st-meta">
-            {chunks}
+            {showTranscribed ? `${transcribed} / ${chunks} chunks` : chunks}
           </span>
         </div>
         {spend !== null && spend.sessionCount > 0 && (
@@ -225,7 +235,7 @@ function App() {
           Open transcript panel
         </button>
         <button type="button" class="st-btn st-btn--quiet st-btn--block" onClick={download} disabled={state !== 'idle'}>
-          Download recording (.wav)
+          Download recording
         </button>
       </footer>
     </main>

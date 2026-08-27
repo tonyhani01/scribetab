@@ -49,18 +49,34 @@ export interface ChatMessage {
 export interface LlmProvider {
   readonly id: string;
   complete(messages: ChatMessage[], cfg: ProviderConfig): Promise<string>;
+  /** Incremental tokens via `onDelta`; resolves to the full assembled text. */
+  stream?(
+    messages: ChatMessage[],
+    cfg: ProviderConfig,
+    onDelta: (text: string) => void,
+  ): Promise<string>;
 }
+
+export type HostSyncAudio =
+  | { format: 'wav'; sampleRate: number; totalChunks: number }
+  | { format: 'ogg-opus'; totalChunks: number }; // ogg-opus is valid only with protocolVersion 2
 
 export type HostSyncMessage =
   | {
       type: 'sync_begin';
-      protocolVersion: 1;
+      protocolVersion: 1 | 2;
       session: MeetingSession;
       segments: TranscriptSegment[];
       summaryMarkdown?: string;
-      audio?: { format: 'wav'; sampleRate: number; totalChunks: number }; // present only when retention enabled
+      audio?: HostSyncAudio; // present only when retention enabled
     }
-  | { type: 'sync_audio_chunk'; sessionId: string; index: number; wavBase64: string } // ≤ 8 MiB decoded per chunk
+  | {
+      type: 'sync_audio_chunk';
+      sessionId: string;
+      index: number;
+      wavBase64?: string; // v1/wav
+      dataBase64?: string; // v2/ogg-opus
+    } // exactly one payload field; ≤ 8 MiB decoded
   | { type: 'sync_end'; sessionId: string };
 
 export interface HostSyncAck {

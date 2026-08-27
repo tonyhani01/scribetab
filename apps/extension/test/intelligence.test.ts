@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { redactSegments } from '@scribetab/shared';
 import { closeDb } from '../utils/db';
 import {
+  createDeltaEmitter,
   retryPendingIntelligence,
   runFinalizeIntelligence,
   scheduleFinalizeIntelligence,
@@ -30,6 +31,9 @@ function stubChrome(opts: { contains?: boolean; settings?: Settings } = {}) {
       local: {
         get: vi.fn().mockResolvedValue({ settings: opts.settings ?? DEFAULT_SETTINGS }),
       },
+    },
+    runtime: {
+      sendMessage: vi.fn().mockResolvedValue(undefined),
     },
   });
 }
@@ -65,12 +69,29 @@ afterEach(async () => {
   await deleteDb();
 });
 
+function ssePayload(content: string): string {
+  return `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\ndata: [DONE]\n\n`;
+}
+
+function jsonChat(content: string): Response {
+  return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+}
+
 function stubChat(summary: string, actions: string) {
   const fetchMock = vi.fn().mockImplementation(async (_url: string, init: { body: string }) => {
-    const body = JSON.parse(init.body) as { messages: { role: string; content: string }[] };
+    const body = JSON.parse(init.body) as {
+      messages: { role: string; content: string }[];
+      stream?: boolean;
+    };
     const user = body.messages.find((m) => m.role === 'user')?.content ?? '';
     const content = user.startsWith('Summarize') ? summary : actions;
-    return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+    if (body.stream) {
+      return new Response(ssePayload(content), {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    }
+    return jsonChat(content);
   });
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
@@ -236,11 +257,12 @@ describe('runFinalizeIntelligence', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: { content: 'Summary only' } }] }), {
+        new Response(ssePayload('Summary only'), {
           status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
         }),
       )
-      .mockResolvedValueOnce(new Response('nope', { status: 500 }));
+      .mockResolvedValue(new Response('nope', { status: 500 }));
     vi.stubGlobal('fetch', fetchMock);
     await runFinalizeIntelligence(
       's1',
@@ -303,6 +325,7 @@ describe('scheduleFinalizeIntelligence', () => {
     );
     const mid = await getSession('s1');
     expect(mid?.intelligence).toBe('pending');
+    expect(typeof mid?.intelligenceStartedAt).toBe('number');
     expect(mid?.summaryMarkdown).toBeUndefined();
     const ok = new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
       status: 200,
@@ -322,5 +345,124 @@ describe('retryPendingIntelligence', () => {
     const got = await getSession('s1');
     expect(got?.summaryMarkdown).toContain('Recovered.');
     expect(got?.intelligence).toBeNull();
+  });
+
+  it('clears intelligenceError and refreshes startedAt before retrying', async () => {
+    let midError: string | null | undefined;
+    let midStartedAt: number | undefined;
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      if (midStartedAt === undefined) {
+        const mid = await getSession('s1');
+        midError = mid?.intelligenceError;
+        midStartedAt = mid?.intelligenceStartedAt;
+      }
+      return new Response(ssePayload('Recovered.'), {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    stubChrome({
+      settings: settings({ llmProviderId: 'openai', llmApiKey: 'sk-x' }),
+    });
+    await updateSession('s1', {
+      intelligence: 'pending',
+      intelligenceError: 'HTTP 500',
+      intelligenceStartedAt: 1,
+    });
+    await retryPendingIntelligence();
+    expect(midError).toBeNull();
+    expect(midStartedAt).toBeGreaterThan(1);
+    const got = await getSession('s1');
+    expect(got?.summaryMarkdown).toContain('Recovered.');
+  });
+});
+
+describe('runFinalizeIntelligence streaming', () => {
+  const llm = settings({
+    providerId: 'openai',
+    llmProviderId: 'openai',
+    llmApiKey: 'sk-x',
+  });
+
+  it('prefers provider.stream when defined', async () => {
+    const fetchMock = stubChat('Ship on Friday.', '- Ada ships');
+    await runFinalizeIntelligence('s1', llm);
+    const bodies = fetchMock.mock.calls.map(
+      (c) => JSON.parse(c[1].body as string) as { stream?: boolean },
+    );
+    expect(bodies).toHaveLength(2);
+    expect(bodies.every((b) => b.stream === true)).toBe(true);
+    const got = await getSession('s1');
+    expect(got?.summaryMarkdown).toContain('Ship on Friday.');
+    expect(got?.intelligence).toBeNull();
+    const send = chrome.runtime.sendMessage as ReturnType<typeof vi.fn>;
+    const deltas = send.mock.calls
+      .map((c) => c[0] as { type?: string; phase?: string; text?: string; runId?: string })
+      .filter((m) => m?.type === 'SUMMARY_DELTA');
+    expect(deltas.some((d) => d.phase === 'summary' && d.text === 'Ship on Friday.')).toBe(true);
+    expect(deltas.some((d) => d.phase === 'actions')).toBe(true);
+    expect(new Set(deltas.map((d) => d.runId)).size).toBe(1);
+    expect(typeof deltas[0]?.runId).toBe('string');
+  });
+
+  it('falls back to complete when stream fails before any delta', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body) as {
+        messages: { role: string; content: string }[];
+        stream?: boolean;
+      };
+      if (body.stream) return new Response('nope', { status: 500 });
+      const user = body.messages.find((m) => m.role === 'user')?.content ?? '';
+      const content = user.startsWith('Summarize') ? 'Ship on Friday.' : '- Ada ships';
+      return jsonChat(content);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await runFinalizeIntelligence('s1', llm);
+    const got = await getSession('s1');
+    expect(got?.summaryMarkdown).toContain('Ship on Friday.');
+    expect(got?.intelligence).toBeNull();
+    expect(got?.intelligenceError).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('still persists intelligenceError when stream and complete both fail', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('nope', { status: 500 })));
+    await runFinalizeIntelligence('s1', llm);
+    const got = await getSession('s1');
+    expect(got?.intelligence).toBe('pending');
+    expect(typeof got?.intelligenceError).toBe('string');
+    expect(got?.intelligenceError?.length).toBeGreaterThan(0);
+  });
+});
+
+describe('createDeltaEmitter', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('trailing flush delivers final accumulated text', () => {
+    vi.useFakeTimers();
+    const emit = createDeltaEmitter('s1', 'run-1');
+    emit('summary', 'Hel');
+    emit('summary', 'Hello');
+    emit('summary', 'Hello world');
+    const send = chrome.runtime.sendMessage as ReturnType<typeof vi.fn>;
+    const texts = send.mock.calls
+      .map((c) => c[0] as { type?: string; text?: string })
+      .filter((m) => m?.type === 'SUMMARY_DELTA')
+      .map((m) => m.text);
+    expect(texts).toEqual(['Hel']);
+    vi.advanceTimersByTime(150);
+    const flushed = send.mock.calls
+      .map((c) => c[0] as { type?: string; text?: string; runId?: string; phase?: string })
+      .filter((m) => m?.type === 'SUMMARY_DELTA');
+    expect(flushed.map((m) => m.text)).toEqual(['Hel', 'Hello world']);
+    expect(flushed[1]).toMatchObject({
+      sessionId: 's1',
+      runId: 'run-1',
+      phase: 'summary',
+      text: 'Hello world',
+    });
   });
 });

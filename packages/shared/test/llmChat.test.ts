@@ -36,10 +36,12 @@ describe('openaiChatProvider', () => {
       model: string;
       messages: ChatMessage[];
       temperature: number;
+      stream?: boolean;
     };
     expect(body.model).toBe('gpt-4o-mini');
     expect(body.messages).toEqual(messages);
     expect(body.temperature).toBe(0.2);
+    expect(body.stream).toBeUndefined();
   });
 
   it('ignores cfg.baseUrl so a stale custom URL cannot receive the key', async () => {
@@ -130,5 +132,154 @@ describe('customChatProvider', () => {
     await expect(
       customChatProvider.complete(messages, { apiKey: '', baseUrl: 'http://127.0.0.1:1234/v1' }),
     ).rejects.toThrow(/custom: malformed JSON/);
+  });
+});
+
+function sseEvent(payload: unknown): string {
+  return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
+}
+
+function sseStream(chunks: string[]): Response {
+  const encoder = new TextEncoder();
+  let i = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (i >= chunks.length) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(encoder.encode(chunks[i++]));
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { 'Content-Type': 'text/event-stream' },
+  });
+}
+
+describe('openaiChatProvider.stream', () => {
+  it('POSTs stream:true and assembles delta.content', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      sseStream([
+        sseEvent({ choices: [{ delta: { content: 'Hel' } }] }),
+        sseEvent({ choices: [{ delta: { content: 'lo' } }] }),
+        sseEvent('[DONE]'),
+      ]),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const deltas: string[] = [];
+    const result = await openaiChatProvider.stream!(messages, { apiKey: 'sk-x' }, (t) =>
+      deltas.push(t),
+    );
+    expect(result).toBe('Hello');
+    expect(deltas).toEqual(['Hel', 'lo']);
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as { stream?: boolean };
+    expect(body.stream).toBe(true);
+  });
+
+  it('skips malformed lines and role-only chunks', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        sseStream([
+          sseEvent({ choices: [{ delta: { role: 'assistant' } }] }),
+          sseEvent('not-json'),
+          sseEvent({ choices: [{ delta: { content: 'ok' } }] }),
+          sseEvent('[DONE]'),
+        ]),
+      ),
+    );
+    const result = await openaiChatProvider.stream!(messages, { apiKey: 'k' }, () => {});
+    expect(result).toBe('ok');
+  });
+
+  it('assembles deltas split across ReadableStream chunks', async () => {
+    const first = sseEvent({ choices: [{ delta: { content: 'ab' } }] });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        sseStream([
+          first.slice(0, 12),
+          first.slice(12),
+          sseEvent({ choices: [{ delta: { content: 'c' } }] }),
+          'data: [DONE]\n\n',
+        ]),
+      ),
+    );
+    const result = await openaiChatProvider.stream!(messages, { apiKey: 'k' }, () => {});
+    expect(result).toBe('abc');
+  });
+
+  it('rejects on HTTP errors', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response('invalid api key', { status: 401 })),
+    );
+    await expect(
+      openaiChatProvider.stream!(messages, { apiKey: 'k' }, () => {}),
+    ).rejects.toThrow(/openai: HTTP 401.*invalid api key/);
+  });
+
+  it('rejects a non-SSE body with no deltas', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okJson({ choices: [{ message: { content: 'x' } }] })));
+    await expect(
+      openaiChatProvider.stream!(messages, { apiKey: 'k' }, () => {}),
+    ).rejects.toThrow(/openai: malformed stream/);
+  });
+
+  it('treats a delta whose content is DONE as text, not a terminator', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        sseStream([
+          sseEvent({ choices: [{ delta: { content: 'DONE' } }] }),
+          sseEvent({ choices: [{ delta: { content: '!' } }] }),
+          sseEvent('[DONE]'),
+        ]),
+      ),
+    );
+    const deltas: string[] = [];
+    const result = await openaiChatProvider.stream!(messages, { apiKey: 'k' }, (t) =>
+      deltas.push(t),
+    );
+    expect(result).toBe('DONE!');
+    expect(deltas).toEqual(['DONE', '!']);
+  });
+
+  it('parses CRLF-delimited SSE frames', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        sseStream([
+          `data: ${JSON.stringify({ choices: [{ delta: { content: 'Hi' } }] })}\r\n\r\n`,
+          'data: [DONE]\r\n\r\n',
+        ]),
+      ),
+    );
+    const result = await openaiChatProvider.stream!(messages, { apiKey: 'k' }, () => {});
+    expect(result).toBe('Hi');
+  });
+
+  it('reassembles an SSE event split across reads', async () => {
+    const event = `data: ${JSON.stringify({ choices: [{ delta: { content: 'ab' } }] })}\n\n`;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        sseStream([event.slice(0, 17), event.slice(17), 'data: [DONE]\n\n']),
+      ),
+    );
+    const result = await openaiChatProvider.stream!(messages, { apiKey: 'k' }, () => {});
+    expect(result).toBe('ab');
+  });
+
+  it('assembles trailing data without a [DONE] terminator', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        sseStream([`data: ${JSON.stringify({ choices: [{ delta: { content: 'ok' } }] })}`]),
+      ),
+    );
+    const result = await openaiChatProvider.stream!(messages, { apiKey: 'k' }, () => {});
+    expect(result).toBe('ok');
   });
 });

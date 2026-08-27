@@ -5,7 +5,10 @@ export interface ChunkRow {
   index: number;
   sampleRate: number;
   startOffsetSamples: number; // cumulative samples before this chunk (session-relative timing)
-  wav: ArrayBuffer;
+  wav: ArrayBuffer; // stored audio bytes; see format
+  /** Absent ⇒ 'wav' (legacy rows). */
+  format?: 'wav' | 'ogg-opus';
+  durationMs?: number;
   createdAt: number;
 }
 

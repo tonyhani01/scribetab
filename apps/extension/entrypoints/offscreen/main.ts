@@ -1,13 +1,17 @@
 import {
+  CHUNK_MAX_SECONDS,
+  CHUNK_TARGET_SECONDS,
   SilenceChunker,
   TranscriptionQueue,
   addCostUsd,
   encodeWav,
   getTranscriptionProvider,
   redactSegments,
+  resampleLinear,
 } from '@scribetab/shared';
 import type { Ack, ToOffscreen, ToSidePanel } from '@/utils/messages';
 import { putChunk } from '@/utils/chunkStore';
+import { encodeChunkToOggOpus } from '@/utils/opusEncode';
 import { offscreenStopApplies } from '@/utils/sessionIdentity';
 import { putSegments } from '@/utils/segmentStore';
 import { getSession, updateSession } from '@/utils/sessionStore';
@@ -28,14 +32,16 @@ let chunkIndex = 0;
 let samplesWritten = 0;
 let writeChain: Promise<void> = Promise.resolve();
 let writeError: Error | null = null;
+/** Sticky for the rest of the session; reset on OFFSCREEN_START. */
+let opusFallback = false;
 let queue: TranscriptionQueue | null = null;
 let segmentCount = 0;
 let captureSessionId = '';
 
 function notifyBackground(
   msg:
-    | { target: 'background'; type: 'CHUNK_SAVED'; count: number }
-    | { target: 'background'; type: 'SEGMENT_SAVED'; count: number }
+    | { target: 'background'; type: 'CHUNK_SAVED'; count: number; sessionId: string }
+    | { target: 'background'; type: 'SEGMENT_SAVED'; count: number; chunkIndex: number; sessionId: string }
     | { target: 'background'; type: 'TRANSCRIPTION_ERROR'; message: string | null }
     | { target: 'background'; type: 'MIC_STATUS'; status: 'active' | 'denied' | 'off' }
     | { target: 'background'; type: 'AUDIO_STARTED'; sessionId: string; startedAtMs: number }
@@ -52,24 +58,46 @@ function enqueueChunk(pcm: Float32Array, sampleRate: number): void {
   const startOffsetSamples = samplesWritten;
   const lengthSamples = pcm.length;
   samplesWritten += pcm.length;
-  const wav = encodeWav(pcm, sampleRate);
+  // STT timing stays on the original context rate.
+  const startMs = Math.round((startOffsetSamples / sampleRate) * 1000);
+  const durationMs = Math.round((lengthSamples / sampleRate) * 1000);
   writeChain = writeChain.then(async () => {
     if (writeError) return;
+    const pcm16k = resampleLinear(pcm, sampleRate, 16_000);
+    let stored: ArrayBuffer | null = null;
+    let format: 'wav' | 'ogg-opus' = 'wav';
+    if (!opusFallback) {
+      stored = await encodeChunkToOggOpus(pcm16k, index);
+      if (stored) {
+        format = 'ogg-opus';
+      } else {
+        opusFallback = true;
+        console.warn(
+          '[scribetab] Opus encoding unavailable; storing 16 kHz WAV for the rest of this session',
+        );
+      }
+    }
+    const needWav = queue !== null || stored === null;
+    const wav16k = needWav ? encodeWav(pcm16k, 16_000) : null;
     await putChunk({
       sessionId: captureSessionId,
       index,
-      sampleRate,
+      sampleRate: 16_000,
       startOffsetSamples,
-      wav,
+      wav: stored ?? wav16k!,
+      format,
+      durationMs,
       createdAt: Date.now(),
     });
-    notifyBackground({ target: 'background', type: 'CHUNK_SAVED', count: index + 1 });
-    queue?.enqueue({
-      index,
-      wav,
-      startMs: Math.round((startOffsetSamples / sampleRate) * 1000),
-      durationMs: Math.round((lengthSamples / sampleRate) * 1000),
-    });
+    notifyBackground({ target: 'background', type: 'CHUNK_SAVED', count: index + 1, sessionId: captureSessionId });
+    if (queue) {
+      queue.enqueue({
+        index,
+        wav: wav16k!,
+        startMs,
+        durationMs,
+      });
+    }
   }).catch((e) => {
     writeError = e instanceof Error ? e : new Error(String(e));
   });
@@ -132,8 +160,8 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
     const sampleRate = ctx.sampleRate;
     const chunker = new SilenceChunker({
       sampleRate,
-      targetSeconds: 45,
-      maxSeconds: 60,
+      targetSeconds: CHUNK_TARGET_SECONDS,
+      maxSeconds: CHUNK_MAX_SECONDS,
       silenceThreshold: 0.01,
       minSilenceMs: 300,
     });
@@ -174,23 +202,46 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
               providerCostUsd: addCostUsd(session.providerCostUsd, usd),
             });
           },
-          onSegments: async (segments) => {
+          onJobStart: (job) => {
+            void chrome.runtime
+              .sendMessage({
+                target: 'sidepanel',
+                type: 'CHUNK_TRANSCRIBING',
+                sessionId: msg.sessionId,
+                chunkIndex: job.index,
+                startMs: job.startMs,
+                durationMs: job.durationMs,
+              } satisfies ToSidePanel)
+              .catch(() => {
+                // Side panel not open — pending rows are ephemeral.
+              });
+          },
+          onSegments: async (segments, job) => {
             const stored = msg.redaction
               ? redactSegments(segments, { extraTerms: msg.redaction.extraTerms })
               : segments;
             await putSegments(stored);
             segmentCount += stored.length;
-            notifyBackground({ target: 'background', type: 'SEGMENT_SAVED', count: segmentCount });
             void chrome.runtime
               .sendMessage({
                 target: 'sidepanel',
                 type: 'SEGMENTS_ADDED',
                 sessionId: msg.sessionId,
                 segments: stored,
+                chunkIndex: job.index,
               } satisfies ToSidePanel)
               .catch(() => {
                 // Side panel not open — segments are in IndexedDB; it catches up on open.
               });
+          },
+          onJobDone: (job) => {
+            notifyBackground({
+              target: 'background',
+              type: 'SEGMENT_SAVED',
+              count: segmentCount,
+              chunkIndex: job.index,
+              sessionId: msg.sessionId,
+            });
           },
         })
       : null;
@@ -198,6 +249,7 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
     samplesWritten = 0;
     writeChain = Promise.resolve();
     writeError = null;
+    opusFallback = false;
     finalizePromise = null;
     finalized = false;
 

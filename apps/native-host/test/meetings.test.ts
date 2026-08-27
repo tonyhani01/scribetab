@@ -41,4 +41,15 @@ describe('listMeetings', () => {
       expect(await getLatestMeeting(root)).toMatchObject({ dirName: 'new' });
     });
   });
+
+  it('sets hasAudio when only audio.ogg is present', async () => {
+    await withHome(async (home) => {
+      const root = join(home, 'meetings');
+      await writeMeeting(root, 'ogg-only', '2026-08-01T00:00:00.000Z', 'Ogg');
+      await writeFile(join(root, 'ogg-only', 'audio.ogg'), 'not-real-ogg');
+      const listed = await listMeetings(root);
+      expect(listed).toHaveLength(1);
+      expect(listed[0]!.hasAudio).toBe(true);
+    });
+  });
 });

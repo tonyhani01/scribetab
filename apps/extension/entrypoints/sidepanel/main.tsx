@@ -12,6 +12,13 @@ import { createSegmentIndex, snippetAround, type SearchDoc } from '@/utils/searc
 import { getSession, listSessions, type StoredSession } from '@/utils/sessionStore';
 import { getSettings } from '@/utils/settings';
 import { humanError } from '@/utils/userError';
+import { addPending, clearPending, resolveBelow, resolvePending, type PendingChunk } from '@/utils/pendingChunks';
+import {
+  EMPTY_SUMMARY_LIVE,
+  applySummaryDelta,
+  summaryLivePhase,
+  summaryLiveText,
+} from '@/utils/summaryLive';
 import '@/assets/theme.css';
 
 function fmt(ms: number): string {
@@ -94,16 +101,28 @@ function LiveView() {
   const [hostStatus, setHostStatus] = useState<NativeHostStatus>({ state: 'idle' });
   const [syncing, setSyncing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingChunk[]>([]);
+  const [transcribedCount, setTranscribedCount] = useState(0);
+  const [chunkCount, setChunkCount] = useState(0);
   const endRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<string | null>(null);
   sessionRef.current = sessionId;
 
   useEffect(() => {
     void chrome.storage.local
-      .get(['currentSessionId', 'captureState', 'transcriptionConfigured', 'transcriptionIssue', 'lastTranscriptionError', 'micStatus', 'nativeHostStatus', 'captureNotice'])
+      .get(['currentSessionId', 'captureState', 'transcriptionConfigured', 'transcriptionIssue', 'lastTranscriptionError', 'micStatus', 'nativeHostStatus', 'captureNotice', 'transcribedCount', 'chunkCount'])
       .then(async (v) => {
-        setState((v.captureState as CaptureState) ?? 'idle');
+        const capture = (v.captureState as CaptureState) ?? 'idle';
+        const count = typeof v.transcribedCount === 'number' ? v.transcribedCount : 0;
+        setState(capture);
         setConfigured((v.transcriptionConfigured as boolean) ?? true);
+        setTranscribedCount(count);
+        setChunkCount(typeof v.chunkCount === 'number' ? v.chunkCount : 0);
+        if (capture === 'idle') {
+          setPending(clearPending());
+        } else {
+          setPending((prev) => resolveBelow(prev, count));
+        }
         setIssue((v.transcriptionIssue as TranscriptionIssue) ?? null);
         setLastTranscriptionError(
           typeof v.lastTranscriptionError === 'string' && v.lastTranscriptionError
@@ -120,7 +139,11 @@ function LiveView() {
 
     const onStorage = (c: Record<string, chrome.storage.StorageChange>, area: string) => {
       if (area !== 'local') return;
-      if (c.captureState) setState((c.captureState.newValue as CaptureState) ?? 'idle');
+      if (c.captureState) {
+        const next = (c.captureState.newValue as CaptureState) ?? 'idle';
+        setState(next);
+        if (next === 'idle') setPending(clearPending());
+      }
       if (c.transcriptionConfigured) setConfigured(Boolean(c.transcriptionConfigured.newValue));
       if ('transcriptionIssue' in c) {
         setIssue((c.transcriptionIssue.newValue as TranscriptionIssue) ?? null);
@@ -135,10 +158,19 @@ function LiveView() {
         const n = c.captureNotice.newValue;
         setNotice(typeof n === 'string' && n ? n : null);
       }
+      if ('transcribedCount' in c) {
+        const count = typeof c.transcribedCount.newValue === 'number' ? c.transcribedCount.newValue : 0;
+        setTranscribedCount(count);
+        setPending((prev) => resolveBelow(prev, count));
+      }
+      if ('chunkCount' in c) {
+        setChunkCount(typeof c.chunkCount.newValue === 'number' ? c.chunkCount.newValue : 0);
+      }
       if (c.currentSessionId) {
         const sid = (c.currentSessionId.newValue as string) ?? null;
         setSessionId(sid);
         setSegments([]);
+        setPending(clearPending());
         if (sid) void getSegments(sid).then(setSegments);
       }
     };
@@ -148,10 +180,24 @@ function LiveView() {
       const msg = raw as ToSidePanel;
       if (msg?.target !== 'sidepanel') return;
       if (sessionRef.current && msg.sessionId !== sessionRef.current) return;
-      if (msg.type === 'SEGMENTS_ADDED') {
+      if (msg.type === 'CHUNK_TRANSCRIBING') {
+        if (!sessionRef.current || msg.sessionId !== sessionRef.current) return;
+        setPending((prev) =>
+          addPending(prev, {
+            chunkIndex: msg.chunkIndex,
+            startMs: msg.startMs,
+            durationMs: msg.durationMs,
+            startedAt: Date.now(),
+          }),
+        );
+      } else if (msg.type === 'SEGMENTS_ADDED') {
         setSegments((prev) =>
           [...prev, ...msg.segments].sort((a, b) => a.startMs - b.startMs),
         );
+        const resolvedIndex = msg.chunkIndex;
+        if (typeof resolvedIndex === 'number') {
+          setPending((prev) => resolvePending(prev, resolvedIndex));
+        }
       } else if (msg.type === 'SEGMENTS_UPDATED') {
         setSegments((prev) => {
           const map = new Map(prev.map((s) => [s.id, s]));
@@ -169,7 +215,7 @@ function LiveView() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' });
-  }, [segments.length]);
+  }, [segments.length, pending.length]);
 
   return (
     <section>
@@ -208,12 +254,24 @@ function LiveView() {
         </p>
       )}
 
-      {state === 'idle' && segments.length === 0 ? (
+      {state === 'idle' && segments.length === 0 && pending.length === 0 ? (
         <p data-testid="live-empty" class="st-empty">
           No live session. Start recording from the popup or press Alt+Shift+R.
         </p>
       ) : (
-        <SegmentList segments={segments} empty="Segments appear here as chunks are transcribed." />
+        <SegmentList segments={segments} pending={pending} empty="Segments appear here as chunks are transcribed." />
+      )}
+      {state === 'recording' && (
+        <p class="st-hint st-livestatus">
+          {transcribedCount < chunkCount
+            ? `Transcribing chunk ${Math.min(transcribedCount + 1, chunkCount)} of ${chunkCount}`
+            : 'Listening…'}
+        </p>
+      )}
+      {state === 'stopping' && transcribedCount < chunkCount && (
+        <p class="st-hint st-livestatus">
+          Finishing transcription… {transcribedCount} / {chunkCount}
+        </p>
       )}
       <div ref={endRef} />
 
@@ -275,6 +333,8 @@ function LibraryView() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [llmOrigin, setLlmOrigin] = useState<string | null>(null);
+  const [summaryLive, setSummaryLive] = useState(EMPTY_SUMMARY_LIVE);
+  const [, setTick] = useState(0);
   const openIdRef = useRef<string | null>(null);
   openIdRef.current = openId;
 
@@ -317,6 +377,11 @@ function LibraryView() {
     const onMessage = (raw: unknown) => {
       const msg = raw as ToSidePanel;
       if (msg?.target !== 'sidepanel') return;
+      if (msg.type === 'SUMMARY_DELTA') {
+        if (openIdRef.current !== msg.sessionId) return;
+        setSummaryLive((prev) => applySummaryDelta(prev, msg));
+        return;
+      }
       void reload();
       if (openIdRef.current !== msg.sessionId) return;
       if (msg.type === 'SEGMENTS_ADDED') {
@@ -347,12 +412,34 @@ function LibraryView() {
     openIdRef.current = id;
     setOpenId(id);
     setOpenSegments([]);
+    setSummaryLive(EMPTY_SUMMARY_LIVE);
     const segs = await getSegments(id);
     if (openIdRef.current === id) setOpenSegments(segs);
   };
 
   const hits = query.trim() && index ? index.search(query.trim()) : [];
   const open = sessions.find((s) => s.id === openId) ?? null;
+  const generating = Boolean(open && open.intelligence === 'pending' && !open.intelligenceError);
+
+  useEffect(() => {
+    if (!openId || !generating) return;
+    const t = window.setInterval(() => {
+      setTick((n) => n + 1);
+      const id = openIdRef.current;
+      if (!id) return;
+      void getSession(id).then((row) => {
+        if (!row || openIdRef.current !== id) return;
+        setSessions((prev) => {
+          const i = prev.findIndex((s) => s.id === id);
+          if (i < 0) return prev;
+          const next = prev.slice();
+          next[i] = row;
+          return next;
+        });
+      });
+    }, 1000);
+    return () => window.clearInterval(t);
+  }, [openId, generating]);
 
   const exportOne = async (format: ExportFormat) => {
     if (!open) return;
@@ -382,10 +469,29 @@ function LibraryView() {
     if (openIdRef.current === id) setOpenSegments(segs);
   };
 
+  const markOpenPending = () => {
+    if (!open) return;
+    const startedAt = Date.now();
+    setSummaryLive(EMPTY_SUMMARY_LIVE);
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.id === open.id
+          ? {
+              ...s,
+              intelligence: 'pending',
+              intelligenceError: null,
+              intelligenceStartedAt: startedAt,
+            }
+          : s,
+      ),
+    );
+  };
+
   const regenerateSummary = async () => {
     if (!open) return;
     setBusy(true);
     setActionError(null);
+    markOpenPending();
     try {
       const res = (await chrome.runtime.sendMessage({
         target: 'background',
@@ -415,6 +521,7 @@ function LibraryView() {
         setActionError('Permission was declined, so that provider cannot be reached.');
         return;
       }
+      markOpenPending();
       const res = (await chrome.runtime.sendMessage({
         target: 'background',
         type: 'REGENERATE_SUMMARY',
@@ -442,8 +549,18 @@ function LibraryView() {
             <> · {formatUsd(open.costUsd)} est.</>
           )}
         </p>
-        {open.intelligence === 'pending' && !open.intelligenceError && (
-          <p class="st-hint">Generating summary…</p>
+        {generating && (
+          <p class="st-hint st-gen">
+            <span class="st-gen-dot" />
+            <span>
+              {summaryLivePhase(summaryLive) === 'actions'
+                ? 'Extracting action items'
+                : 'Generating summary'}
+              {typeof open.intelligenceStartedAt === 'number'
+                ? ` · ${fmt(Math.max(0, Date.now() - open.intelligenceStartedAt))}`
+                : ''}
+            </span>
+          </p>
         )}
         {open.intelligence === 'pending' && open.intelligenceError && (
           <p data-testid="intelligence-error" class="st-banner st-banner--error">
@@ -458,20 +575,11 @@ function LibraryView() {
             to generate a summary for this meeting.
           </p>
         )}
-        {open.summaryMarkdown && (
-          <article
-            style={{
-              whiteSpace: 'pre-wrap',
-              background: 'var(--st-tint)',
-              borderRadius: 12,
-              padding: '12px 14px',
-              fontSize: 13,
-              lineHeight: 1.55,
-              marginBottom: 12,
-            }}
-          >
-            {open.summaryMarkdown}
-          </article>
+        {generating && summaryLiveText(summaryLive) && (
+          <article class="st-summary">{summaryLiveText(summaryLive)}</article>
+        )}
+        {!generating && open.summaryMarkdown && (
+          <article class="st-summary">{open.summaryMarkdown}</article>
         )}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
           {(['md', 'json', 'srt', 'vtt'] as const).map((f) => (
@@ -553,8 +661,17 @@ function LibraryView() {
   );
 }
 
-function SegmentList({ segments, empty }: { segments: TranscriptSegment[]; empty: string }) {
-  if (segments.length === 0) {
+function SegmentList({
+  segments,
+  pending,
+  empty,
+}: {
+  segments: TranscriptSegment[];
+  pending?: readonly PendingChunk[];
+  empty: string;
+}) {
+  const pendingRows = pending ?? [];
+  if (segments.length === 0 && pendingRows.length === 0) {
     return <p class="st-empty">{empty}</p>;
   }
   return (
@@ -565,6 +682,15 @@ function SegmentList({ segments, empty }: { segments: TranscriptSegment[]; empty
           <span class="st-text" style={s.text === '[transcription failed]' ? { color: 'var(--st-danger)' } : undefined}>
             {s.speaker && <strong>{s.speaker}: </strong>}
             {s.text}
+          </span>
+        </li>
+      ))}
+      {pendingRows.map((p) => (
+        <li key={`pending-${p.chunkIndex}`} class="st-segment--pending">
+          <span class="st-time">{fmt(p.startMs)}</span>
+          <span class="st-text">
+            <span class="st-shimmer" />
+            Transcribing…
           </span>
         </li>
       ))}

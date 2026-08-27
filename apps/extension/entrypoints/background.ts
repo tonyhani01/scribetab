@@ -23,6 +23,7 @@ import {
 } from '@/utils/captionSession';
 import {
   llmConfigured,
+  markIntelligencePending,
   retryPendingIntelligence,
   runFinalizeIntelligence,
   scheduleFinalizeIntelligence,
@@ -400,6 +401,9 @@ async function handleStart(): Promise<Ack> {
       lastError: null,
       lastTranscriptionError: null,
       captureNotice: null,
+      chunkCount: 0,
+      transcribedCount: 0,
+      segmentCount: 0,
     });
     notifyMeetTab(tab.id, true);
 
@@ -467,6 +471,7 @@ async function handleStart(): Promise<Ack> {
     await chrome.storage.local.set({
       captureState: 'recording',
       chunkCount: 0,
+      transcribedCount: 0,
       segmentCount: 0,
       currentSessionId: sessionId,
       transcriptionConfigured: captionsOnly || transcription !== null,
@@ -600,21 +605,28 @@ export default defineBackground(() => {
         case 'STOP_CAPTURE':
           sendResponse(await handleStop());
           break;
-        case 'CHUNK_SAVED':
+        case 'CHUNK_SAVED': {
           // Offscreen cannot use chrome.storage — the SW owns all state.
-          await chrome.storage.local.set({ chunkCount: msg.count });
+          const { currentSessionId } = await chrome.storage.local.get('currentSessionId');
+          if (typeof currentSessionId === 'string' && currentSessionId === msg.sessionId) {
+            await chrome.storage.local.set({ chunkCount: msg.count });
+          }
           sendResponse({ ok: true });
           break;
+        }
         case 'TRANSCRIPTION_ERROR':
           await persistLastTranscriptionError(msg.message);
           sendResponse({ ok: true });
           break;
         case 'SEGMENT_SAVED': {
           const { currentSessionId } = await chrome.storage.local.get('currentSessionId');
-          if (typeof currentSessionId === 'string') {
-            await syncSegmentCount(currentSessionId);
-            await applyFusion(currentSessionId).catch(() => {});
+          if (typeof currentSessionId !== 'string' || currentSessionId !== msg.sessionId) {
+            sendResponse({ ok: true });
+            break;
           }
+          await chrome.storage.local.set({ transcribedCount: msg.chunkIndex + 1 });
+          await syncSegmentCount(currentSessionId);
+          await applyFusion(currentSessionId).catch(() => {});
           sendResponse({ ok: true });
           break;
         }
@@ -649,7 +661,7 @@ export default defineBackground(() => {
             sendResponse({ ok: false, error: 'No LLM configured' });
             break;
           }
-          await updateSession(msg.sessionId, { intelligence: 'pending' });
+          await markIntelligencePending(msg.sessionId, settings);
           await runFinalizeIntelligence(msg.sessionId, settings);
           const row = await getSession(msg.sessionId);
           if (row?.intelligence === 'needs-permission') {

@@ -1,4 +1,4 @@
-import type { HostSyncAck, HostSyncMessage, MeetingSession } from '@scribetab/shared';
+import { remuxOggOpusChunks, type HostSyncAck, type HostSyncMessage, type MeetingSession } from '@scribetab/shared';
 import { getChunk, listChunkIndexes } from './chunkStore';
 import { getSegments } from './segmentStore';
 import type { StoredSession } from './sessionStore';
@@ -6,6 +6,8 @@ import { getSettings } from './settings';
 
 export const NATIVE_HOST_NAME = 'com.scribetab.host';
 export const MAX_AUDIO_CHUNK = 8 * 1024 * 1024;
+/** Pre-base64 slice size so encoded v2 payloads stay under the 8 MiB decoded cap. */
+export const MAX_OGG_SYNC_SLICE = 6 * 1024 * 1024;
 export const ACK_TIMEOUT_MS = 30_000;
 export const INTEGRATION_FOLLOWUP_MS = 70_000;
 
@@ -34,6 +36,14 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
     binary += String.fromCharCode(...bytes.subarray(i, i + step));
   }
   return btoa(binary);
+}
+
+export function splitSyncAudio(buf: ArrayBuffer, maxBytes = MAX_OGG_SYNC_SLICE): ArrayBuffer[] {
+  const slices: ArrayBuffer[] = [];
+  for (let offset = 0; offset < buf.byteLength; offset += maxBytes) {
+    slices.push(buf.slice(offset, offset + maxBytes));
+  }
+  return slices;
 }
 
 function classifyDisconnect(message: string): NativeHostStatus {
@@ -145,32 +155,76 @@ async function streamToPort(
         const indexes = retainAudio ? await listChunkIndexes(session.id) : [];
         let includeAudio = indexes.length > 0;
         let sampleRate = 16000;
+        let sawOgg = false;
+        let sawWav = false;
+        let oggSlices: ArrayBuffer[] = [];
 
         if (includeAudio) {
           for (const index of indexes) {
             const row = await getChunk(session.id, index);
-            if (!row || row.wav.byteLength > MAX_AUDIO_CHUNK) {
+            if (!row) {
               includeAudio = false;
               break;
             }
+            if (row.format === 'ogg-opus') {
+              sawOgg = true;
+            } else {
+              sawWav = true;
+              if (row.wav.byteLength > MAX_AUDIO_CHUNK) {
+                includeAudio = false;
+                break;
+              }
+            }
             if (index === indexes[0]) sampleRate = row.sampleRate;
+          }
+          if (includeAudio && sawOgg && sawWav) includeAudio = false;
+        }
+
+        if (includeAudio && sawOgg) {
+          const bufs: ArrayBuffer[] = [];
+          for (const index of indexes) {
+            const row = await getChunk(session.id, index);
+            if (!row) {
+              includeAudio = false;
+              break;
+            }
+            bufs.push(row.wav);
+          }
+          if (includeAudio) {
+            try {
+              oggSlices = splitSyncAudio(remuxOggOpusChunks(bufs));
+            } catch {
+              includeAudio = false;
+            }
           }
         }
 
         const summaryMarkdown = (session as StoredSession).summaryMarkdown?.trim();
+        const oggAudio = includeAudio && sawOgg;
         const begin: HostSyncMessage = {
           type: 'sync_begin',
-          protocolVersion: 1,
+          protocolVersion: oggAudio ? 2 : 1,
           session,
           segments,
           ...(summaryMarkdown ? { summaryMarkdown } : {}),
           ...(includeAudio
-            ? { audio: { format: 'wav' as const, sampleRate, totalChunks: indexes.length } }
+            ? oggAudio
+              ? { audio: { format: 'ogg-opus' as const, totalChunks: oggSlices.length } }
+              : { audio: { format: 'wav' as const, sampleRate, totalChunks: indexes.length } }
             : {}),
         };
         port.postMessage(begin);
 
-        if (includeAudio) {
+        if (includeAudio && oggAudio) {
+          for (let index = 0; index < oggSlices.length; index++) {
+            port.postMessage({
+              type: 'sync_audio_chunk',
+              sessionId: session.id,
+              index,
+              dataBase64: arrayBufferToBase64(oggSlices[index]!),
+            });
+          }
+        } else if (includeAudio) {
           for (const index of indexes) {
             const row = await getChunk(session.id, index);
             if (!row || row.wav.byteLength > MAX_AUDIO_CHUNK) {
