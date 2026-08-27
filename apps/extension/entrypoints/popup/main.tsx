@@ -71,6 +71,16 @@ function App() {
       <button onClick={download} disabled={state !== 'idle'}>
         Download last recording (.wav)
       </button>
+      <button
+        onClick={() => {
+          void chrome.windows.getCurrent().then((w) => {
+            if (w.id != null) void chrome.sidePanel.open({ windowId: w.id });
+            window.close();
+          });
+        }}
+      >
+        Open transcript panel
+      </button>
       {error && <p style={{ color: 'crimson', fontSize: 12 }}>{error}</p>}
     </main>
   );
