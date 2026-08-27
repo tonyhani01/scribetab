@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CAPTION_CONTAINER_SELECTORS,
   findCaptionsContainer,
+  parseCaptionNodes,
   queryFirst,
   readCaptionItem,
 } from '../utils/meetSelectors';
@@ -71,5 +72,24 @@ describe('readCaptionItem', () => {
     const item = fakeNode({ '[data-speaker-name]': { textContent: 'Ada' } });
     (item as { textContent: string }).textContent = 'Ada';
     expect(readCaptionItem(item)).toBeNull();
+  });
+});
+
+describe('parseCaptionNodes', () => {
+  it('does not attribute a container-level blob to a matched speaker', () => {
+    const container = {
+      querySelector(sel: string) {
+        if (sel === '[data-speaker-name]') return { textContent: 'Ada' };
+        return null;
+      },
+      querySelectorAll() {
+        return [] as unknown as NodeListOf<Element>;
+      },
+      textContent: 'Ada Hello and also Bob later',
+      children: [] as unknown as HTMLCollection,
+    } as unknown as Element;
+    expect(parseCaptionNodes(container)).toEqual([
+      { speaker: '', text: 'Ada Hello and also Bob later' },
+    ]);
   });
 });

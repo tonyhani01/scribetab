@@ -40,12 +40,8 @@ export type CaptionsContainerState =
 
 export function queryFirst(root: ParentNode, selectors: readonly string[]): Element | null {
   for (const sel of selectors) {
-    try {
-      const el = root.querySelector(sel);
-      if (el) return el;
-    } catch {
-      // Meet sometimes injects invalid/custom selectors into our chain; skip.
-    }
+    const el = root.querySelector(sel);
+    if (el) return el;
   }
   return null;
 }
@@ -70,12 +66,8 @@ export function readCaptionItem(item: Element): CaptionSnapshot | null {
 
 function collectItems(container: Element): Element[] {
   for (const sel of CAPTION_ITEM_SELECTORS) {
-    try {
-      const list = [...container.querySelectorAll(sel)];
-      if (list.length > 0) return list;
-    } catch {
-      // skip invalid
-    }
+    const list = [...container.querySelectorAll(sel)];
+    if (list.length > 0) return list;
   }
   return [...container.children].filter((el) => (el.textContent ?? '').trim().length > 0);
 }
@@ -88,8 +80,10 @@ export function parseCaptionNodes(container: Element): CaptionSnapshot[] {
     if (snap) snaps.push(snap);
   }
   if (snaps.length === 0) {
-    const snap = readCaptionItem(container);
-    if (snap) snaps.push(snap);
+    // Item selectors missed. Do not attribute the merged container blob to a
+    // speaker that happens to match inside it.
+    const text = (container.textContent ?? '').replace(/\s+/g, ' ').trim();
+    if (text) snaps.push({ speaker: '', text });
   }
   return snaps;
 }
