@@ -7,9 +7,11 @@ import {
   encodeWav,
   getTranscriptionProvider,
   redactSegments,
+  resampleLinear,
 } from '@scribetab/shared';
 import type { Ack, ToOffscreen, ToSidePanel } from '@/utils/messages';
 import { putChunk } from '@/utils/chunkStore';
+import { encodeChunkToOggOpus } from '@/utils/opusEncode';
 import { offscreenStopApplies } from '@/utils/sessionIdentity';
 import { putSegments } from '@/utils/segmentStore';
 import { getSession, updateSession } from '@/utils/sessionStore';
@@ -30,6 +32,8 @@ let chunkIndex = 0;
 let samplesWritten = 0;
 let writeChain: Promise<void> = Promise.resolve();
 let writeError: Error | null = null;
+/** Sticky for the rest of the session; reset on OFFSCREEN_START. */
+let opusFallback = false;
 let queue: TranscriptionQueue | null = null;
 let segmentCount = 0;
 let captureSessionId = '';
@@ -54,24 +58,46 @@ function enqueueChunk(pcm: Float32Array, sampleRate: number): void {
   const startOffsetSamples = samplesWritten;
   const lengthSamples = pcm.length;
   samplesWritten += pcm.length;
-  const wav = encodeWav(pcm, sampleRate);
+  // STT timing stays on the original context rate.
+  const startMs = Math.round((startOffsetSamples / sampleRate) * 1000);
+  const durationMs = Math.round((lengthSamples / sampleRate) * 1000);
   writeChain = writeChain.then(async () => {
     if (writeError) return;
+    const pcm16k = resampleLinear(pcm, sampleRate, 16_000);
+    let stored: ArrayBuffer | null = null;
+    let format: 'wav' | 'ogg-opus' = 'wav';
+    if (!opusFallback) {
+      stored = await encodeChunkToOggOpus(pcm16k, index);
+      if (stored) {
+        format = 'ogg-opus';
+      } else {
+        opusFallback = true;
+        console.warn(
+          '[scribetab] Opus encoding unavailable; storing 16 kHz WAV for the rest of this session',
+        );
+      }
+    }
+    const needWav = queue !== null || stored === null;
+    const wav16k = needWav ? encodeWav(pcm16k, 16_000) : null;
     await putChunk({
       sessionId: captureSessionId,
       index,
-      sampleRate,
+      sampleRate: 16_000,
       startOffsetSamples,
-      wav,
+      wav: stored ?? wav16k!,
+      format,
+      durationMs,
       createdAt: Date.now(),
     });
     notifyBackground({ target: 'background', type: 'CHUNK_SAVED', count: index + 1, sessionId: captureSessionId });
-    queue?.enqueue({
-      index,
-      wav,
-      startMs: Math.round((startOffsetSamples / sampleRate) * 1000),
-      durationMs: Math.round((lengthSamples / sampleRate) * 1000),
-    });
+    if (queue) {
+      queue.enqueue({
+        index,
+        wav: wav16k!,
+        startMs,
+        durationMs,
+      });
+    }
   }).catch((e) => {
     writeError = e instanceof Error ? e : new Error(String(e));
   });
@@ -223,6 +249,7 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
     samplesWritten = 0;
     writeChain = Promise.resolve();
     writeError = null;
+    opusFallback = false;
     finalizePromise = null;
     finalized = false;
 
