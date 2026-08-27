@@ -6,6 +6,7 @@ import { clearSegments, putSegments } from '@/utils/segmentStore';
 interface Engine {
   ctx: AudioContext;
   stream: MediaStream;
+  micStream: MediaStream | null;
   node: AudioWorkletNode;
   chunker: SilenceChunker;
   sampleRate: number;
@@ -64,6 +65,7 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
   if (engine) throw new Error('Capture already running');
 
   let stream: MediaStream | null = null;
+  let micStream: MediaStream | null = null;
   let ctx: AudioContext | null = null;
   let node: AudioWorkletNode | null = null;
   try {
@@ -79,14 +81,33 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
       throw new Error(`AudioContext is ${ctx.state}, expected running`);
     }
 
-    const source = ctx.createMediaStreamSource(stream);
-    source.connect(ctx.destination); // tabCapture mutes the tab; keep it audible
+    const tabSource = ctx.createMediaStreamSource(stream);
+    tabSource.connect(ctx.destination); // tabCapture mutes the tab; keep it audible
 
     await ctx.audioWorklet.addModule(chrome.runtime.getURL('pcm-worklet.js'));
     node = new AudioWorkletNode(ctx, 'pcm-capture');
-    source.connect(node);
+
+    // Mix bus into the worklet: tab always; mic only if enabled AND granted.
+    // Mic must never reach ctx.destination (the user would hear themselves).
+    const mix = ctx.createGain();
+    tabSource.connect(mix);
+    if (msg.micEnabled) {
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true },
+        });
+        ctx.createMediaStreamSource(micStream).connect(mix);
+        notifyBackground({ target: 'background', type: 'MIC_STATUS', status: 'active' });
+      } catch {
+        // Denied/unavailable → tab-only capture. Surfaced, never an error state.
+        micStream = null;
+        notifyBackground({ target: 'background', type: 'MIC_STATUS', status: 'denied' });
+      }
+    }
+    mix.connect(node);
     // Keep the worklet in a live graph (Chrome has historically skipped
-    // process() on nodes with no path to destination).
+    // process() on nodes with no path to destination). pcm-worklet.js never
+    // writes its outputs, so this connection is silent — no mic leak.
     node.connect(ctx.destination);
 
     const sampleRate = ctx.sampleRate;
@@ -152,11 +173,12 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
       void finalize('track-ended');
     });
 
-    engine = { ctx, stream, node, chunker, sampleRate };
+    engine = { ctx, stream, micStream, node, chunker, sampleRate };
   } catch (e) {
     finalized = true;
     node?.disconnect();
     stream?.getTracks().forEach((t) => t.stop());
+    micStream?.getTracks().forEach((t) => t.stop());
     await ctx?.close().catch(() => {});
     throw e;
   }
@@ -165,7 +187,7 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
 async function runFinalize(reason: string): Promise<void> {
   if (!engine) return;
   finalized = true;
-  const { ctx, stream, node, chunker, sampleRate } = engine;
+  const { ctx, stream, micStream, node, chunker, sampleRate } = engine;
   engine = null;
   try {
     node.port.onmessage = null;
@@ -176,6 +198,7 @@ async function runFinalize(reason: string): Promise<void> {
     if (writeError) throw writeError;
   } finally {
     stream.getTracks().forEach((t) => t.stop());
+    micStream?.getTracks().forEach((t) => t.stop());
     await ctx.close().catch(() => {});
     notifyBackground({
       target: 'background',
