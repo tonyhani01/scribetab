@@ -252,4 +252,12 @@ describe('exportNotebookLm', () => {
     expect(md).not.toContain('## Summary');
     expect(md).toContain('## Transcript');
   });
+
+  it('does not emit a second ## Summary when the markdown already starts with one', () => {
+    const md = exportNotebookLm(session, [], {
+      summaryMarkdown: '## Summary\n\nAlready headed.',
+    });
+    expect(md.match(/## Summary/g)).toEqual(['## Summary']);
+    expect(md).toContain('Already headed.');
+  });
 });

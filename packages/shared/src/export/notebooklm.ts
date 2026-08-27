@@ -25,7 +25,11 @@ export function exportNotebookLm(
 
   const summary = extras?.summaryMarkdown?.trim();
   if (summary) {
-    lines.push('', '## Summary', '', summary);
+    if (summary.startsWith('## Summary')) {
+      lines.push('', summary);
+    } else {
+      lines.push('', '## Summary', '', summary);
+    }
   }
 
   lines.push('', '## Transcript', '');
