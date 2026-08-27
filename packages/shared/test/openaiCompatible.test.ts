@@ -4,7 +4,7 @@ import { groqProvider } from '../src/providers/groq';
 import { mistralProvider } from '../src/providers/mistral';
 import { customProvider } from '../src/providers/custom';
 
-const wav = new ArrayBuffer(8);
+const wav = new ArrayBuffer(64);
 const req = { audio: wav, mimeType: 'audio/wav' };
 
 function okJson(body: unknown): Response {
@@ -103,5 +103,32 @@ describe('openAiCompatible', () => {
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe('http://localhost:8080/v1/audio/transcriptions');
     expect(init.headers.Authorization).toBeUndefined();
+  });
+
+  it('throws when 200 JSON lacks a string text', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okJson({ segments: [] })));
+    await expect(openaiProvider.transcribe(req, { apiKey: 'k' })).rejects.toThrow(
+      /openai: malformed response/,
+    );
+  });
+
+  it('rejects header-only WAV (≤44 bytes) without a network call', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      openaiProvider.transcribe({ audio: new ArrayBuffer(44), mimeType: 'audio/wav' }, { apiKey: 'k' }),
+    ).rejects.toThrow(/empty audio/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('redacts apiKey from HTTP error bodies that echo it', async () => {
+    const key = 'sk-secret-key-value';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(`unauthorized ${key}`, { status: 401 })),
+    );
+    await expect(openaiProvider.transcribe(req, { apiKey: key })).rejects.toThrow(
+      /openai: HTTP 401 unauthorized \[key\]/,
+    );
   });
 });

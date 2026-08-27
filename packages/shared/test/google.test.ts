@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { arrayBufferToBase64 } from '../src/base64';
 import { googleProvider } from '../src/providers/google';
 
-const wav = Uint8Array.from([1, 2, 3, 4]).buffer;
+const wav = Uint8Array.from({ length: 64 }, (_, i) => i % 256).buffer;
 const req = { audio: wav, mimeType: 'audio/wav' };
 
 function okJson(body: unknown): Response {
@@ -43,6 +43,15 @@ describe('arrayBufferToBase64', () => {
       expect(decoded[n - 1]).toBe(2);
     }
   });
+
+  it('encodes ~8MiB with the correct base64 length', () => {
+    const n = 8 * 1024 * 1024;
+    const bytes = new Uint8Array(n);
+    bytes[0] = 9;
+    bytes[n - 1] = 7;
+    const encoded = arrayBufferToBase64(bytes.buffer);
+    expect(encoded.length).toBe(Math.ceil(n / 3) * 4);
+  });
 });
 
 describe('googleProvider', () => {
@@ -64,20 +73,31 @@ describe('googleProvider', () => {
     expect(body.input).toEqual([
       { type: 'audio', data: arrayBufferToBase64(wav), mime_type: 'audio/wav' },
     ]);
-    expect(body.generation_config).toBeUndefined();
+    expect(body.generation_config).toEqual({
+      transcription_config: {
+        mode: { type: 'verbatim', timestamp_granularities: ['word'] },
+      },
+    });
   });
 
-  it('omits language_codes without a hint and includes them when present', async () => {
+  it('always asks for word timestamps and adds language_codes when hinted', async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(okJson({ output_text: '' })));
     vi.stubGlobal('fetch', fetchMock);
 
     await googleProvider.transcribe(req, { apiKey: 'k' });
-    expect(JSON.parse(fetchMock.mock.calls[0]![1].body as string).generation_config).toBeUndefined();
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body as string).generation_config).toEqual({
+      transcription_config: {
+        mode: { type: 'verbatim', timestamp_granularities: ['word'] },
+      },
+    });
 
     await googleProvider.transcribe({ ...req, language: 'sv-SE' }, { apiKey: 'k' });
     const withLang = JSON.parse(fetchMock.mock.calls[1]![1].body as string);
     expect(withLang.generation_config).toEqual({
-      transcription_config: { language_codes: ['sv-SE'] },
+      transcription_config: {
+        mode: { type: 'verbatim', timestamp_granularities: ['word'] },
+        language_codes: ['sv-SE'],
+      },
     });
   });
 
@@ -178,13 +198,26 @@ describe('googleProvider', () => {
     );
   });
 
-  it('rejects 0-byte audio without a network call', async () => {
+  it('rejects header-only WAV (≤44 bytes) without a network call', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
-    await expect(
-      googleProvider.transcribe({ audio: new ArrayBuffer(0), mimeType: 'audio/wav' }, { apiKey: 'k' }),
-    ).rejects.toThrow(/empty audio/);
+    for (const n of [0, 44]) {
+      await expect(
+        googleProvider.transcribe({ audio: new ArrayBuffer(n), mimeType: 'audio/wav' }, { apiKey: 'k' }),
+      ).rejects.toThrow(/empty audio/);
+    }
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('redacts apiKey from HTTP error bodies that echo it', async () => {
+    const key = 'g-secret-key-value';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(`denied for ${key}`, { status: 401 })),
+    );
+    await expect(googleProvider.transcribe(req, { apiKey: key })).rejects.toThrow(
+      /google: HTTP 401 denied for \[key\]/,
+    );
   });
 
   it('throws on an unrecognized 200 body so the queue can mark failure', async () => {

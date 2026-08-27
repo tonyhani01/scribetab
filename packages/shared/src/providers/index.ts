@@ -7,7 +7,7 @@ import { mistralProvider } from './mistral.js';
 import { openaiProvider } from './openai.js';
 import { openrouterProvider } from './openrouter.js';
 
-export const TRANSCRIPTION_PROVIDER_IDS = [
+export const TRANSCRIPTION_PROVIDER_IDS: readonly [
   'openai',
   'groq',
   'deepgram',
@@ -15,7 +15,7 @@ export const TRANSCRIPTION_PROVIDER_IDS = [
   'openrouter',
   'google',
   'custom',
-] as const;
+] = Object.freeze(['openai', 'groq', 'deepgram', 'mistral', 'openrouter', 'google', 'custom']);
 
 export type TranscriptionProviderId = (typeof TRANSCRIPTION_PROVIDER_IDS)[number];
 

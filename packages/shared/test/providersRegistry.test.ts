@@ -28,6 +28,14 @@ describe('provider registry', () => {
     expect(isTranscriptionProviderId('')).toBe(false);
     expect(isTranscriptionProviderId('nope')).toBe(false);
   });
+
+  it('freezes the exported provider-id array', () => {
+    expect(Object.isFrozen(TRANSCRIPTION_PROVIDER_IDS)).toBe(true);
+    expect(() => {
+      (TRANSCRIPTION_PROVIDER_IDS as unknown as string[]).push('evil');
+    }).toThrow();
+    expect(isTranscriptionProviderId('evil')).toBe(false);
+  });
 });
 
 describe('transcriptionEndpoint', () => {

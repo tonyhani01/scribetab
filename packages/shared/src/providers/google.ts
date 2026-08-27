@@ -1,4 +1,5 @@
 import { arrayBufferToBase64 } from '../base64.js';
+import { WAV_HEADER_BYTES } from '../wav.js';
 import type {
   ProviderConfig,
   TranscribeRequest,
@@ -45,7 +46,7 @@ export const googleProvider: TranscriptionProvider = {
   id: 'google',
   async transcribe(req: TranscribeRequest, cfg: ProviderConfig): Promise<TranscribeResult> {
     if (!cfg.apiKey) throw new Error('google: apiKey is required');
-    if (req.audio.byteLength === 0) throw new Error('google: empty audio');
+    if (req.audio.byteLength <= WAV_HEADER_BYTES) throw new Error('google: empty audio');
 
     const input: Record<string, string>[] = [
       {
@@ -54,15 +55,15 @@ export const googleProvider: TranscriptionProvider = {
         mime_type: req.mimeType || 'audio/wav',
       },
     ];
+    const transcriptionConfig: Record<string, unknown> = {
+      mode: { type: 'verbatim', timestamp_granularities: ['word'] },
+    };
+    if (req.language) transcriptionConfig.language_codes = [req.language];
     const body: Record<string, unknown> = {
       model: cfg.model ?? DEFAULT_MODEL,
       input,
+      generation_config: { transcription_config: transcriptionConfig },
     };
-    if (req.language) {
-      body.generation_config = {
-        transcription_config: { language_codes: [req.language] },
-      };
-    }
 
     const res = await fetch(PINNED_URL, {
       method: 'POST',
@@ -74,7 +75,7 @@ export const googleProvider: TranscriptionProvider = {
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     if (!res.ok) {
-      const errBody = (await res.text().catch(() => '')).slice(0, 300);
+      const errBody = redactKey(await res.text().catch(() => ''), cfg.apiKey).slice(0, 300);
       throw new Error(`google: HTTP ${res.status} ${errBody}`);
     }
 
@@ -96,7 +97,7 @@ export const googleProvider: TranscriptionProvider = {
     const hasUsableSegments = Boolean(segments && segments.length > 0);
 
     if (!hasUsableSegments && outputText === undefined) {
-      throw new Error(`google: unrecognized response ${excerpt(json)}`);
+      throw new Error(`google: unrecognized response ${redactKey(excerpt(json), cfg.apiKey)}`);
     }
 
     if (hasUsableSegments) {
@@ -107,6 +108,10 @@ export const googleProvider: TranscriptionProvider = {
     return { text: outputText ?? '', segments: undefined };
   },
 };
+
+function redactKey(text: string, apiKey: string): string {
+  return apiKey ? text.split(apiKey).join('[key]') : text;
+}
 
 function excerpt(json: unknown): string {
   try {

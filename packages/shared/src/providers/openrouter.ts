@@ -7,9 +7,15 @@ import { openAiCompatible } from './openaiCompatible.js';
 //   openai/whisper-large-v3-turbo — cheaper / faster
 //   openai/whisper-1              — OpenAI-hosted Whisper (~$0.006/min)
 //   google/chirp-3, openai/gpt-4o-mini-transcribe — higher-end alternatives
+export function openRouterResponseFormat(model: string): 'verbose_json' | 'json' {
+  const m = model.toLowerCase();
+  if (m.includes('whisper') || m.startsWith('openai/')) return 'verbose_json';
+  return 'json';
+}
+
 export const openrouterProvider = openAiCompatible({
   id: 'openrouter',
   defaultBaseUrl: 'https://openrouter.ai/api/v1',
   defaultModel: 'openai/whisper-large-v3',
-  form: { response_format: 'verbose_json' },
+  form: (model) => ({ response_format: openRouterResponseFormat(model) }),
 });

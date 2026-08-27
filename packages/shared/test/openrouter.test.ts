@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { openrouterProvider } from '../src/providers/openrouter';
 
-const wav = new ArrayBuffer(8);
+const wav = new ArrayBuffer(64);
 const req = { audio: wav, mimeType: 'audio/wav' };
 
 function okJson(body: unknown): Response {
@@ -53,11 +53,11 @@ describe('openrouterProvider', () => {
     ]);
   });
 
-  it('rejects 0-byte audio without a network call', async () => {
+  it('rejects header-only WAV (≤44 bytes) without a network call', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     await expect(
-      openrouterProvider.transcribe({ audio: new ArrayBuffer(0), mimeType: 'audio/wav' }, { apiKey: 'k' }),
+      openrouterProvider.transcribe({ audio: new ArrayBuffer(44), mimeType: 'audio/wav' }, { apiKey: 'k' }),
     ).rejects.toThrow(/empty audio/);
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -84,6 +84,20 @@ describe('openrouterProvider', () => {
     const form = fetchMock.mock.calls[0]![1].body as FormData;
     expect(form.get('language')).toBe('sv');
     expect(form.get('model')).toBe('google/chirp-3');
+    expect(form.get('response_format')).toBe('json');
+  });
+
+  it('requests verbose_json for whisper-class / openai/ models', async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(okJson({ text: '' })));
+    vi.stubGlobal('fetch', fetchMock);
+    await openrouterProvider.transcribe(req, { apiKey: 'k', model: 'openai/whisper-1' });
+    expect((fetchMock.mock.calls[0]![1].body as FormData).get('response_format')).toBe(
+      'verbose_json',
+    );
+    await openrouterProvider.transcribe(req, { apiKey: 'k', model: 'groq/whisper-large-v3' });
+    expect((fetchMock.mock.calls[1]![1].body as FormData).get('response_format')).toBe(
+      'verbose_json',
+    );
   });
 
   it('throws with status and truncated body on non-2xx', async () => {
