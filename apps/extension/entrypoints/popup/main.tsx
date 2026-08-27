@@ -20,14 +20,14 @@ function App() {
     chrome.storage.local.get(['captureState', 'chunkCount', 'lastError', 'captureNotice']).then((v) => {
       setState((v.captureState as CaptureState) ?? 'idle');
       setChunks((v.chunkCount as number) ?? 0);
-      if (typeof v.lastError === 'string' && v.lastError) setError(humanError(v.lastError));
+      if (typeof v.lastError === 'string' && v.lastError) setError(v.lastError);
       if (typeof v.captureNotice === 'string' && v.captureNotice) setNotice(v.captureNotice);
     });
     const onChange = (c: Record<string, chrome.storage.StorageChange>, area: string) => {
       if (area !== 'local') return;
       if (c.captureState) setState((c.captureState.newValue as CaptureState) ?? 'idle');
       if (c.chunkCount) setChunks((c.chunkCount.newValue as number) ?? 0);
-      if (c.lastError?.newValue) setError(humanError(c.lastError.newValue));
+      if (c.lastError?.newValue) setError(String(c.lastError.newValue));
       if (c.captureNotice) {
         const n = c.captureNotice.newValue;
         setNotice(typeof n === 'string' && n ? n : null);
@@ -41,7 +41,7 @@ function App() {
     setError(null);
     try {
       const res = (await chrome.runtime.sendMessage({ target: 'background', type })) as Ack;
-      if (!res?.ok) setError(humanError(res?.error ?? 'Unknown error'));
+      if (!res?.ok) setError(res?.error ?? humanError('Unknown error'));
     } catch (e) {
       setError(humanError(e));
     }
@@ -102,7 +102,7 @@ function App() {
       <button
         data-testid="open-side-panel"
         onClick={() => {
-          void chrome.windows.getCurrent().then((w) => {
+          chrome.windows.getCurrent((w) => {
             if (w.id != null) void chrome.sidePanel.open({ windowId: w.id });
             window.close();
           });
