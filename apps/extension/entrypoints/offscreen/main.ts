@@ -1,4 +1,6 @@
 import {
+  CHUNK_MAX_SECONDS,
+  CHUNK_TARGET_SECONDS,
   SilenceChunker,
   TranscriptionQueue,
   addCostUsd,
@@ -34,8 +36,8 @@ let captureSessionId = '';
 
 function notifyBackground(
   msg:
-    | { target: 'background'; type: 'CHUNK_SAVED'; count: number }
-    | { target: 'background'; type: 'SEGMENT_SAVED'; count: number }
+    | { target: 'background'; type: 'CHUNK_SAVED'; count: number; sessionId: string }
+    | { target: 'background'; type: 'SEGMENT_SAVED'; count: number; chunkIndex: number; sessionId: string }
     | { target: 'background'; type: 'TRANSCRIPTION_ERROR'; message: string | null }
     | { target: 'background'; type: 'MIC_STATUS'; status: 'active' | 'denied' | 'off' }
     | { target: 'background'; type: 'AUDIO_STARTED'; sessionId: string; startedAtMs: number }
@@ -63,7 +65,7 @@ function enqueueChunk(pcm: Float32Array, sampleRate: number): void {
       wav,
       createdAt: Date.now(),
     });
-    notifyBackground({ target: 'background', type: 'CHUNK_SAVED', count: index + 1 });
+    notifyBackground({ target: 'background', type: 'CHUNK_SAVED', count: index + 1, sessionId: captureSessionId });
     queue?.enqueue({
       index,
       wav,
@@ -132,8 +134,8 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
     const sampleRate = ctx.sampleRate;
     const chunker = new SilenceChunker({
       sampleRate,
-      targetSeconds: 45,
-      maxSeconds: 60,
+      targetSeconds: CHUNK_TARGET_SECONDS,
+      maxSeconds: CHUNK_MAX_SECONDS,
       silenceThreshold: 0.01,
       minSilenceMs: 300,
     });
@@ -174,23 +176,46 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
               providerCostUsd: addCostUsd(session.providerCostUsd, usd),
             });
           },
-          onSegments: async (segments) => {
+          onJobStart: (job) => {
+            void chrome.runtime
+              .sendMessage({
+                target: 'sidepanel',
+                type: 'CHUNK_TRANSCRIBING',
+                sessionId: msg.sessionId,
+                chunkIndex: job.index,
+                startMs: job.startMs,
+                durationMs: job.durationMs,
+              } satisfies ToSidePanel)
+              .catch(() => {
+                // Side panel not open — pending rows are ephemeral.
+              });
+          },
+          onSegments: async (segments, job) => {
             const stored = msg.redaction
               ? redactSegments(segments, { extraTerms: msg.redaction.extraTerms })
               : segments;
             await putSegments(stored);
             segmentCount += stored.length;
-            notifyBackground({ target: 'background', type: 'SEGMENT_SAVED', count: segmentCount });
             void chrome.runtime
               .sendMessage({
                 target: 'sidepanel',
                 type: 'SEGMENTS_ADDED',
                 sessionId: msg.sessionId,
                 segments: stored,
+                chunkIndex: job.index,
               } satisfies ToSidePanel)
               .catch(() => {
                 // Side panel not open — segments are in IndexedDB; it catches up on open.
               });
+          },
+          onJobDone: (job) => {
+            notifyBackground({
+              target: 'background',
+              type: 'SEGMENT_SAVED',
+              count: segmentCount,
+              chunkIndex: job.index,
+              sessionId: msg.sessionId,
+            });
           },
         })
       : null;

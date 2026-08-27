@@ -18,8 +18,8 @@ export interface TranscriptionSettingsPayload {
 export type ToBackground =
   | { target: 'background'; type: 'START_CAPTURE' }
   | { target: 'background'; type: 'STOP_CAPTURE' }
-  | { target: 'background'; type: 'CHUNK_SAVED'; count: number }      // offscreen → SW
-  | { target: 'background'; type: 'SEGMENT_SAVED'; count: number }    // offscreen → SW (running total)
+  | { target: 'background'; type: 'CHUNK_SAVED'; count: number; sessionId: string }      // offscreen → SW
+  | { target: 'background'; type: 'SEGMENT_SAVED'; count: number; chunkIndex: number; sessionId: string }    // offscreen → SW (running total)
   | { target: 'background'; type: 'TRANSCRIPTION_ERROR'; message: string | null } // offscreen → SW (null clears)
   | { target: 'background'; type: 'MIC_STATUS'; status: 'active' | 'denied' | 'off' } // offscreen → SW
   | { target: 'background'; type: 'CAPTURE_ENDED'; sessionId: string; reason: string; error?: string }  // offscreen → SW
@@ -69,6 +69,15 @@ export type ToSidePanel =
       type: 'SEGMENTS_ADDED';
       sessionId: string;
       segments: TranscriptSegment[];
+      chunkIndex?: number;
+    }
+  | {
+      target: 'sidepanel';
+      type: 'CHUNK_TRANSCRIBING';
+      sessionId: string;
+      chunkIndex: number;
+      startMs: number;
+      durationMs: number;
     }
   | {
       target: 'sidepanel';

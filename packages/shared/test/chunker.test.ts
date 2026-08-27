@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SilenceChunker } from '../src/chunker';
+import { CHUNK_MAX_SECONDS, CHUNK_TARGET_SECONDS, SilenceChunker } from '../src/chunker';
 
 const SR = 16000;
 const opts = {
@@ -63,13 +63,13 @@ describe('SilenceChunker', () => {
     const sr = 48000;
     const chunker = new SilenceChunker({
       sampleRate: sr,
-      targetSeconds: 45,
-      maxSeconds: 60,
+      targetSeconds: CHUNK_TARGET_SECONDS,
+      maxSeconds: CHUNK_MAX_SECONDS,
       silenceThreshold: 0.01,
       minSilenceMs: 300,
     });
-    // 61s of tone at 48 kHz must hard-cut exactly once at ~60s.
-    const out = new Float32Array(Math.round(61 * sr));
+    // One extra second of tone at 48 kHz must hard-cut exactly once at maxSeconds.
+    const out = new Float32Array(Math.round((CHUNK_MAX_SECONDS + 1) * sr));
     for (let i = 0; i < out.length; i++) out[i] = 0.5 * Math.sin((2 * Math.PI * 440 * i) / sr);
     const chunks: Float32Array[] = [];
     for (let i = 0; i < out.length; i += 128) {
@@ -77,6 +77,6 @@ describe('SilenceChunker', () => {
       if (c) chunks.push(c);
     }
     expect(chunks).toHaveLength(1);
-    expect(chunks[0]!.length / sr).toBeCloseTo(60, 0);
+    expect(chunks[0]!.length / sr).toBeCloseTo(CHUNK_MAX_SECONDS, 0);
   });
 });
