@@ -193,9 +193,20 @@ function App() {
         )}
         {notice && <p class="st-banner st-banner--warn">{notice}</p>}
         {error && (
-          <p data-testid="popup-error" class="st-banner st-banner--error">
-            {error}
-          </p>
+          <div data-testid="popup-error" class="st-banner st-banner--error">
+            <p style={{ margin: '0 0 8px' }}>{error}</p>
+            <button
+              type="button"
+              class="st-chip"
+              data-testid="popup-error-dismiss"
+              onClick={() => {
+                setError(null);
+                void chrome.storage.local.set({ lastError: null });
+              }}
+            >
+              Dismiss
+            </button>
+          </div>
         )}
       </div>
 
