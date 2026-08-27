@@ -1,15 +1,18 @@
 import { appendFile, lstat, mkdir, open, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { exportJson, exportMarkdown, wavHeader, type MeetingSession, type TranscriptSegment } from '@scribetab/shared';
+import {
+  exportJson,
+  exportMarkdown,
+  wavHeader,
+  type HostSyncAudio,
+  type MeetingSession,
+  type TranscriptSegment,
+} from '@scribetab/shared';
 import { MAX_AUDIO_CHUNK_BYTES } from './constants.js';
 import { meetingDirBase, uniqueMeetingDir } from './slug.js';
 
-export interface AudioMeta {
-  format: 'wav';
-  sampleRate: number;
-  totalChunks: number;
-}
+export type AudioMeta = HostSyncAudio;
 
 export interface InFlightSync {
   sessionId: string;
@@ -18,7 +21,8 @@ export interface InFlightSync {
   summaryMarkdown?: string;
   audio?: AudioMeta;
   tmpDir: string;
-  wavPath: string;
+  /** Destination file: audio.wav or audio.ogg. */
+  audioPath: string;
   pcmBytes: number;
   received: number;
   audioSkipped?: string;
@@ -114,9 +118,10 @@ export async function beginSync(
   await mkdir(meetingsRoot, { recursive: true });
   const tmpDir = join(meetingsRoot, `.tmp-${randomUUID()}`);
   await mkdir(tmpDir, { recursive: true });
-  const wavPath = join(tmpDir, 'audio.wav');
-  if (opts.audio && opts.audio.totalChunks > 0) {
-    await writeFile(wavPath, Buffer.from(wavHeader(0, opts.audio.sampleRate)));
+  const isOgg = opts.audio?.format === 'ogg-opus';
+  const audioPath = join(tmpDir, isOgg ? 'audio.ogg' : 'audio.wav');
+  if (opts.audio && opts.audio.totalChunks > 0 && opts.audio.format === 'wav') {
+    await writeFile(audioPath, Buffer.from(wavHeader(0, opts.audio.sampleRate)));
   }
   return {
     sessionId: session.id,
@@ -125,13 +130,13 @@ export async function beginSync(
     summaryMarkdown: opts.summaryMarkdown,
     audio: opts.audio,
     tmpDir,
-    wavPath,
+    audioPath,
     pcmBytes: 0,
     received: 0,
   };
 }
 
-export async function appendAudioChunk(sync: InFlightSync, index: number, wavBase64: string): Promise<void> {
+export async function appendAudioChunk(sync: InFlightSync, index: number, payloadBase64: string): Promise<void> {
   if (sync.audioSkipped) return;
   if (!sync.audio) throw new Error('Audio chunk received but sync_begin had no audio metadata');
   if (index !== sync.received) {
@@ -141,22 +146,26 @@ export async function appendAudioChunk(sync: InFlightSync, index: number, wavBas
     throw new Error(`Audio chunk index ${index} out of range (totalChunks=${sync.audio.totalChunks})`);
   }
 
-  const decoded = Buffer.from(wavBase64, 'base64');
+  const decoded = Buffer.from(payloadBase64, 'base64');
   if (decoded.length > MAX_AUDIO_CHUNK_BYTES) {
     sync.audioSkipped = `Audio chunk ${index} exceeds 8 MiB`;
-    await rm(sync.wavPath, { force: true });
+    await rm(sync.audioPath, { force: true });
     return;
   }
-  let pcm: Buffer;
-  try {
-    pcm = pcmFromDecoded(decoded);
-  } catch (e) {
-    sync.audioSkipped = e instanceof Error ? e.message : String(e);
-    await rm(sync.wavPath, { force: true });
-    return;
+  let bytes: Buffer;
+  if (sync.audio.format === 'ogg-opus') {
+    bytes = decoded;
+  } else {
+    try {
+      bytes = pcmFromDecoded(decoded);
+    } catch (e) {
+      sync.audioSkipped = e instanceof Error ? e.message : String(e);
+      await rm(sync.audioPath, { force: true });
+      return;
+    }
   }
-  await appendFile(sync.wavPath, pcm);
-  sync.pcmBytes += pcm.length;
+  await appendFile(sync.audioPath, bytes);
+  sync.pcmBytes += bytes.length;
   sync.received += 1;
 }
 
@@ -179,14 +188,16 @@ export async function commitSync(sync: InFlightSync, meetingsRoot: string): Prom
   }
 
   if (sync.audio && !sync.audioSkipped && sync.audio.totalChunks > 0 && sync.pcmBytes > 0) {
-    const fh = await open(sync.wavPath, 'r+');
-    try {
-      await fh.write(Buffer.from(wavHeader(sync.pcmBytes, sync.audio.sampleRate)), 0, 44, 0);
-    } finally {
-      await fh.close();
+    if (sync.audio.format === 'wav') {
+      const fh = await open(sync.audioPath, 'r+');
+      try {
+        await fh.write(Buffer.from(wavHeader(sync.pcmBytes, sync.audio.sampleRate)), 0, 44, 0);
+      } finally {
+        await fh.close();
+      }
     }
   } else {
-    await rm(sync.wavPath, { force: true });
+    await rm(sync.audioPath, { force: true });
   }
 
   const existing = await findDirBySessionId(meetingsRoot, sync.sessionId);

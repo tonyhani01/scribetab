@@ -51,11 +51,16 @@ export async function loadMeeting(dirPath: string, dirName: string): Promise<Mee
   }
   let hasAudio = false;
   let mtimeMs = 0;
-  try {
-    const st = await lstat(join(dirPath, 'audio.wav'));
-    hasAudio = st.isFile() && !st.isSymbolicLink();
-  } catch {
-    hasAudio = false;
+  for (const name of ['audio.wav', 'audio.ogg']) {
+    try {
+      const st = await lstat(join(dirPath, name));
+      if (st.isFile() && !st.isSymbolicLink()) {
+        hasAudio = true;
+        break;
+      }
+    } catch {
+      // absent
+    }
   }
   try {
     mtimeMs = (await lstat(dirPath)).mtimeMs;

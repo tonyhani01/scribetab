@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MeetingSession } from '@scribetab/shared';
+import { muxOggOpus, remuxOggOpusChunks, type MeetingSession } from '@scribetab/shared';
 import { putChunk } from '../utils/chunkStore';
 import { closeDb } from '../utils/db';
 import {
@@ -7,6 +7,8 @@ import {
   isHostForbiddenError,
   isHostMissingError,
   MAX_AUDIO_CHUNK,
+  MAX_OGG_SYNC_SLICE,
+  splitSyncAudio,
   syncSessionToHost,
 } from '../utils/nativeSync';
 import { putSegments } from '../utils/segmentStore';
@@ -29,7 +31,24 @@ function deleteDb(): Promise<void> {
   });
 }
 
-type Posted = { type: string; index?: number; audio?: unknown };
+type Posted = {
+  type: string;
+  index?: number;
+  audio?: unknown;
+  protocolVersion?: number;
+  wavBase64?: string;
+  dataBase64?: string;
+  session?: unknown;
+  segments?: Array<{ text?: string }>;
+};
+
+/** SILK 20 ms (TOC config 1, code 0) → 960 samples at 48 kHz. */
+function oggBytes(serial: number): ArrayBuffer {
+  return muxOggOpus([{ data: new Uint8Array([8, 0, 1, 2]), frameSamples48k: 960 }], {
+    inputSampleRate: 16_000,
+    serial,
+  });
+}
 
 function mockPort(opts: { autoAck?: boolean; followUpError?: string } = {}) {
   const messageListeners: Array<(msg: unknown) => void> = [];
@@ -185,6 +204,12 @@ describe('syncSessionToHost', () => {
     expect(port.posted.filter((m) => m.type === 'sync_audio_chunk').map((m) => m.index)).toEqual([
       0, 1,
     ]);
+    expect(port.posted[0]).toMatchObject({
+      protocolVersion: 1,
+      audio: { format: 'wav', sampleRate: 16000, totalChunks: 2 },
+    });
+    expect(port.posted[1]?.wavBase64).toEqual(expect.any(String));
+    expect(port.posted[1]?.dataBase64).toBeUndefined();
   });
 
   it('classifies a missing host as missing', async () => {
@@ -211,13 +236,52 @@ describe('syncSessionToHost', () => {
     expect(ACK_TIMEOUT_MS).toBe(30_000);
   });
 
-  it('omits audio when any row is ogg-opus (protocol v1 cannot carry it)', async () => {
+  it('sends protocol v2 with remuxed ogg slices and dataBase64', async () => {
+    const c0 = oggBytes(1);
+    const c1 = oggBytes(2);
     await putChunk({
       sessionId: session.id,
       index: 0,
       sampleRate: 16000,
       startOffsetSamples: 0,
-      wav: new ArrayBuffer(64),
+      wav: c0,
+      format: 'ogg-opus',
+      durationMs: 20,
+      createdAt: 1,
+    });
+    await putChunk({
+      sessionId: session.id,
+      index: 1,
+      sampleRate: 16000,
+      startOffsetSamples: 960,
+      wav: c1,
+      format: 'ogg-opus',
+      durationMs: 20,
+      createdAt: 2,
+    });
+    const expected = remuxOggOpusChunks([c0, c1]);
+
+    const result = await syncSessionToHost(session);
+    expect(result.state).toBe('ok');
+    expect(port.posted.map((m) => m.type)).toEqual(['sync_begin', 'sync_audio_chunk', 'sync_end']);
+    expect(port.posted[0]).toMatchObject({
+      protocolVersion: 2,
+      audio: { format: 'ogg-opus', totalChunks: 1 },
+    });
+    expect(expected.byteLength).toBeLessThanOrEqual(MAX_OGG_SYNC_SLICE);
+    const chunk = port.posted[1];
+    expect(chunk?.wavBase64).toBeUndefined();
+    expect(chunk?.dataBase64).toEqual(expect.any(String));
+    expect(Buffer.from(chunk!.dataBase64!, 'base64').equals(Buffer.from(expected))).toBe(true);
+  });
+
+  it('skips audio and still syncs transcript when ogg remux fails', async () => {
+    await putChunk({
+      sessionId: session.id,
+      index: 0,
+      sampleRate: 16000,
+      startOffsetSamples: 0,
+      wav: new ArrayBuffer(16),
       format: 'ogg-opus',
       durationMs: 20,
       createdAt: 1,
@@ -225,6 +289,35 @@ describe('syncSessionToHost', () => {
     const result = await syncSessionToHost(session);
     expect(result.state).toBe('ok');
     expect(port.posted.map((m) => m.type)).toEqual(['sync_begin', 'sync_end']);
+    expect(port.posted[0]?.audio).toBeUndefined();
+    expect(port.posted[0]?.protocolVersion).toBe(1);
+    expect(port.posted[0]?.session).toEqual(session);
+    expect(port.posted[0]?.segments).toEqual(expect.arrayContaining([expect.objectContaining({ text: 'hi' })]));
+  });
+
+  it('skips audio when ogg-opus and wav rows are mixed', async () => {
+    await putChunk({
+      sessionId: session.id,
+      index: 0,
+      sampleRate: 16000,
+      startOffsetSamples: 0,
+      wav: new ArrayBuffer(64),
+      createdAt: 1,
+    });
+    await putChunk({
+      sessionId: session.id,
+      index: 1,
+      sampleRate: 16000,
+      startOffsetSamples: 32,
+      wav: oggBytes(1),
+      format: 'ogg-opus',
+      durationMs: 20,
+      createdAt: 2,
+    });
+    const result = await syncSessionToHost(session);
+    expect(result.state).toBe('ok');
+    expect(port.posted.map((m) => m.type)).toEqual(['sync_begin', 'sync_end']);
+    expect(port.posted[0]?.protocolVersion).toBe(1);
     expect(port.posted.find((m) => m.type === 'sync_begin')?.audio).toBeUndefined();
   });
 
@@ -247,5 +340,24 @@ describe('syncSessionToHost', () => {
     const result = await syncSessionToHost(session);
     expect(result.state).toBe('ok');
     expect(result.warning).toBe('Notion: 401');
+  });
+});
+
+describe('splitSyncAudio', () => {
+  it('splits a remuxed buffer into ≤6 MiB pieces', () => {
+    const slices = splitSyncAudio(new ArrayBuffer(MAX_OGG_SYNC_SLICE + 1));
+    expect(slices).toHaveLength(2);
+    expect(slices[0]!.byteLength).toBe(MAX_OGG_SYNC_SLICE);
+    expect(slices[1]!.byteLength).toBe(1);
+  });
+
+  it('returns one slice for an exactly-MAX_OGG_SYNC_SLICE buffer', () => {
+    const slices = splitSyncAudio(new ArrayBuffer(MAX_OGG_SYNC_SLICE));
+    expect(slices).toHaveLength(1);
+    expect(slices[0]!.byteLength).toBe(MAX_OGG_SYNC_SLICE);
+  });
+
+  it('returns no slices for an empty buffer', () => {
+    expect(splitSyncAudio(new ArrayBuffer(0))).toEqual([]);
   });
 });

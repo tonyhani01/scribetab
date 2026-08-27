@@ -131,4 +131,36 @@ describe('native messaging protocol (child process)', () => {
     await new Promise((r) => child!.once('exit', r));
     child = undefined;
   });
+
+  it('protocol v2 writes audio.ogg verbatim', async () => {
+    home = await tempHome();
+    child = spawnHost(home);
+    const payload = Buffer.from('OggS-not-a-real-page-but-verbatim');
+    sendNative(child, {
+      type: 'sync_begin',
+      protocolVersion: 2,
+      session,
+      segments,
+      audio: { format: 'ogg-opus', totalChunks: 1 },
+    });
+    sendNative(child, {
+      type: 'sync_audio_chunk',
+      sessionId: session.id,
+      index: 0,
+      dataBase64: payload.toString('base64'),
+    });
+    sendNative(child, { type: 'sync_end', sessionId: session.id });
+
+    const ack = (await readNativeMessage(child)) as HostSyncAck;
+    expect(ack).toEqual({ ok: true, sessionId: session.id });
+
+    const dir = join(home, 'ScribeTab', 'meetings', '2026-08-27-protocol-sync');
+    expect(existsSync(join(dir, 'audio.ogg'))).toBe(true);
+    expect(existsSync(join(dir, 'audio.wav'))).toBe(false);
+    expect(await readFile(join(dir, 'audio.ogg'))).toEqual(payload);
+
+    child.stdin.end();
+    await new Promise((r) => child!.once('exit', r));
+    child = undefined;
+  });
 });

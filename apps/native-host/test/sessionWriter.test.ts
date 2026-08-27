@@ -117,4 +117,22 @@ describe('sessionWriter atomic rename', () => {
       });
     },
   );
+
+  it('writes ogg-opus bytes verbatim to audio.ogg with no wav file', async () => {
+    await withHome(async (home) => {
+      const meetings = join(home, 'ScribeTab', 'meetings');
+      const a = Buffer.from('RIFF____not-actually-wav');
+      const b = Buffer.from([0x4f, 0x67, 0x67, 0x53, 1, 2, 3]);
+      const sync = await beginSync(meetings, session, segments, {
+        audio: { format: 'ogg-opus', totalChunks: 2 },
+      });
+      expect(existsSync(join(sync.tmpDir, 'audio.wav'))).toBe(false);
+      await appendAudioChunk(sync, 0, a.toString('base64'));
+      await appendAudioChunk(sync, 1, b.toString('base64'));
+      const dest = await commitSync(sync, meetings);
+      expect(existsSync(join(dest, 'audio.ogg'))).toBe(true);
+      expect(existsSync(join(dest, 'audio.wav'))).toBe(false);
+      expect(await readFile(join(dest, 'audio.ogg'))).toEqual(Buffer.concat([a, b]));
+    });
+  });
 });

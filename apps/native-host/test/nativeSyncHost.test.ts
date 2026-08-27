@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Writable } from 'node:stream';
@@ -107,6 +108,220 @@ describe('NativeSyncHost integrations', () => {
       expect(status.notion.ok).toBe(false);
       expect(status.notion.message).toMatch(/401/);
       expect(status.notion.message).not.toContain('ntn_secret_value');
+    });
+  });
+});
+
+describe('NativeSyncHost protocol v2', () => {
+  it('accepts protocolVersion 2 and writes audio.ogg', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      const { stdout, acks } = capturingStdout();
+      const host = new NativeSyncHost(stdout, env, { platform: 'linux' });
+      const payload = Buffer.from('ogg-bytes-verbatim');
+      await host.handle({
+        type: 'sync_begin',
+        protocolVersion: 2,
+        session,
+        segments,
+        audio: { format: 'ogg-opus', totalChunks: 1 },
+      });
+      await host.handle({
+        type: 'sync_audio_chunk',
+        sessionId: session.id,
+        index: 0,
+        dataBase64: payload.toString('base64'),
+      });
+      await host.handle({ type: 'sync_end', sessionId: session.id });
+      expect(acks()[0]).toEqual({ ok: true, sessionId: session.id });
+
+      const meetings = join(home, 'ScribeTab', 'meetings');
+      const dirs = (await readdir(meetings)).filter((n) => !n.startsWith('.'));
+      expect(dirs).toHaveLength(1);
+      const dest = join(meetings, dirs[0]!);
+      expect(existsSync(join(dest, 'audio.ogg'))).toBe(true);
+      expect(existsSync(join(dest, 'audio.wav'))).toBe(false);
+      expect(await readFile(join(dest, 'audio.ogg'))).toEqual(payload);
+    });
+  });
+
+  it('rejects an unsupported protocolVersion', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      const { stdout, acks } = capturingStdout();
+      const host = new NativeSyncHost(stdout, env, { platform: 'linux' });
+      await host.handle({
+        type: 'sync_begin',
+        protocolVersion: 3,
+        session,
+        segments,
+      });
+      expect(acks()[0]?.ok).toBe(false);
+      expect(acks()[0]?.error).toBe('Unsupported protocolVersion 3');
+    });
+  });
+
+  it('rejects sync_audio_chunk with neither payload field', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      const { stdout, acks } = capturingStdout();
+      const host = new NativeSyncHost(stdout, env, { platform: 'linux' });
+      await host.handle({
+        type: 'sync_begin',
+        protocolVersion: 2,
+        session,
+        segments,
+        audio: { format: 'ogg-opus', totalChunks: 1 },
+      });
+      await host.handle({
+        type: 'sync_audio_chunk',
+        sessionId: session.id,
+        index: 0,
+      });
+      expect(acks()[0]?.ok).toBe(false);
+      expect(acks()[0]?.error).toMatch(/exactly one of wavBase64 or dataBase64/);
+    });
+  });
+
+  it('rejects sync_audio_chunk with both payload fields', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      const { stdout, acks } = capturingStdout();
+      const host = new NativeSyncHost(stdout, env, { platform: 'linux' });
+      await host.handle({
+        type: 'sync_begin',
+        protocolVersion: 1,
+        session,
+        segments,
+        audio: { format: 'wav', sampleRate: 16000, totalChunks: 1 },
+      });
+      await host.handle({
+        type: 'sync_audio_chunk',
+        sessionId: session.id,
+        index: 0,
+        wavBase64: Buffer.from('aa').toString('base64'),
+        dataBase64: Buffer.from('bb').toString('base64'),
+      });
+      expect(acks()[0]?.ok).toBe(false);
+      expect(acks()[0]?.error).toMatch(/exactly one of wavBase64 or dataBase64/);
+    });
+  });
+
+  it('rejects protocolVersion 1 with ogg-opus audio', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      const { stdout, acks } = capturingStdout();
+      const host = new NativeSyncHost(stdout, env, { platform: 'linux' });
+      await host.handle({
+        type: 'sync_begin',
+        protocolVersion: 1,
+        session,
+        segments,
+        audio: { format: 'ogg-opus', totalChunks: 1 },
+      });
+      expect(acks()[0]?.ok).toBe(false);
+      expect(acks()[0]?.error).toMatch(/ogg-opus requires protocolVersion 2/);
+    });
+  });
+
+  it('rejects an unknown audio format', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      const { stdout, acks } = capturingStdout();
+      const host = new NativeSyncHost(stdout, env, { platform: 'linux' });
+      await host.handle({
+        type: 'sync_begin',
+        protocolVersion: 2,
+        session,
+        segments,
+        audio: { format: 'mp3', totalChunks: 1 },
+      });
+      expect(acks()[0]?.ok).toBe(false);
+      expect(acks()[0]?.error).toBe('Unsupported audio format mp3');
+    });
+  });
+
+  it('rejects wav sync with dataBase64', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      const { stdout, acks } = capturingStdout();
+      const host = new NativeSyncHost(stdout, env, { platform: 'linux' });
+      await host.handle({
+        type: 'sync_begin',
+        protocolVersion: 1,
+        session,
+        segments,
+        audio: { format: 'wav', sampleRate: 16000, totalChunks: 1 },
+      });
+      await host.handle({
+        type: 'sync_audio_chunk',
+        sessionId: session.id,
+        index: 0,
+        dataBase64: Buffer.from('aa').toString('base64'),
+      });
+      expect(acks()[0]?.ok).toBe(false);
+      expect(acks()[0]?.error).toMatch(/wav sync requires wavBase64/);
+    });
+  });
+
+  it('rejects ogg-opus sync with wavBase64', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      const { stdout, acks } = capturingStdout();
+      const host = new NativeSyncHost(stdout, env, { platform: 'linux' });
+      await host.handle({
+        type: 'sync_begin',
+        protocolVersion: 2,
+        session,
+        segments,
+        audio: { format: 'ogg-opus', totalChunks: 1 },
+      });
+      await host.handle({
+        type: 'sync_audio_chunk',
+        sessionId: session.id,
+        index: 0,
+        wavBase64: Buffer.from('aa').toString('base64'),
+      });
+      expect(acks()[0]?.ok).toBe(false);
+      expect(acks()[0]?.error).toMatch(/ogg-opus sync requires dataBase64/);
+    });
+  });
+
+  it('reassembles multi-slice ogg-opus into byte-identical audio.ogg', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      const { stdout, acks } = capturingStdout();
+      const host = new NativeSyncHost(stdout, env, { platform: 'linux' });
+      const a = Buffer.from('ogg-slice-one');
+      const b = Buffer.from('ogg-slice-two-more');
+      await host.handle({
+        type: 'sync_begin',
+        protocolVersion: 2,
+        session,
+        segments,
+        audio: { format: 'ogg-opus', totalChunks: 2 },
+      });
+      await host.handle({
+        type: 'sync_audio_chunk',
+        sessionId: session.id,
+        index: 0,
+        dataBase64: a.toString('base64'),
+      });
+      await host.handle({
+        type: 'sync_audio_chunk',
+        sessionId: session.id,
+        index: 1,
+        dataBase64: b.toString('base64'),
+      });
+      await host.handle({ type: 'sync_end', sessionId: session.id });
+      expect(acks()[0]).toEqual({ ok: true, sessionId: session.id });
+
+      const meetings = join(home, 'ScribeTab', 'meetings');
+      const dirs = (await readdir(meetings)).filter((n) => !n.startsWith('.'));
+      expect(dirs).toHaveLength(1);
+      const dest = join(meetings, dirs[0]!);
+      expect(await readFile(join(dest, 'audio.ogg'))).toEqual(Buffer.concat([a, b]));
+      expect(existsSync(join(dest, 'audio.wav'))).toBe(false);
     });
   });
 });
