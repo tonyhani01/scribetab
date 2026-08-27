@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CHUNKS_STORE, SEGMENTS_STORE, SESSIONS_STORE, closeDb, openDb } from '../utils/db';
+import { CAPTIONS_STORE, CHUNKS_STORE, SEGMENTS_STORE, SESSIONS_STORE, closeDb, openDb } from '../utils/db';
 
 function deleteDb(): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -68,7 +68,7 @@ describe('v2 → v3 upgrade', () => {
 
     const v3 = await openDb();
     expect([...v3.objectStoreNames].sort()).toEqual(
-      [CHUNKS_STORE, SEGMENTS_STORE, SESSIONS_STORE].sort(),
+      [CAPTIONS_STORE, CHUNKS_STORE, SEGMENTS_STORE, SESSIONS_STORE].sort(),
     );
 
     const chunksStore = v3.transaction(CHUNKS_STORE, 'readonly').objectStore(CHUNKS_STORE);

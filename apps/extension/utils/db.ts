@@ -1,8 +1,9 @@
 const DB_NAME = 'scribetab';
-const DB_VERSION = 3; // v1: audioChunks. v2: + segments. v3: sessions + re-keyed chunks.
+const DB_VERSION = 4; // v1: audioChunks. v2: + segments. v3: sessions + re-keyed chunks. v4: captionCues.
 export const CHUNKS_STORE = 'audioChunks';
 export const SEGMENTS_STORE = 'segments';
 export const SESSIONS_STORE = 'sessions';
+export const CAPTIONS_STORE = 'captionCues';
 
 // Memoized: opening a connection per operation leaked one IDBDatabase per
 // chunk (~80/hour meeting), and any lingering open connection would block a
@@ -38,6 +39,10 @@ export function openDb(): Promise<IDBDatabase> {
         }
         if (!db.objectStoreNames.contains(CHUNKS_STORE)) {
           const store = db.createObjectStore(CHUNKS_STORE, { keyPath: ['sessionId', 'index'] });
+          store.createIndex('bySession', 'sessionId', { unique: false });
+        }
+        if (!db.objectStoreNames.contains(CAPTIONS_STORE)) {
+          const store = db.createObjectStore(CAPTIONS_STORE, { keyPath: 'id' });
           store.createIndex('bySession', 'sessionId', { unique: false });
         }
       };
