@@ -42,17 +42,14 @@ export function ConsentBanner({ recording }: { recording: boolean }) {
   if (!show) return null;
 
   return (
-    <div
-      data-testid="consent-banner"
-      role="status"
-      style={{ background: '#fff8e1', padding: 8, fontSize: 12, margin: '8px 0' }}
-    >
-      <p style={{ margin: '0 0 6px' }}>
+    <div data-testid="consent-banner" role="status" class="st-banner st-banner--warn" style={{ margin: '8px 0' }}>
+      <p style={{ margin: '0 0 8px' }}>
         Get consent from everyone in the meeting before recording. Audio is sent only to the
         transcription provider you configured.
       </p>
       <button
         type="button"
+        class="st-chip"
         data-testid="consent-dismiss"
         onClick={() => {
           void chrome.storage.local.get('currentSessionId').then(async (v) => {
@@ -72,6 +69,7 @@ export function ConsentBanner({ recording }: { recording: boolean }) {
       </button>{' '}
       <button
         type="button"
+        class="st-chip"
         data-testid="consent-dont-show"
         onClick={() => {
           void getSettings().then(async (s) => {

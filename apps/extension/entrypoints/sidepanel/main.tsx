@@ -12,6 +12,7 @@ import { createSegmentIndex, snippetAround, type SearchDoc } from '@/utils/searc
 import { getSession, listSessions, type StoredSession } from '@/utils/sessionStore';
 import { getSettings } from '@/utils/settings';
 import { humanError } from '@/utils/userError';
+import '@/assets/theme.css';
 
 function fmt(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -54,27 +55,30 @@ function App() {
   }, []);
 
   return (
-    <main data-testid="sidepanel-root" style={{ padding: 12, fontFamily: 'system-ui', fontSize: 14 }}>
-      <nav style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-        {(['live', 'library'] as const).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            style={{
-              fontWeight: tab === t ? 700 : 400,
-              textTransform: 'capitalize',
-            }}
-          >
-            {t}
-          </button>
-        ))}
-      </nav>
-      {quotaWarning && (
-        <p style={{ color: '#8a6d00', background: '#fff8e1', padding: 8, fontSize: 13 }}>
-          Storage is over 80% full. Oldest meeting audio is being removed; transcripts are kept.
-        </p>
-      )}
-      {tab === 'live' ? <LiveView /> : <LibraryView />}
+    <main data-testid="sidepanel-root" style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+      <header class="st-header" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
+        <div class="st-brand">
+          <img src="/icon-48.png" alt="" />
+          <span class="st-wordmark">
+            scribe<b>Tab</b>
+          </span>
+        </div>
+        <nav class="st-seg">
+          {(['live', 'library'] as const).map((t) => (
+            <button key={t} aria-selected={tab === t} onClick={() => setTab(t)}>
+              {t}
+            </button>
+          ))}
+        </nav>
+      </header>
+      <div class="st-body" style={{ flexGrow: 1 }}>
+        {quotaWarning && (
+          <p class="st-banner st-banner--warn">
+            Storage is over 80% full. Oldest meeting audio is being removed; transcripts are kept.
+          </p>
+        )}
+        {tab === 'live' ? <LiveView /> : <LibraryView />}
+      </div>
     </main>
   );
 }
@@ -169,20 +173,21 @@ function LiveView() {
 
   return (
     <section>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
         <h1 style={{ fontSize: 15, margin: 0 }}>Transcript</h1>
-        <span style={{ fontSize: 12, color: state === 'recording' ? 'crimson' : '#555' }}>
-          {state === 'recording' ? '● recording' : state}
+        <span class={state === 'recording' ? 'st-pill st-pill--rec' : 'st-pill'}>
+          {state === 'recording' && <span class="st-dot" />}
+          {state}
           {micStatus === 'denied' && ' · mic denied — tab audio only'}
         </span>
       </header>
 
       <ConsentBanner recording={state === 'recording' || state === 'starting' || state === 'stopping'} />
       {notice && (
-        <p style={{ color: '#8a6d00', background: '#fff8e1', padding: 8, fontSize: 13 }}>{notice}</p>
+        <p class="st-banner st-banner--warn">{notice}</p>
       )}
       {!configured && issue === 'missing-permission' && (
-        <p data-testid="live-permission" style={{ color: '#8a6d00', background: '#fff8e1', padding: 8, fontSize: 13 }}>
+        <p data-testid="live-permission" class="st-banner st-banner--warn">
           Host permission for the transcription provider is missing — recording audio only.{' '}
           <a href="#" onClick={(e) => { e.preventDefault(); void chrome.runtime.openOptionsPage(); }}>
             Open settings
@@ -190,7 +195,7 @@ function LiveView() {
         </p>
       )}
       {!configured && issue !== 'missing-permission' && (
-        <p data-testid="live-unconfigured" style={{ color: '#8a6d00', background: '#fff8e1', padding: 8, fontSize: 13 }}>
+        <p data-testid="live-unconfigured" class="st-banner st-banner--warn">
           No transcription provider configured — recording audio only.{' '}
           <a href="#" onClick={(e) => { e.preventDefault(); void chrome.runtime.openOptionsPage(); }}>
             Open settings
@@ -198,13 +203,13 @@ function LiveView() {
         </p>
       )}
       {lastTranscriptionError && (
-        <p data-testid="live-transcription-error" style={{ color: 'crimson', fontSize: 13 }}>
+        <p data-testid="live-transcription-error" class="st-banner st-banner--error">
           {lastTranscriptionError}
         </p>
       )}
 
       {state === 'idle' && segments.length === 0 ? (
-        <p data-testid="live-empty" style={{ color: '#777' }}>
+        <p data-testid="live-empty" class="st-empty">
           No live session. Start recording from the popup or press Alt+Shift+R.
         </p>
       ) : (
@@ -212,8 +217,9 @@ function LiveView() {
       )}
       <div ref={endRef} />
 
-      <footer style={{ marginTop: 16, borderTop: '1px solid #eee', paddingTop: 8 }}>
+      <footer style={{ marginTop: 16, borderTop: '1px solid var(--st-border)', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' }}>
         <button
+          class="st-btn st-btn--quiet"
           disabled={syncing || state === 'recording' || state === 'starting' || state === 'stopping'}
           onClick={() => {
             setSyncing(true);
@@ -237,21 +243,21 @@ function LiveView() {
           {syncing ? 'Syncing…' : 'Sync all'}
         </button>
         {hostStatus.state === 'missing' && (
-          <p style={{ color: '#8a6d00', background: '#fff8e1', padding: 8, fontSize: 12 }}>
+          <p class="st-banner st-banner--warn">
             Native host not installed. Run <code>node apps/native-host/dist/host.bin.js install</code>{' '}
             (or <code>npx scribetab-host install</code> once published) then try Sync all.
           </p>
         )}
         {hostStatus.state === 'error' && hostStatus.message && (
-          <p data-testid="sync-error" style={{ color: 'crimson', fontSize: 12 }}>
+          <p data-testid="sync-error" class="st-banner st-banner--error">
             {hostStatus.message}
           </p>
         )}
         {hostStatus.state === 'ok' && (
-          <p style={{ color: 'green', fontSize: 12 }}>Synced to ~/ScribeTab/meetings</p>
+          <p class="st-ok-text">Synced to ~/ScribeTab/meetings</p>
         )}
         {hostStatus.state === 'ok' && hostStatus.warning && (
-          <p style={{ color: '#8a6d00', background: '#fff8e1', padding: 8, fontSize: 12 }}>
+          <p class="st-banner st-banner--warn">
             Integrations: {hostStatus.warning}
           </p>
         )}
@@ -426,22 +432,27 @@ function LibraryView() {
   if (open) {
     return (
       <section>
-        <button onClick={() => setOpenId(null)} style={{ marginBottom: 8 }}>
+        <button class="st-chip" onClick={() => setOpenId(null)} style={{ marginBottom: 8 }}>
           ← Library
         </button>
         <h1 style={{ fontSize: 15, margin: '0 0 4px' }}>{open.title}</h1>
-        <p style={{ fontSize: 12, color: '#555', margin: '0 0 8px' }}>
+        <p style={{ fontSize: 12, color: 'var(--st-muted)', margin: '0 0 8px' }}>
           {dateLabel(open.startedAt)} · {durationLabel(open)} · {open.platform} · {open.status}
           {open.costUsd !== undefined && (
             <> · {formatUsd(open.costUsd)} est.</>
           )}
         </p>
-        {open.intelligence === 'pending' && (
-          <p style={{ fontSize: 13, color: '#555' }}>Generating summary…</p>
+        {open.intelligence === 'pending' && !open.intelligenceError && (
+          <p class="st-hint">Generating summary…</p>
+        )}
+        {open.intelligence === 'pending' && open.intelligenceError && (
+          <p data-testid="intelligence-error" class="st-banner st-banner--error">
+            Summary failed: {open.intelligenceError} — use Regenerate summary to retry.
+          </p>
         )}
         {open.intelligence === 'needs-permission' && (
           <p style={{ fontSize: 13 }}>
-            <button disabled={busy} onClick={() => void grantLlmAndRegenerate()}>
+            <button class="st-btn" disabled={busy} onClick={() => void grantLlmAndRegenerate()}>
               Grant permission
             </button>{' '}
             to generate a summary for this meeting.
@@ -451,9 +462,11 @@ function LibraryView() {
           <article
             style={{
               whiteSpace: 'pre-wrap',
-              background: '#f6f6f6',
-              padding: 8,
+              background: 'var(--st-tint)',
+              borderRadius: 12,
+              padding: '12px 14px',
               fontSize: 13,
+              lineHeight: 1.55,
               marginBottom: 12,
             }}
           >
@@ -462,19 +475,19 @@ function LibraryView() {
         )}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
           {(['md', 'json', 'srt', 'vtt'] as const).map((f) => (
-            <button key={f} disabled={busy} onClick={() => void exportOne(f)}>
+            <button class="st-chip" key={f} disabled={busy} onClick={() => void exportOne(f)}>
               Export .{f}
             </button>
           ))}
-          <button disabled={busy} onClick={() => void exportOne('notebooklm')}>
+          <button class="st-chip" disabled={busy} onClick={() => void exportOne('notebooklm')}>
             Export for NotebookLM
           </button>
-          <button disabled={busy} onClick={() => void regenerateSummary()}>
+          <button class="st-chip" disabled={busy} onClick={() => void regenerateSummary()}>
             Regenerate summary
           </button>
         </div>
         {actionError && (
-          <p data-testid="library-error" style={{ color: 'crimson', fontSize: 12 }}>
+          <p data-testid="library-error" class="st-banner st-banner--error">
             {actionError}
           </p>
         )}
@@ -491,25 +504,25 @@ function LibraryView() {
         placeholder="Search transcripts…"
         value={query}
         onInput={(e) => setQuery((e.currentTarget as HTMLInputElement).value)}
-        style={{ width: '100%', padding: 6, marginBottom: 10, boxSizing: 'border-box' }}
+        class="st-input"
+        style={{ maxWidth: 'none', marginBottom: 10 }}
       />
       {query.trim() ? (
         hits.length === 0 ? (
-          <p data-testid="library-empty-search" style={{ color: '#777' }}>
+          <p data-testid="library-empty-search" class="st-empty">
             No matches for that search.
           </p>
         ) : (
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
             {hits.map((h) => (
-              <li key={h.id} style={{ margin: '0 0 10px' }}>
-                <button
-                  onClick={() => void openSession(String(h.sessionId))}
-                  style={{ all: 'unset', cursor: 'pointer', display: 'block', width: '100%' }}
-                >
-                  <div style={{ fontWeight: 600 }}>{String(h.sessionTitle ?? 'Meeting')}</div>
-                  <div style={{ fontSize: 12, color: '#555' }}>
+              <li key={h.id}>
+                <button class="st-session" onClick={() => void openSession(String(h.sessionId))}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <div class="st-title">{String(h.sessionTitle ?? 'Meeting')}</div>
+                  <div class="st-meta">
                     {typeof h.startMs === 'number' ? formatClock(h.startMs) : ''} ·{' '}
                     {snippetAround(String(h.text ?? ''), query)}
+                  </div>
                   </div>
                 </button>
               </li>
@@ -517,20 +530,19 @@ function LibraryView() {
           </ul>
         )
       ) : sessions.length === 0 ? (
-        <p data-testid="library-empty" style={{ color: '#777' }}>
+        <p data-testid="library-empty" class="st-empty">
           No meetings yet. Record a tab from the popup — past sessions will show up here.
         </p>
       ) : (
-        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
           {sessions.map((s) => (
-            <li key={s.id} style={{ margin: '0 0 10px' }}>
-              <button
-                onClick={() => void openSession(s.id)}
-                style={{ all: 'unset', cursor: 'pointer', display: 'block', width: '100%' }}
-              >
-                <div style={{ fontWeight: 600 }}>{s.title}</div>
-                <div style={{ fontSize: 12, color: '#555' }}>
-                  {dateLabel(s.startedAt)} · {durationLabel(s)}
+            <li key={s.id}>
+              <button class="st-session" onClick={() => void openSession(s.id)}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <div class="st-title">{s.title}</div>
+                  <div class="st-meta">
+                    {dateLabel(s.startedAt)} · {durationLabel(s)}
+                  </div>
                 </div>
               </button>
             </li>
@@ -543,15 +555,15 @@ function LibraryView() {
 
 function SegmentList({ segments, empty }: { segments: TranscriptSegment[]; empty: string }) {
   if (segments.length === 0) {
-    return <p style={{ color: '#777' }}>{empty}</p>;
+    return <p class="st-empty">{empty}</p>;
   }
   return (
-    <ol style={{ listStyle: 'none', padding: 0, margin: '8px 0' }}>
+    <ol class="st-segments">
       {segments.map((s) => (
-        <li key={s.id} style={{ margin: '6px 0' }}>
-          <span style={{ color: '#999', fontSize: 11, marginRight: 6 }}>{fmt(s.startMs)}</span>
-          {s.speaker && <strong style={{ marginRight: 4 }}>{s.speaker}:</strong>}
-          <span style={s.text === '[transcription failed]' ? { color: 'crimson' } : undefined}>
+        <li key={s.id}>
+          <span class="st-time">{fmt(s.startMs)}</span>
+          <span class="st-text" style={s.text === '[transcription failed]' ? { color: 'var(--st-danger)' } : undefined}>
+            {s.speaker && <strong>{s.speaker}: </strong>}
             {s.text}
           </span>
         </li>

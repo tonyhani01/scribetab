@@ -13,6 +13,7 @@ import {
 } from '@scribetab/shared';
 import { getSegments, putSegments } from './segmentStore';
 import { getSession, listSessions, updateSession } from './sessionStore';
+import { humanError } from './userError';
 import { getSettings, type Settings } from './settings';
 
 export function llmConfigured(settings: Settings): boolean {
@@ -92,6 +93,7 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
   let costUsd: number | undefined = stt;
   let summaryMarkdown: string | undefined;
   let intelligence: 'pending' | 'needs-permission' | null = null;
+  let intelligenceError: string | null = null;
 
   if (llmConfigured(settings) && segments.length > 0) {
     if (!(await llmOriginGranted(settings))) {
@@ -122,9 +124,10 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
         const md = await summarizeMeeting(complete, forLlm);
         if (md) summaryMarkdown = md;
         intelligence = null;
-      } catch {
+      } catch (e) {
         // Keep accumulated cost (including a successful first call). Retry later.
         intelligence = 'pending';
+        intelligenceError = humanError(e);
       }
     }
   }
@@ -132,6 +135,7 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
   await updateSession(sessionId, {
     costUsd: costUsd === undefined ? existing?.costUsd ?? null : costUsd,
     intelligence,
+    intelligenceError,
     ...(summaryMarkdown ? { summaryMarkdown } : {}),
   });
 }

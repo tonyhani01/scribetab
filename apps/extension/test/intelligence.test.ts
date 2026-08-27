@@ -208,6 +208,30 @@ describe('runFinalizeIntelligence', () => {
     expect(got?.intelligence).toBe('pending');
   });
 
+  it('persists the failure reason when the LLM call fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('nope', { status: 500 })));
+    await runFinalizeIntelligence(
+      's1',
+      settings({ providerId: 'openai', llmProviderId: 'openai', llmApiKey: 'sk-x' }),
+    );
+    const got = await getSession('s1');
+    expect(got?.intelligence).toBe('pending');
+    expect(typeof got?.intelligenceError).toBe('string');
+    expect(got?.intelligenceError?.length).toBeGreaterThan(0);
+  });
+
+  it('clears a stored failure reason on later success', async () => {
+    await updateSession('s1', { intelligence: 'pending', intelligenceError: 'HTTP 500' });
+    stubChat('Ship on Friday.', '- Ada ships');
+    await runFinalizeIntelligence(
+      's1',
+      settings({ providerId: 'openai', llmProviderId: 'openai', llmApiKey: 'sk-x' }),
+    );
+    const got = await getSession('s1');
+    expect(got?.intelligence).toBeNull();
+    expect(got?.intelligenceError).toBeNull();
+  });
+
   it('accumulates first-call LLM cost if the second call fails', async () => {
     const fetchMock = vi
       .fn()

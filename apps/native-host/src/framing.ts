@@ -55,28 +55,29 @@ export async function* decodeNativeMessages(
   const chunks: Buffer[] = [];
   const offsetRef = { n: 0 };
   let buffered = 0;
-
-  const available = () => buffered;
+  // Body length parsed from a consumed header whose body has not arrived yet.
+  // Headers are never un-consumed; this carries the state across reads instead.
+  let pendingLen: number | null = null;
 
   for await (const chunk of stream) {
     if (chunk.byteLength === 0) continue;
     chunks.push(Buffer.from(chunk));
     buffered += chunk.byteLength;
-    while (available() >= 4) {
-      const header = takeBytes(chunks, offsetRef, 4);
-      buffered -= 4;
-      const len = header.readUInt32LE(0);
-      if (len > MAX_NATIVE_MESSAGE_BYTES) {
-        throw new Error(`Native message too large: ${len}`);
+    for (;;) {
+      if (pendingLen === null) {
+        if (buffered < 4) break;
+        const header = takeBytes(chunks, offsetRef, 4);
+        buffered -= 4;
+        const len = header.readUInt32LE(0);
+        if (len > MAX_NATIVE_MESSAGE_BYTES) {
+          throw new Error(`Native message too large: ${len}`);
+        }
+        pendingLen = len;
       }
-      if (available() < len) {
-        chunks.unshift(header);
-        offsetRef.n = 0;
-        buffered += 4;
-        break;
-      }
-      const body = takeBytes(chunks, offsetRef, len);
-      buffered -= len;
+      if (buffered < pendingLen) break;
+      const body = takeBytes(chunks, offsetRef, pendingLen);
+      buffered -= pendingLen;
+      pendingLen = null;
       try {
         yield JSON.parse(body.toString('utf8')) as unknown;
       } catch {
@@ -85,7 +86,7 @@ export async function* decodeNativeMessages(
     }
   }
 
-  if (available() > 0) {
+  if (buffered > 0 || pendingLen !== null) {
     throw new Error('Malformed native framing: truncated message');
   }
 }
