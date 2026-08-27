@@ -19,19 +19,22 @@ export function openDb(): Promise<IDBDatabase> {
         const db = req.result;
         const oldVersion = event.oldVersion;
 
+        // v3 re-keys audioChunks from `index` to composite [sessionId, index]
+        // and introduces the sessions store. Pre-release: drop legacy chunk
+        // and segment rows rather than migrate them — v1/v2 recordings had no
+        // session rows, so leftover v2 segments would be searchable orphans
+        // the Library cannot open.
+        if (oldVersion > 0 && oldVersion < 3) {
+          if (db.objectStoreNames.contains(CHUNKS_STORE)) db.deleteObjectStore(CHUNKS_STORE);
+          if (db.objectStoreNames.contains(SEGMENTS_STORE)) db.deleteObjectStore(SEGMENTS_STORE);
+        }
+
         if (!db.objectStoreNames.contains(SEGMENTS_STORE)) {
           const store = db.createObjectStore(SEGMENTS_STORE, { keyPath: 'id' });
           store.createIndex('bySession', 'sessionId', { unique: false });
         }
         if (!db.objectStoreNames.contains(SESSIONS_STORE)) {
           db.createObjectStore(SESSIONS_STORE, { keyPath: 'id' });
-        }
-
-        // v3 re-keys audioChunks from `index` to composite [sessionId, index].
-        // Pre-release: drop legacy chunk rows rather than migrate them —
-        // v1/v2 recordings had no sessionId, so they cannot be re-homed.
-        if (oldVersion > 0 && oldVersion < 3 && db.objectStoreNames.contains(CHUNKS_STORE)) {
-          db.deleteObjectStore(CHUNKS_STORE);
         }
         if (!db.objectStoreNames.contains(CHUNKS_STORE)) {
           const store = db.createObjectStore(CHUNKS_STORE, { keyPath: ['sessionId', 'index'] });
