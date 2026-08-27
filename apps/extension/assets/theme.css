@@ -387,6 +387,59 @@ input[type='checkbox'] {
   font-size: 13px;
 }
 
+.st-segment--pending {
+  color: var(--st-muted);
+}
+
+.st-segment--pending .st-text {
+  color: var(--st-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.st-shimmer {
+  display: block;
+  height: 10px;
+  width: 100%;
+  max-width: 220px;
+  border-radius: 999px;
+  background-image: linear-gradient(
+    90deg,
+    var(--st-track) 0%,
+    var(--st-tint) 50%,
+    var(--st-track) 100%
+  );
+  background-size: 200% 100%;
+  background-position: 100% 0;
+  animation: st-shimmer 1.2s linear infinite;
+}
+
+@keyframes st-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .st-shimmer {
+    animation: none;
+    background-image: none;
+    background-color: var(--st-tint);
+    border: 1px solid var(--st-border-strong);
+  }
+}
+
+.st-livestatus {
+  margin: 4px 0 0;
+}
+
 /* Library */
 .st-session {
   display: flex;
