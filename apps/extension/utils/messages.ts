@@ -20,6 +20,7 @@ export type ToBackground =
   | { target: 'background'; type: 'STOP_CAPTURE' }
   | { target: 'background'; type: 'CHUNK_SAVED'; count: number }      // offscreen → SW
   | { target: 'background'; type: 'SEGMENT_SAVED'; count: number }    // offscreen → SW (running total)
+  | { target: 'background'; type: 'TRANSCRIPTION_ERROR'; message: string | null } // offscreen → SW (null clears)
   | { target: 'background'; type: 'MIC_STATUS'; status: 'active' | 'denied' | 'off' } // offscreen → SW
   | { target: 'background'; type: 'CAPTURE_ENDED'; sessionId: string; reason: string; error?: string }  // offscreen → SW
   | {

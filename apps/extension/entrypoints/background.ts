@@ -66,6 +66,7 @@ import {
   updateSession,
 } from '@/utils/sessionStore';
 import { getSettings } from '@/utils/settings';
+import { persistLastTranscriptionError } from '@/utils/transcriptionError';
 import { GENERIC_USER_ERROR, humanError } from '@/utils/userError';
 
 let creatingOffscreen: Promise<void> | null = null;
@@ -602,6 +603,10 @@ export default defineBackground(() => {
         case 'CHUNK_SAVED':
           // Offscreen cannot use chrome.storage — the SW owns all state.
           await chrome.storage.local.set({ chunkCount: msg.count });
+          sendResponse({ ok: true });
+          break;
+        case 'TRANSCRIPTION_ERROR':
+          await persistLastTranscriptionError(msg.message);
           sendResponse({ ok: true });
           break;
         case 'SEGMENT_SAVED': {

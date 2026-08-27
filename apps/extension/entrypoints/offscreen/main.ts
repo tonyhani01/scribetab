@@ -36,6 +36,7 @@ function notifyBackground(
   msg:
     | { target: 'background'; type: 'CHUNK_SAVED'; count: number }
     | { target: 'background'; type: 'SEGMENT_SAVED'; count: number }
+    | { target: 'background'; type: 'TRANSCRIPTION_ERROR'; message: string | null }
     | { target: 'background'; type: 'MIC_STATUS'; status: 'active' | 'denied' | 'off' }
     | { target: 'background'; type: 'AUDIO_STARTED'; sessionId: string; startedAtMs: number }
     | { target: 'background'; type: 'CAPTURE_ENDED'; sessionId: string; reason: string; error?: string },
@@ -153,10 +154,19 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
               baseUrl: transcription.baseUrl,
               model: transcription.model,
             });
-            await chrome.storage.local.remove('lastTranscriptionError');
+            notifyBackground({
+              target: 'background',
+              type: 'TRANSCRIPTION_ERROR',
+              message: null,
+            });
             return result;
           },
-          onError: (message) => chrome.storage.local.set({ lastTranscriptionError: message }),
+          onError: (message) =>
+            notifyBackground({
+              target: 'background',
+              type: 'TRANSCRIPTION_ERROR',
+              message,
+            }),
           onCostUsd: async (usd) => {
             const session = await getSession(msg.sessionId);
             if (!session) return;
