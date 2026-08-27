@@ -46,6 +46,13 @@ export function notionPagesPath(
   return join(userDataDir(platform, env), 'notion-pages.json');
 }
 
+export function notionActionsPath(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return join(userDataDir(platform, env), 'notionActions.json');
+}
+
 export function defaultHome(): string {
   return process.env.HOME || process.env.USERPROFILE || homedir();
 }

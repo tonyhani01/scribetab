@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
-import type { MeetingSession, TranscriptSegment } from '@scribetab/shared';
+import { actionItemLine, type ActionItem, type MeetingSession, type TranscriptSegment } from '@scribetab/shared';
 import { atomicWriteFile } from './atomicWrite.js';
-import { notionPagesPath } from './paths.js';
+import { notionActionsPath, notionPagesPath } from './paths.js';
 
 export const NOTION_API = 'https://api.notion.com/v1';
 export const NOTION_VERSION = '2022-06-28';
@@ -33,6 +33,11 @@ export type NotionBlock =
       object: 'block';
       type: 'paragraph';
       paragraph: { rich_text: NotionRichText[] };
+    }
+  | {
+      object: 'block';
+      type: 'to_do';
+      to_do: { rich_text: NotionRichText[]; checked: boolean };
     };
 
 export type NotionPageRecord = {
@@ -223,6 +228,135 @@ export async function saveNotionPageMap(
 ): Promise<void> {
   const path = notionPagesPath(platform, env);
   await atomicWriteFile(path, JSON.stringify(map, null, 2) + '\n', { mode: 0o600 });
+}
+
+export type NotionActionRecord = {
+  pageId: string;
+  headingAdded: boolean;
+  items: Record<string, { ok: true; at: string }>; // keyed by ActionItem.id
+};
+export type NotionActionMap = Record<string, NotionActionRecord>; // keyed by sessionId
+
+export async function loadNotionActionMap(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): Promise<NotionActionMap> {
+  const path = notionActionsPath(platform, env);
+  let text: string;
+  try {
+    text = await readFile(path, 'utf8');
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') return {};
+    throw e;
+  }
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return parsed as NotionActionMap;
+  } catch {
+    return {};
+  }
+}
+
+export async function saveNotionActionMap(
+  map: NotionActionMap,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): Promise<void> {
+  const path = notionActionsPath(platform, env);
+  await atomicWriteFile(path, JSON.stringify(map, null, 2) + '\n', { mode: 0o600 });
+}
+
+export function actionItemBlocks(items: ActionItem[]): NotionBlock[] {
+  return items.map((item) => ({
+    object: 'block' as const,
+    type: 'to_do' as const,
+    to_do: { rich_text: chunkRichText(actionItemLine(item)), checked: false },
+  }));
+}
+
+export async function appendActionItems(opts: {
+  token: string;
+  pageId: string;
+  sessionId: string;
+  items: ActionItem[];
+  fetchImpl?: typeof fetch;
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  deadline?: number;
+  now?: () => string;
+}): Promise<{ results: { id: string; ok: boolean; error?: string }[] }> {
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const env = opts.env ?? process.env;
+  const platform = opts.platform ?? process.platform;
+  const deadline = opts.deadline ?? Date.now() + NOTION_INTEGRATION_BUDGET_MS;
+  const now = opts.now ?? (() => new Date().toISOString());
+  const map = await loadNotionActionMap(env, platform);
+  const rec: NotionActionRecord = map[opts.sessionId] ?? {
+    pageId: opts.pageId,
+    headingAdded: false,
+    items: {},
+  };
+  rec.pageId = opts.pageId;
+
+  const results: { id: string; ok: boolean; error?: string }[] = [];
+  const pending = opts.items.filter((i) => {
+    if (rec.items[i.id]?.ok) {
+      results.push({ id: i.id, ok: true });
+      return false;
+    }
+    return true;
+  });
+  if (pending.length === 0) return { results };
+
+  const blocks: NotionBlock[] = [];
+  const blockOwners: (string | null)[] = []; // parallel: item id per block, null for heading
+  if (!rec.headingAdded) {
+    blocks.push(heading2('Action items'));
+    blockOwners.push(null);
+  }
+  for (const item of pending) {
+    blocks.push(...actionItemBlocks([item]));
+    blockOwners.push(item.id);
+  }
+
+  const batches = batchBlocks(blocks.map((b, i) => ({ b, i })));
+  let failed: string | undefined;
+  for (const batch of batches) {
+    if (failed === undefined) {
+      try {
+        const res = await notionFetch(
+          `/blocks/${opts.pageId}/children`,
+          opts.token,
+          { method: 'PATCH', body: JSON.stringify({ children: batch.map((x) => x.b) }) },
+          fetchImpl,
+          deadline,
+        );
+        if (!res.ok) throw notionError(res.status, await res.text().catch(() => ''));
+        for (const x of batch) {
+          const id = blockOwners[x.i];
+          if (id === undefined) continue;
+          if (id === null) rec.headingAdded = true;
+          else {
+            rec.items[id] = { ok: true, at: now() };
+            results.push({ id, ok: true });
+          }
+        }
+        map[opts.sessionId] = rec;
+        await saveNotionActionMap(map, env, platform);
+      } catch (e) {
+        failed = e instanceof Error ? e.message : String(e);
+      }
+    }
+    if (failed !== undefined) {
+      for (const x of batch) {
+        const id = blockOwners[x.i];
+        if (id != null && !rec.items[id]?.ok) results.push({ id, ok: false, error: failed });
+      }
+    }
+  }
+  return { results };
 }
 
 async function notionFetch(
