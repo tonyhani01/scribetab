@@ -149,7 +149,8 @@ async function streamToPort(
         if (includeAudio) {
           for (const index of indexes) {
             const row = await getChunk(session.id, index);
-            if (!row || row.wav.byteLength > MAX_AUDIO_CHUNK) {
+            // TODO: protocol v2 — ogg-opus cannot be sent as wav.
+            if (!row || row.wav.byteLength > MAX_AUDIO_CHUNK || row.format === 'ogg-opus') {
               includeAudio = false;
               break;
             }

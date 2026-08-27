@@ -29,7 +29,7 @@ function deleteDb(): Promise<void> {
   });
 }
 
-type Posted = { type: string; index?: number };
+type Posted = { type: string; index?: number; audio?: unknown };
 
 function mockPort(opts: { autoAck?: boolean; followUpError?: string } = {}) {
   const messageListeners: Array<(msg: unknown) => void> = [];
@@ -38,7 +38,7 @@ function mockPort(opts: { autoAck?: boolean; followUpError?: string } = {}) {
   const port = {
     posted,
     postMessage(msg: Posted) {
-      posted.push({ type: msg.type, index: msg.index });
+      posted.push(msg);
       if (opts.autoAck !== false && msg.type === 'sync_end') {
         queueMicrotask(() => {
           for (const fn of messageListeners) fn({ ok: true, sessionId: session.id });
@@ -209,6 +209,23 @@ describe('syncSessionToHost', () => {
     expect(result.state).toBe('error');
     expect(result.message).toMatch(/timed out/i);
     expect(ACK_TIMEOUT_MS).toBe(30_000);
+  });
+
+  it('omits audio when any row is ogg-opus (protocol v1 cannot carry it)', async () => {
+    await putChunk({
+      sessionId: session.id,
+      index: 0,
+      sampleRate: 16000,
+      startOffsetSamples: 0,
+      wav: new ArrayBuffer(64),
+      format: 'ogg-opus',
+      durationMs: 20,
+      createdAt: 1,
+    });
+    const result = await syncSessionToHost(session);
+    expect(result.state).toBe('ok');
+    expect(port.posted.map((m) => m.type)).toEqual(['sync_begin', 'sync_end']);
+    expect(port.posted.find((m) => m.type === 'sync_begin')?.audio).toBeUndefined();
   });
 
   it('skips audio when a chunk exceeds 8 MiB', async () => {

@@ -74,6 +74,8 @@ describe('v2 → v3 upgrade', () => {
     const chunksStore = v3.transaction(CHUNKS_STORE, 'readonly').objectStore(CHUNKS_STORE);
     expect(chunksStore.keyPath).toEqual(['sessionId', 'index']);
     expect(chunksStore.indexNames.contains('bySession')).toBe(true);
+    expect(chunksStore.indexNames.contains('wav')).toBe(false);
+    expect([...chunksStore.indexNames]).toEqual(['bySession']);
 
     const leftoverSegs = await new Promise<unknown[]>((resolve, reject) => {
       const tx = v3.transaction(SEGMENTS_STORE, 'readonly');

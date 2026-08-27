@@ -96,11 +96,11 @@ function App() {
       if (typeof currentSessionId !== 'string' || !currentSessionId) {
         throw new Error('Nothing recorded yet');
       }
-      const { blob, seconds } = await assembleRecording(currentSessionId);
+      const { blob, seconds, ext } = await assembleRecording(currentSessionId);
       const url = URL.createObjectURL(blob);
       const downloadId = await chrome.downloads.download({
         url,
-        filename: `scribetab-recording-${Math.round(seconds)}s.wav`,
+        filename: `scribetab-recording-${Math.round(seconds)}s.${ext}`,
       });
       const done = (delta: chrome.downloads.DownloadDelta) => {
         if (delta.id !== downloadId) return;
@@ -235,7 +235,7 @@ function App() {
           Open transcript panel
         </button>
         <button type="button" class="st-btn st-btn--quiet st-btn--block" onClick={download} disabled={state !== 'idle'}>
-          Download recording (.wav)
+          Download recording
         </button>
       </footer>
     </main>
