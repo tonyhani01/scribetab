@@ -9,7 +9,16 @@ import {
   originPattern,
   transcriptionEndpoint,
 } from '@scribetab/shared';
-import { DEFAULT_SETTINGS, getSettings, saveSettings, type Settings } from '@/utils/settings';
+import {
+  DEFAULT_SETTINGS,
+  getSettings,
+  saveSettings,
+  withLlmField,
+  withLlmProvider,
+  withSttField,
+  withSttProvider,
+  type Settings,
+} from '@/utils/settings';
 import {
   ensureHostOrigin,
   probeLlm,
@@ -63,6 +72,16 @@ function App() {
   const llmUrlError = s.llmProviderId === 'custom' ? validateHttpUrl(s.llmBaseUrl) : null;
   const sttKeyMissing = s.providerId !== '' && s.providerId !== 'custom' && !s.apiKey.trim();
   const llmKeyMissing = s.llmProviderId !== '' && s.llmProviderId !== 'custom' && !s.llmApiKey.trim();
+  const sttKeyLabel = s.providerId
+    ? `Enter an API key for ${STT_PROVIDER_LABELS[s.providerId] ?? s.providerId}.`
+    : 'This provider needs an API key.';
+  const llmKeyLabel = s.llmProviderId
+    ? `Enter an API key for ${s.llmProviderId}.`
+    : 'This provider needs an API key.';
+  const languageLabel =
+    s.providerId === 'google'
+      ? 'Language hint (blank = auto, e.g. en-US, sv-SE, ar-EG)'
+      : 'Language hint (blank = auto, e.g. en, ar)';
 
   const save = async () => {
     setStatus(null);
@@ -75,8 +94,12 @@ function App() {
         setStatus({ kind: 'err', text: llmUrlError });
         return;
       }
-      if (sttKeyMissing || llmKeyMissing) {
-        setStatus({ kind: 'err', text: 'This provider needs an API key.' });
+      if (sttKeyMissing) {
+        setStatus({ kind: 'err', text: sttKeyLabel });
+        return;
+      }
+      if (llmKeyMissing) {
+        setStatus({ kind: 'err', text: llmKeyLabel });
         return;
       }
       const origins: string[] = [];
@@ -205,7 +228,7 @@ function App() {
           value={s.providerId}
           onChange={(e) => {
             const v = (e.currentTarget as HTMLSelectElement).value;
-            set('providerId', isTranscriptionProviderId(v) ? v : '');
+            setS((prev) => withSttProvider(prev, isTranscriptionProviderId(v) ? v : ''));
           }}
         >
           <option value="">Off (record only)</option>
@@ -237,9 +260,9 @@ function App() {
               autocomplete="off"
               style={input}
               value={s.apiKey}
-              onInput={(e) => set('apiKey', (e.currentTarget as HTMLInputElement).value)}
+              onInput={(e) => setS((prev) => withSttField(prev, 'apiKey', (e.currentTarget as HTMLInputElement).value))}
             />
-            {sttKeyMissing && <p style={err}>This provider needs an API key.</p>}
+            {sttKeyMissing && <p style={err}>{sttKeyLabel}</p>}
 
             <label style={row} for="model">Model (blank = default)</label>
             <input
@@ -247,13 +270,14 @@ function App() {
               style={input}
               placeholder={MODEL_PLACEHOLDERS[s.providerId] ?? ''}
               value={s.model}
-              onInput={(e) => set('model', (e.currentTarget as HTMLInputElement).value)}
+              onInput={(e) => setS((prev) => withSttField(prev, 'model', (e.currentTarget as HTMLInputElement).value))}
             />
 
-            <label style={row} for="language">Language hint (blank = auto, e.g. "en", "sv")</label>
+            <label style={row} for="language">{languageLabel}</label>
             <input
               id="language"
               style={input}
+              placeholder={s.providerId === 'google' ? 'en-US' : 'en'}
               value={s.language}
               onInput={(e) => set('language', (e.currentTarget as HTMLInputElement).value)}
             />
@@ -286,7 +310,7 @@ function App() {
           value={s.llmProviderId}
           onChange={(e) => {
             const v = (e.currentTarget as HTMLSelectElement).value;
-            set('llmProviderId', isLlmProviderId(v) ? v : '');
+            setS((prev) => withLlmProvider(prev, isLlmProviderId(v) ? v : ''));
           }}
         >
           <option value="">Off (no summary)</option>
@@ -320,9 +344,11 @@ function App() {
               autocomplete="off"
               style={input}
               value={s.llmApiKey}
-              onInput={(e) => set('llmApiKey', (e.currentTarget as HTMLInputElement).value)}
+              onInput={(e) =>
+                setS((prev) => withLlmField(prev, 'llmApiKey', (e.currentTarget as HTMLInputElement).value))
+              }
             />
-            {llmKeyMissing && <p style={err}>This provider needs an API key.</p>}
+            {llmKeyMissing && <p style={err}>{llmKeyLabel}</p>}
 
             <label style={row} for="llmModel">LLM model (blank = default)</label>
             <input
@@ -330,7 +356,9 @@ function App() {
               style={input}
               placeholder={LLM_MODEL_PLACEHOLDERS[s.llmProviderId] ?? ''}
               value={s.llmModel}
-              onInput={(e) => set('llmModel', (e.currentTarget as HTMLInputElement).value)}
+              onInput={(e) =>
+                setS((prev) => withLlmField(prev, 'llmModel', (e.currentTarget as HTMLInputElement).value))
+              }
             />
 
             <div style={{ marginTop: 8 }}>
