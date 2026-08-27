@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { MeetingSession, TranscriptSegment } from '@scribetab/shared';
 import { formatClock } from '@scribetab/shared';
 import type MiniSearch from 'minisearch';
-import type { CaptureState, ToSidePanel } from '@/utils/messages';
+import type { Ack, CaptureState, ToSidePanel } from '@/utils/messages';
+import type { NativeHostStatus } from '@/utils/nativeSync';
 import { downloadExport, type ExportFormat } from '@/utils/exportDownload';
 import { getAllSegments, getSegments } from '@/utils/segmentStore';
 import { createSegmentIndex, snippetAround, type SearchDoc } from '@/utils/search';
@@ -81,17 +82,20 @@ function LiveView() {
   const [state, setState] = useState<CaptureState>('idle');
   const [configured, setConfigured] = useState(true);
   const [micStatus, setMicStatus] = useState<string>('off');
+  const [hostStatus, setHostStatus] = useState<NativeHostStatus>({ state: 'idle' });
+  const [syncing, setSyncing] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<string | null>(null);
   sessionRef.current = sessionId;
 
   useEffect(() => {
     void chrome.storage.local
-      .get(['currentSessionId', 'captureState', 'transcriptionConfigured', 'micStatus'])
+      .get(['currentSessionId', 'captureState', 'transcriptionConfigured', 'micStatus', 'nativeHostStatus'])
       .then(async (v) => {
         setState((v.captureState as CaptureState) ?? 'idle');
         setConfigured((v.transcriptionConfigured as boolean) ?? true);
         setMicStatus((v.micStatus as string) ?? 'off');
+        if (v.nativeHostStatus) setHostStatus(v.nativeHostStatus as NativeHostStatus);
         const sid = (v.currentSessionId as string) ?? null;
         setSessionId(sid);
         if (sid) setSegments(await getSegments(sid));
@@ -102,6 +106,7 @@ function LiveView() {
       if (c.captureState) setState((c.captureState.newValue as CaptureState) ?? 'idle');
       if (c.transcriptionConfigured) setConfigured(Boolean(c.transcriptionConfigured.newValue));
       if (c.micStatus) setMicStatus(String(c.micStatus.newValue ?? 'off'));
+      if (c.nativeHostStatus) setHostStatus((c.nativeHostStatus.newValue as NativeHostStatus) ?? { state: 'idle' });
       if (c.currentSessionId) {
         const sid = (c.currentSessionId.newValue as string) ?? null;
         setSessionId(sid);
@@ -151,6 +156,40 @@ function LiveView() {
 
       <SegmentList segments={segments} empty="Segments appear here as chunks are transcribed." />
       <div ref={endRef} />
+
+      <footer style={{ marginTop: 16, borderTop: '1px solid #eee', paddingTop: 8 }}>
+        <button
+          disabled={syncing || state === 'recording' || state === 'starting' || state === 'stopping'}
+          onClick={() => {
+            setSyncing(true);
+            void chrome.runtime
+              .sendMessage({ target: 'background', type: 'SYNC_ALL' })
+              .then((res: Ack) => {
+                if (res?.hostMissing) {
+                  setHostStatus({ state: 'missing', message: res.error });
+                } else if (!res?.ok) {
+                  setHostStatus({ state: 'error', message: res?.error ?? 'Sync failed' });
+                } else {
+                  setHostStatus({ state: 'ok' });
+                }
+              })
+              .finally(() => setSyncing(false));
+          }}
+        >
+          {syncing ? 'Syncing…' : 'Sync all'}
+        </button>
+        {hostStatus.state === 'missing' && (
+          <p style={{ color: '#8a6d00', background: '#fff8e1', padding: 8, fontSize: 12 }}>
+            Native host not installed. Run <code>npx scribetab-host install</code> then try Sync all.
+          </p>
+        )}
+        {hostStatus.state === 'error' && hostStatus.message && (
+          <p style={{ color: '#555', fontSize: 12 }}>{hostStatus.message}</p>
+        )}
+        {hostStatus.state === 'ok' && (
+          <p style={{ color: 'green', fontSize: 12 }}>Synced to ~/ScribeTab/meetings</p>
+        )}
+      </footer>
     </section>
   );
 }
