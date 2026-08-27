@@ -34,6 +34,7 @@ async function ping(
   url: string,
   headers: Record<string, string>,
   fetchImpl: typeof fetch,
+  opts?: { customStt?: boolean },
 ): Promise<ProbeResult> {
   try {
     const res = await fetchImpl(url, {
@@ -42,6 +43,9 @@ async function ping(
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
     if (res.ok) return { ok: true, message: 'Connected.' };
+    if (opts?.customStt && res.status === 404) {
+      return { ok: true, message: 'reachable (models endpoint not supported)' };
+    }
     return { ok: false, message: classifyHttp(res.status) };
   } catch (e) {
     const name = e instanceof DOMException ? e.name : '';
@@ -110,7 +114,9 @@ export async function probeTranscription(opts: {
     }
   }
 
-  return ping(req.url, req.headers, opts.fetchImpl ?? fetch);
+  return ping(req.url, req.headers, opts.fetchImpl ?? fetch, {
+    customStt: opts.providerId === 'custom',
+  });
 }
 
 export async function probeLlm(opts: {
@@ -145,8 +151,7 @@ export async function probeLlm(opts: {
   return ping(req.url, req.headers, opts.fetchImpl ?? fetch);
 }
 
-export async function ensureHostOrigin(origin: string): Promise<boolean> {
-  const granted = await chrome.permissions.contains({ origins: [origin] });
-  if (granted) return true;
+/** Must run on the click path with no prior await (user-gesture for request()). */
+export function ensureHostOrigin(origin: string): Promise<boolean> {
   return chrome.permissions.request({ origins: [origin] });
 }

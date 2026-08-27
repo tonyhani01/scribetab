@@ -25,6 +25,15 @@ describe('probe request URLs', () => {
     );
   });
 
+  it('pins openai to api.openai.com even with a stale custom baseUrl', () => {
+    expect(sttProbeRequest('openai', 'sk', 'http://localhost:9000/v1').url).toBe(
+      'https://api.openai.com/v1/models',
+    );
+    expect(llmProbeRequest('openai', 'sk', 'http://localhost:11434/v1').url).toBe(
+      'https://api.openai.com/v1/models',
+    );
+  });
+
   it('uses Deepgram projects with Token auth', () => {
     const req = sttProbeRequest('deepgram', 'dg', '');
     expect(req.url).toBe('https://api.deepgram.com/v1/projects');
@@ -67,6 +76,30 @@ describe('probeTranscription', () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     expect(res).toEqual({ ok: true, message: 'Connected.' });
+  });
+
+  it('reports custom STT /models 404 as reachable without models', async () => {
+    const fetchImpl = vi.fn(async () => new Response('nope', { status: 404 }));
+    const res = await probeTranscription({
+      providerId: 'custom',
+      apiKey: '',
+      baseUrl: 'http://127.0.0.1:8080/v1',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.message).toMatch(/models endpoint not supported/i);
+  });
+
+  it('still treats cloud STT HTTP 404 as a bad URL', async () => {
+    const fetchImpl = vi.fn(async () => new Response('nope', { status: 404 }));
+    const res = await probeTranscription({
+      providerId: 'openai',
+      apiKey: 'sk-test',
+      baseUrl: '',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.message).toMatch(/404/);
   });
 
   it('stops when host permission is declined', async () => {
