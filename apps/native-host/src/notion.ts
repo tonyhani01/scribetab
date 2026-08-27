@@ -1,11 +1,17 @@
+import { readFile } from 'node:fs/promises';
 import type { MeetingSession, TranscriptSegment } from '@scribetab/shared';
+import { atomicWriteFile } from './atomicWrite.js';
+import { notionPagesPath } from './paths.js';
 
 export const NOTION_API = 'https://api.notion.com/v1';
 export const NOTION_VERSION = '2022-06-28';
 export const NOTION_RICH_TEXT_MAX = 2000;
 export const NOTION_CHILDREN_MAX = 100;
-const MAX_429_RETRIES = 3;
-const MAX_RETRY_AFTER_MS = 30_000;
+export const NOTION_BATCH_MAX_BYTES = 400 * 1024;
+export const MAX_429_RETRIES = 3;
+export const MAX_RETRY_AFTER_MS = 30_000;
+export const NOTION_FETCH_TIMEOUT_MS = 15_000;
+export const NOTION_INTEGRATION_BUDGET_MS = 60_000;
 
 export type NotionRichText = {
   type: 'text';
@@ -29,17 +35,50 @@ export type NotionBlock =
       paragraph: { rich_text: NotionRichText[] };
     };
 
+export type NotionPageRecord = {
+  pageId: string;
+  status: 'ok' | 'partial';
+  error?: string;
+};
+
+export type NotionPageMap = Record<string, NotionPageRecord>;
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+function safeEnd(text: string, start: number, proposed: number): number {
+  let end = proposed;
+  if (
+    end > start &&
+    end < text.length &&
+    isHighSurrogate(text.charCodeAt(end - 1)) &&
+    isLowSurrogate(text.charCodeAt(end))
+  ) {
+    end -= 1;
+  }
+  return end > start ? end : proposed;
+}
+
 export function chunkRichText(text: string, max = NOTION_RICH_TEXT_MAX): NotionRichText[] {
   if (!text) return [];
   const parts: NotionRichText[] = [];
-  for (let i = 0; i < text.length; i += max) {
-    parts.push({ type: 'text', text: { content: text.slice(i, i + max) } });
+  let i = 0;
+  while (i < text.length) {
+    const end = safeEnd(text, i, Math.min(i + max, text.length));
+    parts.push({ type: 'text', text: { content: text.slice(i, end) } });
+    i = end;
   }
   return parts;
 }
 
 function heading1(text: string): NotionBlock {
-  const content = text.slice(0, NOTION_RICH_TEXT_MAX) || 'Untitled';
+  const content = chunkRichText(text.slice(0, NOTION_RICH_TEXT_MAX + 2), NOTION_RICH_TEXT_MAX)[0]?.text.content
+    || 'Untitled';
   return {
     object: 'block',
     type: 'heading_1',
@@ -48,7 +87,7 @@ function heading1(text: string): NotionBlock {
 }
 
 function heading2(text: string): NotionBlock {
-  const content = text.slice(0, NOTION_RICH_TEXT_MAX);
+  const content = chunkRichText(text.slice(0, NOTION_RICH_TEXT_MAX + 2), NOTION_RICH_TEXT_MAX)[0]?.text.content ?? '';
   return {
     object: 'block',
     type: 'heading_2',
@@ -109,9 +148,27 @@ export function buildNotionBlocks(
   return blocks;
 }
 
-export function batchBlocks<T>(items: T[], size = NOTION_CHILDREN_MAX): T[][] {
+export function batchBlocks<T>(
+  items: T[],
+  size = NOTION_CHILDREN_MAX,
+  maxBytes = NOTION_BATCH_MAX_BYTES,
+): T[][] {
   const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  let cur: T[] = [];
+  for (const item of items) {
+    if (cur.length >= size) {
+      out.push(cur);
+      cur = [];
+    } else if (cur.length > 0) {
+      const nextBytes = Buffer.byteLength(JSON.stringify([...cur, item]), 'utf8');
+      if (nextBytes > maxBytes) {
+        out.push(cur);
+        cur = [];
+      }
+    }
+    cur.push(item);
+  }
+  if (cur.length) out.push(cur);
   return out;
 }
 
@@ -137,11 +194,43 @@ function notionError(status: number, body: string): Error {
   return new Error(`Notion API ${status}${snippet ? `: ${snippet}` : ''}`);
 }
 
+export async function loadNotionPageMap(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): Promise<NotionPageMap> {
+  const path = notionPagesPath(platform, env);
+  let text: string;
+  try {
+    text = await readFile(path, 'utf8');
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') return {};
+    throw e;
+  }
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return parsed as NotionPageMap;
+  } catch {
+    return {};
+  }
+}
+
+export async function saveNotionPageMap(
+  map: NotionPageMap,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): Promise<void> {
+  const path = notionPagesPath(platform, env);
+  await atomicWriteFile(path, JSON.stringify(map, null, 2) + '\n', { mode: 0o600 });
+}
+
 async function notionFetch(
   path: string,
   token: string,
   init: { method: string; body?: string },
   fetchImpl: typeof fetch,
+  deadline: number,
 ): Promise<Response> {
   if (!path.startsWith('/')) throw new Error('Notion path must be absolute on api.notion.com');
   const url = `${NOTION_API}${path}`;
@@ -150,22 +239,58 @@ async function notionFetch(
   }
   let last429: Response | undefined;
   for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
-    const res = await fetchImpl(url, {
-      method: init.method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Notion-Version': NOTION_VERSION,
-        'Content-Type': 'application/json',
-      },
-      body: init.body,
-    });
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error('Notion integration timed out');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.min(NOTION_FETCH_TIMEOUT_MS, remaining));
+    let res: Response;
+    try {
+      res = await fetchImpl(url, {
+        method: init.method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Notion-Version': NOTION_VERSION,
+          'Content-Type': 'application/json',
+        },
+        body: init.body,
+        signal: controller.signal,
+      });
+    } catch (e) {
+      if (e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
+        throw new Error('Notion request timed out');
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
     if (res.status !== 429) return res;
     last429 = res;
     if (attempt === MAX_429_RETRIES) break;
-    await sleep(retryAfterMs(res));
+    const wait = retryAfterMs(res);
+    if (Date.now() + wait >= deadline) throw new Error('Notion integration timed out');
+    await sleep(wait);
   }
   const body = last429 ? await last429.text().catch(() => '') : '';
   throw notionError(429, body);
+}
+
+async function archiveNotionPage(
+  pageId: string,
+  token: string,
+  fetchImpl: typeof fetch,
+  deadline: number,
+): Promise<void> {
+  const res = await notionFetch(
+    `/pages/${pageId}`,
+    token,
+    { method: 'PATCH', body: JSON.stringify({ archived: true }) },
+    fetchImpl,
+    deadline,
+  );
+  if (!res.ok && res.status !== 404) {
+    const t = await res.text().catch(() => '');
+    throw notionError(res.status, t);
+  }
 }
 
 export async function createNotionPage(opts: {
@@ -175,13 +300,32 @@ export async function createNotionPage(opts: {
   segments: TranscriptSegment[];
   summaryMarkdown?: string;
   fetchImpl?: typeof fetch;
-}): Promise<string> {
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  deadline?: number;
+}): Promise<{ pageId: string; skipped: boolean }> {
   const token = opts.token.trim();
   const parentPageId = opts.parentPageId.trim();
   if (!token) throw new Error('Notion enabled but notion.token is not set');
   if (!parentPageId) throw new Error('Notion enabled but notion.parentPageId is not set');
 
   const fetchImpl = opts.fetchImpl ?? fetch;
+  const env = opts.env ?? process.env;
+  const platform = opts.platform ?? process.platform;
+  const deadline = opts.deadline ?? Date.now() + NOTION_INTEGRATION_BUDGET_MS;
+  const sessionId = opts.session.id;
+
+  const map = await loadNotionPageMap(env, platform);
+  const existing = map[sessionId];
+  if (existing?.status === 'ok' && existing.pageId) {
+    return { pageId: existing.pageId, skipped: true };
+  }
+  if (existing?.status === 'partial' && existing.pageId) {
+    await archiveNotionPage(existing.pageId, token, fetchImpl, deadline);
+    delete map[sessionId];
+    await saveNotionPageMap(map, env, platform);
+  }
+
   const blocks = buildNotionBlocks(opts.session, opts.segments, opts.summaryMarkdown);
   const batches = batchBlocks(blocks);
   const first = batches[0] ?? [];
@@ -202,6 +346,7 @@ export async function createNotionPage(opts: {
       }),
     },
     fetchImpl,
+    deadline,
   );
   const createText = await createRes.text();
   if (!createRes.ok) throw notionError(createRes.status, createText);
@@ -213,17 +358,34 @@ export async function createNotionPage(opts: {
   }
   if (!pageId) throw new Error('Notion pages.create missing page id');
 
-  for (const batch of batches.slice(1)) {
-    const appendRes = await notionFetch(
-      `/blocks/${pageId}/children`,
-      token,
-      { method: 'PATCH', body: JSON.stringify({ children: batch }) },
-      fetchImpl,
-    );
-    if (!appendRes.ok) {
-      const t = await appendRes.text().catch(() => '');
-      throw notionError(appendRes.status, t);
+  map[sessionId] = { pageId, status: 'partial' };
+  await saveNotionPageMap(map, env, platform);
+
+  try {
+    for (const batch of batches.slice(1)) {
+      const appendRes = await notionFetch(
+        `/blocks/${pageId}/children`,
+        token,
+        { method: 'PATCH', body: JSON.stringify({ children: batch }) },
+        fetchImpl,
+        deadline,
+      );
+      if (!appendRes.ok) {
+        const t = await appendRes.text().catch(() => '');
+        throw notionError(appendRes.status, t);
+      }
     }
+  } catch (e) {
+    map[sessionId] = {
+      pageId,
+      status: 'partial',
+      error: e instanceof Error ? e.message : String(e),
+    };
+    await saveNotionPageMap(map, env, platform);
+    throw e;
   }
-  return pageId;
+
+  map[sessionId] = { pageId, status: 'ok' };
+  await saveNotionPageMap(map, env, platform);
+  return { pageId, skipped: false };
 }

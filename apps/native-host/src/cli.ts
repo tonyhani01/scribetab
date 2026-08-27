@@ -24,6 +24,7 @@ Usage:
   scribetab-host uninstall
   scribetab-host config get [key]
   scribetab-host config set <key> <value>
+  scribetab-host config set notion.token -
   scribetab-host --help
 
 Install copies the host into a stable per-user directory (npx cache is evictable)
@@ -44,6 +45,13 @@ ${configPathHelp()}
 
 Keys: obsidianEnabled, obsidianVaultPath, notionEnabled,
       notion.token, notion.parentPageId
+
+Set notion.token from stdin (recommended, avoids argv exposure):
+
+  scribetab-host config set notion.token -
+
+obsidianVaultPath must be an absolute path. Config writes are atomic
+(temp file + rename, mode 0600) but not locked against concurrent writers.
 `;
 
 export function parseExtensionId(args: string[]): string | undefined {
@@ -122,9 +130,21 @@ export async function runHostCli(args: string[]): Promise<void> {
   await runNativeLoop();
 }
 
+async function readStdinValue(stdin: NodeJS.ReadableStream): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString('utf8').replace(/\r?\n$/, '');
+}
+
 export async function runConfigCli(
   args: string[],
-  io: { stdout: NodeJS.WritableStream; stderr: NodeJS.WritableStream } = process,
+  io: {
+    stdout: NodeJS.WritableStream;
+    stderr: NodeJS.WritableStream;
+    stdin?: NodeJS.ReadableStream;
+  } = process,
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): Promise<void> {
@@ -149,7 +169,19 @@ export async function runConfigCli(
         'Usage: scribetab-host config set <key> <value>\nKeys: obsidianEnabled, obsidianVaultPath, notionEnabled, notion.token, notion.parentPageId',
       );
     }
-    const value = args.slice(2).join(' ');
+    if (args.length > 3) {
+      throw new Error('config set takes a single value argument; quote it if it contains spaces');
+    }
+    let value = args[2];
+    if (value === undefined) {
+      throw new Error(
+        'Usage: scribetab-host config set <key> <value>\nKeys: obsidianEnabled, obsidianVaultPath, notionEnabled, notion.token, notion.parentPageId',
+      );
+    }
+    if (key === 'notion.token' && value === '-') {
+      const stdin = io.stdin ?? process.stdin;
+      value = await readStdinValue(stdin);
+    }
     const cfg = setConfigValue(await loadConfig(env, platform), key, value);
     const path = await saveConfig(cfg, env, platform);
     io.stdout.write(`Wrote ${path}\n`);

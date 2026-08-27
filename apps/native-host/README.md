@@ -45,9 +45,13 @@ scribetab-host config get obsidianVaultPath
 scribetab-host config set obsidianEnabled true
 scribetab-host config set obsidianVaultPath /path/to/vault
 scribetab-host config set notionEnabled true
-scribetab-host config set notion.token secret
+scribetab-host config set notion.token -
 scribetab-host config set notion.parentPageId PAGE_ID
 ```
+
+`config set` takes a single value argument (quote it if it contains spaces). Values may start with `-`. The recommended way to set `notion.token` is `-`, which reads the token from stdin and avoids exposing it on the process command line. The argv form (`config set notion.token secret`) still works.
+
+`obsidianVaultPath` must be an absolute path. Config writes are atomic (temp file + rename, mode `0600`) but are **not locked** against concurrent `config set` processes.
 
 Config file (mode `0600`):
 
@@ -57,4 +61,4 @@ Config file (mode `0600`):
 | Linux | `$XDG_DATA_HOME/ScribeTab/config.json` (default `~/.local/share/ScribeTab/config.json`) |
 | Windows | `%APPDATA%\ScribeTab\config.json` |
 
-When enabled, a successful `sync_end` copies transcript Markdown (plus summary when present) to `<vault>/ScribeTab/<date>-<slug>.md`, and/or creates a Notion child page under `parentPageId` via `https://api.notion.com` only. Integration failures are returned on `HostSyncAck.error` and never fail the meetings-dir write. `config get` with no key redacts `notion.token`.
+When enabled, a successful meetings-dir commit is acked immediately; Obsidian/Notion then run best-effort. Re-sync of a known Notion `sessionId` skips page creation (a partial append is archived and recreated). Integration status is written to `integrations.json` beside the meeting (and the Notion page-id map in the user data dir). Failures never fail the meetings-dir write or the core ack; they surface as a follow-up host message and in the side panel as a warning. `config get` with no key redacts `notion.token`.

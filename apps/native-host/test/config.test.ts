@@ -43,6 +43,7 @@ describe('set/get config values', () => {
     cfg = setConfigValue(cfg, 'notion.token', '');
     cfg = setConfigValue(cfg, 'notion.parentPageId', '');
     expect(cfg.notion).toBeUndefined();
+    expect(() => setConfigValue(cfg, 'obsidianVaultPath', 'relative/vault')).toThrow(/absolute/);
   });
 
   it('redacts the token in dumps', () => {
@@ -81,8 +82,6 @@ describe('load/save config', () => {
       expect(path).toBe(join(home, '.local', 'share', 'ScribeTab', 'config.json'));
       const loaded = await loadConfig(env, 'linux');
       expect(loaded.obsidianVaultPath).toBe('/tmp/vault');
-      const mode = (await readFile(path).then(() => true)) && true;
-      expect(mode).toBe(true);
     });
   });
 

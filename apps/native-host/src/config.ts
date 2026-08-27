@@ -1,6 +1,6 @@
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { isAbsolute } from 'node:path';
+import { atomicWriteFile } from './atomicWrite.js';
 import { configPath } from './paths.js';
 
 export interface NotionConfig {
@@ -100,13 +100,8 @@ export async function saveConfig(
   platform: NodeJS.Platform = process.platform,
 ): Promise<string> {
   const path = configPath(platform, env);
-  await mkdir(dirname(path), { recursive: true });
-  const tmp = join(dirname(path), `.config-${randomUUID()}.tmp`);
   const body = JSON.stringify(cfg, null, 2) + '\n';
-  await writeFile(tmp, body, 'utf8');
-  await chmod(tmp, 0o600).catch(() => {});
-  await rename(tmp, path);
-  await chmod(path, 0o600).catch(() => {});
+  await atomicWriteFile(path, body, { mode: 0o600 });
   return path;
 }
 
@@ -148,7 +143,13 @@ export function setConfigValue(cfg: HostConfig, key: ConfigKey, value: string): 
       break;
     case 'obsidianVaultPath':
       if (unset) delete next.obsidianVaultPath;
-      else next.obsidianVaultPath = value.trim();
+      else {
+        const path = value.trim();
+        if (!isAbsolute(path)) {
+          throw new Error(`obsidianVaultPath must be an absolute path, got ${JSON.stringify(path)}`);
+        }
+        next.obsidianVaultPath = path;
+      }
       break;
     case 'notionEnabled':
       next.notionEnabled = parseBool(value);

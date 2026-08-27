@@ -1,8 +1,11 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { Readable, Writable } from 'node:stream';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { runConfigCli } from '../src/cli.js';
+import { loadConfig } from '../src/config.js';
 import { configPath } from '../src/paths.js';
 import { HOST_JS, HOST_LEGACY_JS, MCP_JS, withHome } from './helpers.js';
 
@@ -55,4 +58,45 @@ describe('CLI config', () => {
       expect(onDisk).toContain('ntn_secret');
     });
   });
+
+  it('keeps values starting with - and rejects extra args', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      const io = captureIo();
+      await runConfigCli(['set', 'obsidianVaultPath', '/tmp/vault-name'], io, env, 'linux');
+      await runConfigCli(['set', 'obsidianVaultPath', '/tmp/-weird'], io, env, 'linux');
+      const cfg = await loadConfig(env, 'linux');
+      expect(cfg.obsidianVaultPath).toBe('/tmp/-weird');
+      await expect(runConfigCli(['set', 'obsidianVaultPath', '/a', '/b'], io, env, 'linux')).rejects.toThrow(
+        /single value/,
+      );
+      await runConfigCli(['set', 'obsidianVaultPath', '/tmp/hello  world'], io, env, 'linux');
+      expect((await loadConfig(env, 'linux')).obsidianVaultPath).toBe('/tmp/hello  world');
+    });
+  });
+
+  it('reads notion.token from stdin when the value is -', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      const io = captureIo(Readable.from(['ntn_from_stdin\n']));
+      await runConfigCli(['set', 'notion.token', '-'], io, env, 'linux');
+      const cfg = await loadConfig(env, 'linux');
+      expect(cfg.notion?.token).toBe('ntn_from_stdin');
+    });
+  });
 });
+
+function linuxEnv(home: string): NodeJS.ProcessEnv {
+  return { HOME: home, USERPROFILE: home, XDG_DATA_HOME: join(home, '.local', 'share') };
+}
+
+function captureIo(stdin?: Readable) {
+  const chunks: Buffer[] = [];
+  const stdout = new Writable({
+    write(chunk, _enc, cb) {
+      chunks.push(Buffer.from(chunk as Buffer));
+      cb();
+    },
+  });
+  return { stdout, stderr: stdout, stdin, chunks };
+}

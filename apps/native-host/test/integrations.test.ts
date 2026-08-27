@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { MeetingSession, TranscriptSegment } from '@scribetab/shared';
 import { saveConfig } from '../src/config.js';
-import { runPostSyncIntegrations } from '../src/integrations.js';
+import { runPostSyncIntegrations, sanitizeIntegrationError } from '../src/integrations.js';
 import { withHome } from './helpers.js';
 
 const session: MeetingSession = {
@@ -28,16 +28,26 @@ function linuxEnv(home: string): NodeJS.ProcessEnv {
   return { HOME: home, USERPROFILE: home, XDG_DATA_HOME: join(home, '.local', 'share') };
 }
 
+describe('sanitizeIntegrationError', () => {
+  it('redacts the token and caps length', () => {
+    const token = 'ntn_super_secret_token';
+    const out = sanitizeIntegrationError(`failed ${token} ${'x'.repeat(500)}`, token);
+    expect(out).not.toContain(token);
+    expect(out).toContain('[token]');
+    expect(out.length).toBeLessThanOrEqual(200);
+  });
+});
+
 describe('runPostSyncIntegrations', () => {
   it('is a no-op when toggles are off', async () => {
     await withHome(async (home) => {
-      const errors = await runPostSyncIntegrations({
+      const statuses = await runPostSyncIntegrations({
         session,
         segments,
         env: linuxEnv(home),
         platform: 'linux',
       });
-      expect(errors).toEqual([]);
+      expect(statuses).toEqual({});
     });
   });
 
@@ -51,22 +61,32 @@ describe('runPostSyncIntegrations', () => {
           obsidianEnabled: true,
           obsidianVaultPath: vault,
           notionEnabled: true,
-          notion: { token: 't', parentPageId: 'p' },
+          notion: { token: 'ntn_secret_value', parentPageId: 'p' },
         },
         env,
         'linux',
       );
-      const errors = await runPostSyncIntegrations({
+      const meetingDir = join(home, 'ScribeTab', 'meetings', 'int');
+      await mkdir(meetingDir, { recursive: true });
+      const statuses = await runPostSyncIntegrations({
         session,
         segments,
         summaryMarkdown: 'done',
+        meetingDir,
         env,
         platform: 'linux',
         fetchImpl: async () => new Response('nope', { status: 401 }),
       });
       const md = await readFile(join(vault, 'ScribeTab', '2026-08-27-integrations.md'), 'utf8');
       expect(md).toContain('hi');
-      expect(errors.some((e) => e.includes('401'))).toBe(true);
+      expect(statuses.obsidian?.ok).toBe(true);
+      expect(statuses.notion?.ok).toBe(false);
+      expect(statuses.notion?.message).toMatch(/401/);
+      expect(JSON.stringify(statuses)).not.toContain('ntn_secret_value');
+      const recorded = JSON.parse(await readFile(join(meetingDir, 'integrations.json'), 'utf8')) as {
+        notion: { ok: boolean };
+      };
+      expect(recorded.notion.ok).toBe(false);
     });
   });
 
@@ -78,13 +98,14 @@ describe('runPostSyncIntegrations', () => {
         env,
         'linux',
       );
-      const errors = await runPostSyncIntegrations({
+      const statuses = await runPostSyncIntegrations({
         session,
         segments,
         env,
         platform: 'linux',
       });
-      expect(errors.join(' ')).toMatch(/does not exist/);
+      expect(statuses.obsidian?.ok).toBe(false);
+      expect(statuses.obsidian?.message).toMatch(/does not exist/);
     });
   });
 
@@ -94,13 +115,13 @@ describe('runPostSyncIntegrations', () => {
       const path = join(home, '.local', 'share', 'ScribeTab', 'config.json');
       await mkdir(join(path, '..'), { recursive: true });
       await writeFile(path, '{', 'utf8');
-      const errors = await runPostSyncIntegrations({
+      const statuses = await runPostSyncIntegrations({
         session,
         segments,
         env,
         platform: 'linux',
       });
-      expect(errors.join(' ')).toMatch(/Invalid host config/);
+      expect(statuses.obsidian?.message).toMatch(/Invalid host config/);
     });
   });
 });

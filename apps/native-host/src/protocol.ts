@@ -1,6 +1,6 @@
 import type { HostSyncAck, HostSyncMessage } from '@scribetab/shared';
 import { writeNativeMessage } from './framing.js';
-import { runPostSyncIntegrations } from './integrations.js';
+import { integrationFollowUpError, runPostSyncIntegrations } from './integrations.js';
 import { meetingsDir } from './paths.js';
 import {
   abortSync,
@@ -12,6 +12,11 @@ import {
 
 const MAX_ACK_ERROR = 1000;
 const MAX_ACK_ID = 80;
+
+export type NativeSyncHostOpts = {
+  fetchImpl?: typeof fetch;
+  platform?: NodeJS.Platform;
+};
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null;
@@ -33,12 +38,15 @@ export class NativeSyncHost {
   private inflight: InFlightSync | null = null;
   private silenced = false;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly opts: NativeSyncHostOpts;
 
   constructor(
     private readonly stdout: NodeJS.WritableStream,
     env: NodeJS.ProcessEnv = process.env,
+    opts: NativeSyncHostOpts = {},
   ) {
     this.env = env;
+    this.opts = opts;
   }
 
   async handle(raw: unknown): Promise<void> {
@@ -116,19 +124,25 @@ export class NativeSyncHost {
         const session = this.inflight.session;
         const segments = this.inflight.segments;
         const summaryMarkdown = this.inflight.summaryMarkdown;
-        await commitSync(this.inflight, meetingsDir(this.env));
+        const dest = await commitSync(this.inflight, meetingsDir(this.env));
         this.inflight = null;
-        const integrationErrors = await runPostSyncIntegrations({
-          session,
-          segments,
-          summaryMarkdown,
-          env: this.env,
-        });
-        const notes = [
-          skipped ? `audio skipped: ${skipped}` : '',
-          ...integrationErrors,
-        ].filter(Boolean);
-        await this.ok(sessionId, notes.length ? notes.join('; ') : undefined);
+        await this.ok(sessionId, skipped ? `audio skipped: ${skipped}` : undefined);
+        let followUp: string | undefined;
+        try {
+          const statuses = await runPostSyncIntegrations({
+            session,
+            segments,
+            summaryMarkdown,
+            meetingDir: dest,
+            env: this.env,
+            platform: this.opts.platform,
+            fetchImpl: this.opts.fetchImpl,
+          });
+          followUp = integrationFollowUpError(statuses);
+        } catch (e) {
+          followUp = e instanceof Error ? e.message : String(e);
+        }
+        await this.ok(sessionId, followUp);
         return;
       }
       default:
