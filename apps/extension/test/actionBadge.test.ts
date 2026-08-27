@@ -7,9 +7,11 @@ describe('badgeText', () => {
     expect(badgeText({ url: 'https://us02web.zoom.us/j/1', tabId: 1 })).toBe('REC?');
   });
 
-  it('is blank on ordinary pages', () => {
+  it('is blank on ordinary pages and YouTube', () => {
     expect(badgeText({ url: 'https://example.com', tabId: 1 })).toBe('');
     expect(badgeText({ url: undefined, tabId: 1 })).toBe('');
+    expect(badgeText({ url: 'https://www.youtube.com/watch?v=1', tabId: 1 })).toBe('');
+    expect(badgeText({ url: 'https://youtu.be/abc', tabId: 1 })).toBe('');
   });
 
   it('shows REC on the captured tab while recording', () => {

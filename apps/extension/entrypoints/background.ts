@@ -27,7 +27,11 @@ import {
   runFinalizeIntelligence,
   scheduleFinalizeIntelligence,
 } from '@/utils/intelligence';
-import { refreshActionBadge, refreshActiveTabBadge } from '@/utils/actionBadge';
+import {
+  refreshActionBadge,
+  refreshActiveTabBadge,
+  surfaceCommandError,
+} from '@/utils/actionBadge';
 import {
   COMMAND_OPEN_SIDE_PANEL,
   COMMAND_START_CAPTURE,
@@ -62,7 +66,7 @@ import {
   updateSession,
 } from '@/utils/sessionStore';
 import { getSettings } from '@/utils/settings';
-import { humanError } from '@/utils/userError';
+import { GENERIC_USER_ERROR, humanError } from '@/utils/userError';
 
 let creatingOffscreen: Promise<void> | null = null;
 let bootReady: Promise<void> = Promise.resolve();
@@ -339,6 +343,8 @@ async function setIdle(extra: Record<string, unknown> = {}): Promise<void> {
   if (typeof capturedTabId === 'number') notifyMeetTab(capturedTabId, false);
   captionBuffer.length = 0;
   await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null, ...extra });
+  // Clear REC on the tab we captured, not whatever is focused now.
+  if (typeof capturedTabId === 'number') void refreshActionBadge(capturedTabId);
   void refreshActiveTabBadge();
 }
 
@@ -478,14 +484,17 @@ async function handleStart(): Promise<Ack> {
     if (createdId) await completeSession(createdId, 'failed').catch(() => {});
     if (startedTabId != null) notifyMeetTab(startedTabId, false);
     captionBuffer.length = 0;
+    const startError = humanError(e);
     await chrome.storage.local.set({
       captureState: 'idle',
       capturedTabId: null,
       sessionCaptionsOnly: false,
       captureNotice: null,
+      lastError: startError,
     });
+    if (startedTabId != null) void refreshActionBadge(startedTabId);
     void refreshActiveTabBadge();
-    return { ok: false, error: humanError(e) };
+    return { ok: false, error: startError };
   } finally {
     opInFlight = false;
   }
@@ -675,18 +684,43 @@ export default defineBackground(() => {
   });
 
   chrome.commands.onCommand.addListener((command) => {
+    if (command === COMMAND_OPEN_SIDE_PANEL) {
+      // sidePanel.open must run in the user-gesture turn — no await first.
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const queryErr = chrome.runtime.lastError?.message;
+        if (queryErr) {
+          void surfaceCommandError(humanError(queryErr));
+          return;
+        }
+        const windowId = tabs[0]?.windowId;
+        if (windowId == null) {
+          void surfaceCommandError('No active tab to record.');
+          return;
+        }
+        try {
+          const opened = chrome.sidePanel.open({ windowId });
+          void Promise.resolve(opened).catch((e) => {
+            void surfaceCommandError(humanError(e));
+          });
+        } catch (e) {
+          void surfaceCommandError(humanError(e));
+        }
+      });
+      return;
+    }
     void bootReady.then(async () => {
-      if (command === COMMAND_START_CAPTURE) {
-        await handleStart();
-        return;
-      }
-      if (command === COMMAND_STOP_CAPTURE) {
-        await handleStop();
-        return;
-      }
-      if (command === COMMAND_OPEN_SIDE_PANEL) {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tab?.windowId != null) await chrome.sidePanel.open({ windowId: tab.windowId });
+      try {
+        if (command === COMMAND_START_CAPTURE) {
+          const res = await handleStart();
+          if (!res.ok) void surfaceCommandError(res.error ?? GENERIC_USER_ERROR);
+          return;
+        }
+        if (command === COMMAND_STOP_CAPTURE) {
+          const res = await handleStop();
+          if (!res.ok) void surfaceCommandError(res.error ?? GENERIC_USER_ERROR);
+        }
+      } catch (e) {
+        void surfaceCommandError(humanError(e));
       }
     });
   });

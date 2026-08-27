@@ -1,5 +1,11 @@
 import type { CaptureState } from './messages';
-import { isMeetingPlatform } from './platform';
+import { platformFromUrl } from './platform';
+
+/** REC? is meet/teams/zoom only — YouTube stays capturable via the popup. */
+export function isBadgeInviteUrl(url: string | undefined): boolean {
+  const p = platformFromUrl(url);
+  return p === 'meet' || p === 'teams' || p === 'zoom';
+}
 
 export function badgeText(opts: {
   url?: string;
@@ -14,7 +20,7 @@ export function badgeText(opts: {
   ) {
     return 'REC';
   }
-  if (isMeetingPlatform(opts.url)) return 'REC?';
+  if (isBadgeInviteUrl(opts.url)) return 'REC?';
   return '';
 }
 
@@ -23,16 +29,22 @@ export async function applyBadge(tabId: number, text: string): Promise<void> {
   if (text) {
     await chrome.action.setBadgeBackgroundColor({
       tabId,
-      color: text === 'REC' ? '#b00020' : '#c45c26',
+      color: text === 'REC?' ? '#c45c26' : '#b00020',
     });
   }
 }
 
+let badgeToken = 0;
+const tabToken = new Map<number, number>();
+
 export async function refreshActionBadge(tabId: number, url?: string): Promise<void> {
+  const token = ++badgeToken;
+  tabToken.set(tabId, token);
   const { captureState, capturedTabId } = await chrome.storage.local.get([
     'captureState',
     'capturedTabId',
   ]);
+  if (tabToken.get(tabId) !== token) return;
   let resolved = url;
   if (resolved === undefined) {
     try {
@@ -41,6 +53,7 @@ export async function refreshActionBadge(tabId: number, url?: string): Promise<v
       resolved = undefined;
     }
   }
+  if (tabToken.get(tabId) !== token) return;
   const text = badgeText({
     url: resolved,
     tabId,
@@ -54,4 +67,15 @@ export async function refreshActiveTabBadge(): Promise<void> {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (tab?.id == null) return;
   await refreshActionBadge(tab.id, tab.url);
+}
+
+/** Last-error for the popup plus a transient "!" on the active tab. */
+export async function surfaceCommandError(message: string): Promise<void> {
+  console.warn('[scribetab]', message);
+  await chrome.storage.local.set({ lastError: message });
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (tab?.id == null) return;
+  const token = ++badgeToken;
+  tabToken.set(tab.id, token);
+  await applyBadge(tab.id, '!');
 }
