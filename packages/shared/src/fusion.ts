@@ -1,4 +1,4 @@
-import type { TranscriptSegment } from './types';
+import type { TranscriptSegment } from './types.js';
 
 /** Session-relative caption interval used to attribute speakers onto audio segments. */
 export interface CaptionCue {

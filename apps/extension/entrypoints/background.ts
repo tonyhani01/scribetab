@@ -1,4 +1,9 @@
-import { originPattern, transcriptionEndpoint } from '@scribetab/shared';
+import {
+  originPattern,
+  redactSegment,
+  redactSegments,
+  transcriptionEndpoint,
+} from '@scribetab/shared';
 import type { TranscriptSegment } from '@scribetab/shared';
 import {
   acceptsCaptionEvents,
@@ -145,12 +150,16 @@ async function applyFusion(sessionId: string, force = false): Promise<void> {
   const fused = fuseWithCaptions(segs, sessionId);
   const changed = fused.filter((s, i) => s.speaker !== segs[i]?.speaker);
   if (changed.length === 0) return;
-  await putSegments(fused);
+  const settings = await getSettings();
+  const stored = settings.redactAtRest
+    ? redactSegments(fused, { extraTerms: settings.redactTerms })
+    : fused;
+  await putSegments(stored);
   notifySidePanel({
     target: 'sidepanel',
     type: 'SEGMENTS_UPDATED',
     sessionId,
-    segments: fused,
+    segments: stored,
   });
 }
 
@@ -164,7 +173,11 @@ async function applyCaptionEvent(
   if (!cue) return;
 
   if (captionsOnly) {
-    const segment: TranscriptSegment = captionCueToSegment(sessionId, cue, crypto.randomUUID());
+    let segment: TranscriptSegment = captionCueToSegment(sessionId, cue, crypto.randomUUID());
+    const settings = await getSettings();
+    if (settings.redactAtRest) {
+      segment = redactSegment(segment, { extraTerms: settings.redactTerms });
+    }
     await putSegments([segment]);
     await syncSegmentCount(sessionId);
     notifySidePanel({
