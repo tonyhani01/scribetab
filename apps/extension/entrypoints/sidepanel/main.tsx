@@ -119,11 +119,19 @@ function LiveView() {
 
     const onMessage = (raw: unknown) => {
       const msg = raw as ToSidePanel;
-      if (msg?.target !== 'sidepanel' || msg.type !== 'SEGMENTS_ADDED') return;
+      if (msg?.target !== 'sidepanel') return;
       if (sessionRef.current && msg.sessionId !== sessionRef.current) return;
-      setSegments((prev) =>
-        [...prev, ...msg.segments].sort((a, b) => a.startMs - b.startMs),
-      );
+      if (msg.type === 'SEGMENTS_ADDED') {
+        setSegments((prev) =>
+          [...prev, ...msg.segments].sort((a, b) => a.startMs - b.startMs),
+        );
+      } else if (msg.type === 'SEGMENTS_UPDATED') {
+        setSegments((prev) => {
+          const map = new Map(prev.map((s) => [s.id, s]));
+          for (const s of msg.segments) map.set(s.id, s);
+          return [...map.values()].sort((a, b) => a.startMs - b.startMs);
+        });
+      }
     };
     chrome.runtime.onMessage.addListener(onMessage);
     return () => {
@@ -225,12 +233,20 @@ function LibraryView() {
 
     const onMessage = (raw: unknown) => {
       const msg = raw as ToSidePanel;
-      if (msg?.target !== 'sidepanel' || msg.type !== 'SEGMENTS_ADDED') return;
+      if (msg?.target !== 'sidepanel') return;
       void reload();
       if (openIdRef.current !== msg.sessionId) return;
-      setOpenSegments((prev) =>
-        [...prev, ...msg.segments].sort((a, b) => a.startMs - b.startMs),
-      );
+      if (msg.type === 'SEGMENTS_ADDED') {
+        setOpenSegments((prev) =>
+          [...prev, ...msg.segments].sort((a, b) => a.startMs - b.startMs),
+        );
+      } else if (msg.type === 'SEGMENTS_UPDATED') {
+        setOpenSegments((prev) => {
+          const map = new Map(prev.map((s) => [s.id, s]));
+          for (const s of msg.segments) map.set(s.id, s);
+          return [...map.values()].sort((a, b) => a.startMs - b.startMs);
+        });
+      }
     };
     const onStorage = (c: Record<string, chrome.storage.StorageChange>, area: string) => {
       if (area !== 'local') return;
@@ -435,7 +451,7 @@ function SegmentList({ segments, empty }: { segments: TranscriptSegment[]; empty
       {segments.map((s) => (
         <li key={s.id} style={{ margin: '6px 0' }}>
           <span style={{ color: '#999', fontSize: 11, marginRight: 6 }}>{fmt(s.startMs)}</span>
-          {s.speaker && <span style={{ fontWeight: 600, marginRight: 4 }}>{s.speaker}:</span>}
+          {s.speaker && <strong style={{ marginRight: 4 }}>{s.speaker}:</strong>}
           <span style={s.text === '[transcription failed]' ? { color: 'crimson' } : undefined}>
             {s.text}
           </span>

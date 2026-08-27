@@ -1,14 +1,23 @@
 import { originPattern, transcriptionEndpoint } from '@scribetab/shared';
+import type { TranscriptSegment } from '@scribetab/shared';
+import {
+  captionCueToSegment,
+  clearCaptionTimeline,
+  fuseWithCaptions,
+  ingestCaptionEvent,
+  resetCaptionTimeline,
+} from '@/utils/captionSession';
 import {
   llmConfigured,
   retryPendingIntelligence,
   runFinalizeIntelligence,
   scheduleFinalizeIntelligence,
 } from '@/utils/intelligence';
-import type { Ack, ToBackground, ToOffscreen, TranscriptionSettingsPayload } from '@/utils/messages';
+import type { Ack, ToBackground, ToOffscreen, ToSidePanel, TranscriptionSettingsPayload } from '@/utils/messages';
 import { persistHostStatus, syncSessionToHost } from '@/utils/nativeSync';
 import { platformFromUrl, titleFromTab } from '@/utils/platform';
 import { checkQuota } from '@/utils/quota';
+import { getSegments, putSegments } from '@/utils/segmentStore';
 import {
   bootExceptId,
   bootShouldIdle,
@@ -62,6 +71,71 @@ async function ensureOffscreen(): Promise<void> {
 
 function sendToOffscreen(msg: ToOffscreen): Promise<Ack> {
   return chrome.runtime.sendMessage(msg) as Promise<Ack>;
+}
+
+function notifySidePanel(msg: ToSidePanel): void {
+  void chrome.runtime.sendMessage(msg).catch(() => {
+    // Side panel not open — IndexedDB is the source of truth.
+  });
+}
+
+async function bumpSegmentCount(delta: number): Promise<void> {
+  const { segmentCount } = await chrome.storage.local.get('segmentCount');
+  const n = (typeof segmentCount === 'number' ? segmentCount : 0) + delta;
+  await chrome.storage.local.set({ segmentCount: n });
+}
+
+async function applyFusion(sessionId: string): Promise<void> {
+  const segs = await getSegments(sessionId);
+  if (segs.length === 0) return;
+  const fused = fuseWithCaptions(segs, sessionId);
+  const changed = fused.filter((s, i) => s.speaker !== segs[i]?.speaker);
+  if (changed.length === 0) return;
+  await putSegments(fused);
+  notifySidePanel({
+    target: 'sidepanel',
+    type: 'SEGMENTS_UPDATED',
+    sessionId,
+    segments: fused,
+  });
+}
+
+async function handleCaptionEvent(
+  msg: Extract<ToBackground, { type: 'CAPTION_EVENT' }>,
+): Promise<Ack> {
+  const { currentSessionId, captureState } = await chrome.storage.local.get([
+    'currentSessionId',
+    'captureState',
+  ]);
+  if (captureState !== 'recording' || typeof currentSessionId !== 'string') {
+    return { ok: true };
+  }
+  const session = await getSession(currentSessionId);
+  if (!session) return { ok: true };
+  const origin = Date.parse(session.startedAt);
+  if (!Number.isFinite(origin)) return { ok: true };
+  const cue = ingestCaptionEvent(currentSessionId, msg, origin);
+  if (!cue.text) return { ok: true };
+
+  const settings = await getSettings();
+  if (settings.captionsOnly) {
+    const segment: TranscriptSegment = captionCueToSegment(
+      currentSessionId,
+      cue,
+      crypto.randomUUID(),
+    );
+    await putSegments([segment]);
+    await bumpSegmentCount(1);
+    notifySidePanel({
+      target: 'sidepanel',
+      type: 'SEGMENTS_ADDED',
+      sessionId: currentSessionId,
+      segments: [segment],
+    });
+  } else {
+    await applyFusion(currentSessionId);
+  }
+  return { ok: true };
 }
 
 function stopOffscreen(sessionId?: string): Promise<Ack> {
@@ -125,6 +199,8 @@ async function completeSession(
   status: 'complete' | 'failed',
 ): Promise<void> {
   if (!sessionId) return;
+  await applyFusion(sessionId).catch(() => {});
+  clearCaptionTimeline(sessionId);
   const s = await getSettings();
   const flipped = await finalizeSession(sessionId, { retainAudio: s.retainAudio, status });
   if (flipped && status === 'complete') {
@@ -168,10 +244,11 @@ async function handleStart(): Promise<Ack> {
     const streamId = await getMediaStreamId({ targetTabId: tab.id });
 
     const settings = await getSettings();
-    const transcription = await transcriptionPayload();
+    const transcription = settings.captionsOnly ? null : await transcriptionPayload();
     const sessionId = crypto.randomUUID();
-    await failStaleRecordings(sessionId, settings.retainAudio);
     createdId = sessionId;
+    resetCaptionTimeline(sessionId);
+    await failStaleRecordings(sessionId, settings.retainAudio);
     await createSession({
       id: sessionId,
       title: titleFromTab(tab),
@@ -207,7 +284,7 @@ async function handleStart(): Promise<Ack> {
       chunkCount: 0,
       segmentCount: 0,
       currentSessionId: sessionId,
-      transcriptionConfigured: transcription !== null,
+      transcriptionConfigured: settings.captionsOnly || transcription !== null,
       micStatus: settings.micEnabled ? 'active' : 'off', // corrected by MIC_STATUS if denied
       capturedTabId: tab.id,
       lastError: null,
@@ -318,9 +395,17 @@ export default defineBackground(() => {
           await chrome.storage.local.set({ chunkCount: msg.count });
           sendResponse({ ok: true });
           break;
-        case 'SEGMENT_SAVED':
+        case 'SEGMENT_SAVED': {
           await chrome.storage.local.set({ segmentCount: msg.count });
+          const { currentSessionId } = await chrome.storage.local.get('currentSessionId');
+          if (typeof currentSessionId === 'string') {
+            await applyFusion(currentSessionId).catch(() => {});
+          }
           sendResponse({ ok: true });
+          break;
+        }
+        case 'CAPTION_EVENT':
+          sendResponse(await handleCaptionEvent(msg));
           break;
         case 'MIC_STATUS':
           await chrome.storage.local.set({ micStatus: msg.status });

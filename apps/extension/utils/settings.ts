@@ -15,6 +15,7 @@ export interface Settings {
   llmBaseUrl: string;  // custom LLM only (Ollama / LM Studio)
   redactAtRest: boolean;
   redactTerms: string[];
+  captionsOnly: boolean; // Meet captions → TranscriptSegment, zero STT provider calls
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -32,6 +33,7 @@ export const DEFAULT_SETTINGS: Settings = {
   llmBaseUrl: '',
   redactAtRest: false,
   redactTerms: [],
+  captionsOnly: false,
 };
 
 const KEY = 'settings';

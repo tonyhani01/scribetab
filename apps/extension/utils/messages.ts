@@ -11,7 +11,7 @@ export interface TranscriptionSettingsPayload {
   baseUrl?: string;
 }
 
-/** Messages handled by the service worker (from popup or offscreen). */
+/** Messages handled by the service worker (from popup, offscreen, or Meet content script). */
 export type ToBackground =
   | { target: 'background'; type: 'START_CAPTURE' }
   | { target: 'background'; type: 'STOP_CAPTURE' }
@@ -19,6 +19,14 @@ export type ToBackground =
   | { target: 'background'; type: 'SEGMENT_SAVED'; count: number }    // offscreen → SW (running total)
   | { target: 'background'; type: 'MIC_STATUS'; status: 'active' | 'denied' | 'off' } // offscreen → SW
   | { target: 'background'; type: 'CAPTURE_ENDED'; sessionId: string; reason: string; error?: string }  // offscreen → SW
+  | {
+      target: 'background';
+      type: 'CAPTION_EVENT';
+      speaker: string;
+      text: string;
+      timestampMs: number; // wall-clock Date.now() at caption start
+      endMs?: number;      // wall-clock Date.now() at emit (stabilize / speaker change)
+    }
   | { target: 'background'; type: 'SYNC_ALL' }
   | { target: 'background'; type: 'REGENERATE_SUMMARY'; sessionId: string };
 
@@ -36,13 +44,20 @@ export type ToOffscreen =
     }
   | { target: 'offscreen'; type: 'OFFSCREEN_STOP'; sessionId?: string };
 
-/** Broadcast to the side panel (from the offscreen document). */
-export type ToSidePanel = {
-  target: 'sidepanel';
-  type: 'SEGMENTS_ADDED';
-  sessionId: string;
-  segments: TranscriptSegment[];
-};
+/** Broadcast to the side panel (from the offscreen document or service worker). */
+export type ToSidePanel =
+  | {
+      target: 'sidepanel';
+      type: 'SEGMENTS_ADDED';
+      sessionId: string;
+      segments: TranscriptSegment[];
+    }
+  | {
+      target: 'sidepanel';
+      type: 'SEGMENTS_UPDATED';
+      sessionId: string;
+      segments: TranscriptSegment[];
+    };
 
 export interface Ack {
   ok: boolean;
