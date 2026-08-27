@@ -1,7 +1,7 @@
 import { SilenceChunker, TranscriptionQueue, encodeWav, getTranscriptionProvider } from '@scribetab/shared';
 import type { Ack, ToOffscreen, ToSidePanel } from '@/utils/messages';
-import { clearChunks, putChunk } from '@/utils/chunkStore';
-import { clearSegments, putSegments } from '@/utils/segmentStore';
+import { putChunk } from '@/utils/chunkStore';
+import { putSegments } from '@/utils/segmentStore';
 
 interface Engine {
   ctx: AudioContext;
@@ -21,6 +21,7 @@ let writeChain: Promise<void> = Promise.resolve();
 let writeError: Error | null = null;
 let queue: TranscriptionQueue | null = null;
 let segmentCount = 0;
+let captureSessionId = '';
 
 function notifyBackground(
   msg:
@@ -43,7 +44,14 @@ function enqueueChunk(pcm: Float32Array, sampleRate: number): void {
   const wav = encodeWav(pcm, sampleRate);
   writeChain = writeChain.then(async () => {
     if (writeError) return;
-    await putChunk({ index, sampleRate, startOffsetSamples, wav, createdAt: Date.now() });
+    await putChunk({
+      sessionId: captureSessionId,
+      index,
+      sampleRate,
+      startOffsetSamples,
+      wav,
+      createdAt: Date.now(),
+    });
     notifyBackground({ target: 'background', type: 'CHUNK_SAVED', count: index + 1 });
     queue?.enqueue({
       index,
@@ -119,12 +127,10 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
       minSilenceMs: 300,
     });
 
-    // Graph is live — only now is it safe to discard the previous recording.
-    await clearChunks();
-    // Abandon any still-retrying jobs from the previous session BEFORE
-    // clearing its segments, or a late retry would resurrect them.
+    // Graph is live. Do not wipe prior sessions — chunks/segments are
+    // keyed by sessionId. Cancel the previous queue so its retries stop.
     queue?.cancel();
-    await clearSegments();
+    captureSessionId = msg.sessionId;
     segmentCount = 0;
     const transcription = msg.transcription;
     queue = transcription

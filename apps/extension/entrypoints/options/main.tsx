@@ -126,6 +126,15 @@ function App() {
         Mix in my microphone (echo-cancelled; falls back to tab-only if denied)
       </label>
 
+      <label style={{ ...row, fontWeight: 400 }}>
+        <input
+          type="checkbox"
+          checked={s.retainAudio}
+          onChange={(e) => set('retainAudio', (e.currentTarget as HTMLInputElement).checked)}
+        />{' '}
+        Keep audio after a meeting ends (off = delete WAV chunks on finalize; transcript stays)
+      </label>
+
       <div style={{ marginTop: 16 }}>
         <button onClick={() => void save()}>Save</button>
       </div>

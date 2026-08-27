@@ -1,8 +1,8 @@
 import { assembleWavChunks } from '@scribetab/shared';
-import { getAllChunks } from './chunkStore';
+import { getChunksForSession } from './chunkStore';
 
-export async function assembleRecording(): Promise<{ blob: Blob; seconds: number }> {
-  const rows = await getAllChunks();
+export async function assembleRecording(sessionId: string): Promise<{ blob: Blob; seconds: number }> {
+  const rows = await getChunksForSession(sessionId);
   const buf = assembleWavChunks(rows);
   const sampleRate = rows[0]!.sampleRate;
   const dataLength = buf.byteLength - 44;

@@ -5,6 +5,7 @@ export interface Settings {
   language: string;    // '' = provider auto-detect; BCP-47 hint otherwise
   baseUrl: string;     // custom provider only
   micEnabled: boolean;
+  retainAudio: boolean; // when false, audioChunks are deleted on session finalize
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -14,6 +15,7 @@ export const DEFAULT_SETTINGS: Settings = {
   language: '',
   baseUrl: '',
   micEnabled: false,
+  retainAudio: true,
 };
 
 const KEY = 'settings';

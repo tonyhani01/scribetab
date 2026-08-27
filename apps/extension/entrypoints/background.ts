@@ -1,5 +1,8 @@
 import { originPattern, transcriptionEndpoint } from '@scribetab/shared';
 import type { Ack, ToBackground, ToOffscreen, TranscriptionSettingsPayload } from '@/utils/messages';
+import { platformFromUrl, titleFromTab } from '@/utils/platform';
+import { checkQuota } from '@/utils/quota';
+import { createSession, failStaleRecordings, finalizeSession } from '@/utils/sessionStore';
 import { getSettings } from '@/utils/settings';
 
 let creatingOffscreen: Promise<void> | null = null;
@@ -79,10 +82,29 @@ async function transcriptionPayload(): Promise<TranscriptionSettingsPayload | nu
 
 let opInFlight = false; // serializes start/stop within one SW lifetime
 
+async function completeSession(
+  sessionId: string | undefined,
+  status: 'complete' | 'failed',
+): Promise<void> {
+  if (!sessionId) return;
+  const s = await getSettings();
+  await finalizeSession(sessionId, { retainAudio: s.retainAudio, status });
+  await checkQuota().catch(() => {});
+}
+
+async function completeCurrentSession(status: 'complete' | 'failed'): Promise<void> {
+  const { currentSessionId } = await chrome.storage.local.get('currentSessionId');
+  await completeSession(
+    typeof currentSessionId === 'string' ? currentSessionId : undefined,
+    status,
+  );
+}
+
 async function handleStart(): Promise<Ack> {
   if (opInFlight) return { ok: false, error: 'Operation in progress' };
   opInFlight = true;
   let offscreenStarted = false;
+  let createdId: string | null = null;
   try {
     const { captureState } = await chrome.storage.local.get('captureState');
     if (captureState === 'recording' || captureState === 'starting') {
@@ -103,6 +125,16 @@ async function handleStart(): Promise<Ack> {
     const settings = await getSettings();
     const transcription = await transcriptionPayload();
     const sessionId = crypto.randomUUID();
+    await failStaleRecordings(sessionId);
+    createdId = sessionId;
+    await createSession({
+      id: sessionId,
+      title: titleFromTab(tab),
+      startedAt: new Date().toISOString(),
+      platform: platformFromUrl(tab.url),
+      tabUrl: tab.url,
+      status: 'recording',
+    });
     const startMsg = {
       target: 'offscreen',
       type: 'OFFSCREEN_START',
@@ -139,6 +171,7 @@ async function handleStart(): Promise<Ack> {
     if (offscreenStarted) {
       await sendToOffscreen({ target: 'offscreen', type: 'OFFSCREEN_STOP' }).catch(() => {});
     }
+    if (createdId) await completeSession(createdId, 'failed').catch(() => {});
     await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
     return { ok: false, error: String(e) };
   } finally {
@@ -153,6 +186,7 @@ async function handleStop(): Promise<Ack> {
     await chrome.storage.local.set({ captureState: 'stopping' });
     const res = await sendToOffscreen({ target: 'offscreen', type: 'OFFSCREEN_STOP' });
     if (res?.ok) {
+      await completeCurrentSession('complete');
       await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null, lastError: null });
       return { ok: true };
     }
@@ -161,6 +195,7 @@ async function handleStop(): Promise<Ack> {
     // its writes just failed. Going back to 'recording' would fight the
     // CAPTURE_ENDED handler's 'idle' and leave the partial audio undownloadable
     // (download requires 'idle'). Surface the error and settle at idle.
+    await completeCurrentSession('failed');
     await chrome.storage.local.set({
       captureState: 'idle',
       capturedTabId: null,
@@ -169,6 +204,7 @@ async function handleStop(): Promise<Ack> {
     return { ok: false, error: res?.error ?? 'Stop failed' };
   } catch (e) {
     if ((await offscreenContexts()).length === 0) {
+      await completeCurrentSession('failed');
       await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
       return { ok: true };
     }
@@ -188,6 +224,7 @@ async function finalizeIfCaptured(tabId: number): Promise<void> {
   const res = await sendToOffscreen({ target: 'offscreen', type: 'OFFSCREEN_STOP' }).catch(
     () => null,
   );
+  await completeCurrentSession(res && !res.ok ? 'failed' : 'complete');
   await chrome.storage.local.set({
     captureState: 'idle',
     capturedTabId: null,
@@ -199,14 +236,16 @@ export default defineBackground(() => {
   // Boot-time reconciliation: transient states can't survive their in-flight
   // handler, and 'recording' is only real if the offscreen document exists.
   void (async () => {
-    const { captureState } = await chrome.storage.local.get('captureState');
-    if (captureState === 'starting' || captureState === 'stopping') {
+    const { captureState, currentSessionId } = await chrome.storage.local.get([
+      'captureState',
+      'currentSessionId',
+    ]);
+    const live =
+      captureState === 'recording' && (await offscreenContexts()).length > 0;
+    if (!live && (captureState === 'starting' || captureState === 'stopping' || captureState === 'recording')) {
       await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
-    } else if (captureState === 'recording') {
-      if ((await offscreenContexts()).length === 0) {
-        await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
-      }
     }
+    await failStaleRecordings(live && typeof currentSessionId === 'string' ? currentSessionId : undefined);
   })();
 
   chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
@@ -235,6 +274,7 @@ export default defineBackground(() => {
           sendResponse({ ok: true });
           break;
         case 'CAPTURE_ENDED':
+          await completeCurrentSession(msg.error ? 'failed' : 'complete');
           await chrome.storage.local.set({
             captureState: 'idle',
             capturedTabId: null,

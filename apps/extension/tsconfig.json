@@ -4,5 +4,6 @@
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
     "strict": true
-  }
+  },
+  "exclude": ["test", "vitest.config.ts"]
 }

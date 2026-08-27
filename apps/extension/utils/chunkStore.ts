@@ -1,6 +1,7 @@
 import { CHUNKS_STORE as STORE, openDb } from './db';
 
 export interface ChunkRow {
+  sessionId: string;
   index: number;
   sampleRate: number;
   startOffsetSamples: number; // cumulative samples before this chunk (session-relative timing)
@@ -8,11 +9,8 @@ export interface ChunkRow {
   createdAt: number;
 }
 
-export async function putChunk(row: ChunkRow): Promise<void> {
-  const db = await openDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).put(row);
+function txDone(tx: IDBTransaction): Promise<void> {
+  return new Promise((resolve, reject) => {
     const fail = () => reject(tx.error ?? new Error('IndexedDB transaction failed'));
     tx.oncomplete = () => resolve();
     tx.onerror = fail;
@@ -20,11 +18,18 @@ export async function putChunk(row: ChunkRow): Promise<void> {
   });
 }
 
-export async function getAllChunks(): Promise<ChunkRow[]> {
+export async function putChunk(row: ChunkRow): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction(STORE, 'readwrite');
+  tx.objectStore(STORE).put(row);
+  await txDone(tx);
+}
+
+export async function getChunksForSession(sessionId: string): Promise<ChunkRow[]> {
   const db = await openDb();
   const rows = await new Promise<ChunkRow[]>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly');
-    const req = tx.objectStore(STORE).getAll();
+    const req = tx.objectStore(STORE).index('bySession').getAll(sessionId);
     req.onsuccess = () => resolve(req.result as ChunkRow[]);
     req.onerror = () => reject(req.error);
     tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'));
@@ -32,14 +37,30 @@ export async function getAllChunks(): Promise<ChunkRow[]> {
   return rows.sort((a, b) => a.index - b.index);
 }
 
-export async function clearChunks(): Promise<void> {
+export async function deleteChunksForSession(sessionId: string): Promise<void> {
   const db = await openDb();
+  const tx = db.transaction(STORE, 'readwrite');
+  const store = tx.objectStore(STORE);
+  const keysReq = store.index('bySession').getAllKeys(sessionId);
   await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).clear();
+    keysReq.onsuccess = () => {
+      for (const key of keysReq.result) store.delete(key);
+    };
+    keysReq.onerror = () => reject(keysReq.error);
     const fail = () => reject(tx.error ?? new Error('IndexedDB transaction failed'));
     tx.oncomplete = () => resolve();
     tx.onerror = fail;
     tx.onabort = fail;
+  });
+}
+
+export async function sessionHasChunks(sessionId: string): Promise<boolean> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const req = tx.objectStore(STORE).index('bySession').count(sessionId);
+    req.onsuccess = () => resolve(req.result > 0);
+    req.onerror = () => reject(req.error);
+    tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'));
   });
 }

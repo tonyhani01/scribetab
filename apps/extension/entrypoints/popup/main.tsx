@@ -37,7 +37,11 @@ function App() {
   const download = async () => {
     setError(null);
     try {
-      const { blob, seconds } = await assembleRecording();
+      const { currentSessionId } = await chrome.storage.local.get('currentSessionId');
+      if (typeof currentSessionId !== 'string' || !currentSessionId) {
+        throw new Error('Nothing recorded yet');
+      }
+      const { blob, seconds } = await assembleRecording(currentSessionId);
       const url = URL.createObjectURL(blob);
       const downloadId = await chrome.downloads.download({
         url,
