@@ -172,11 +172,15 @@ Numbers per hour of recording:
 |---|---|---|
 | today: 48 kHz 16-bit WAV | ~345 MB | 1× |
 | 16 kHz 16-bit WAV (fallback) | ~115 MB | 3× smaller |
-| **Ogg Opus 32 kbps mono (proposed)** | **~14 MB** | **~24× smaller** |
-| Ogg Opus 24 kbps mono (option) | ~11 MB | ~31× smaller |
+| Ogg Opus 32 kbps mono | ~14 MB | ~24× smaller |
+| Ogg Opus 24 kbps mono | ~11 MB | ~31× smaller |
+| **Ogg Opus 16 kbps mono + DTX (proposed)** | **~4–7 MB** (DTX skips silence) | **~50–80× smaller** |
 
-32 kbps mono Opus is transparent-quality for speech; 24 kbps is still very good — owner's
-call, default 32. A 1 GB quota goes from ~3 h of retained audio to ~70 h.
+All variants enable DTX (discontinuous transmission — near-zero bytes during silence,
+a 20–50% real-world saving on meeting audio) and default VBR; both are plain fields in
+the WebCodecs Opus encoder config. 16 kbps is clearly intelligible speech; 24 kbps keeps
+more tone/timbre; 32 kbps is transparent. Owner's call — default 16 kbps + DTX. A 1 GB
+quota goes from ~3 h of retained audio to ~150–250 h.
 
 Rejected alternatives:
 - **MediaRecorder (`audio/webm;codecs=opus`)**: chunked `dataavailable` blobs are not
@@ -252,7 +256,8 @@ Nothing is pushed to any remote without being asked.
 
 1. Chunk cadence 12/20 s ok, or prefer a middle ground (e.g. 20/30) to keep request
    volume lower? (Cost is flat either way; it's request count vs. latency.)
-2. Opus bitrate: 32 kbps (recommended) or 24 kbps?
+2. Opus bitrate: 16 kbps + DTX (recommended, ~4–7 MB/h) or 24 kbps + DTX (~7–9 MB/h) if
+   re-listen fidelity matters more than size?
 3. Download for opus sessions as `.ogg` acceptable? (Alternative — decode to WAV on
    export — recreates the 345 MB file; not recommended.)
 4. Native host protocol v2 with loud failure on stale hosts acceptable pre-publish?
