@@ -162,6 +162,8 @@ function LibraryView() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [openSegments, setOpenSegments] = useState<TranscriptSegment[]>([]);
   const [busy, setBusy] = useState(false);
+  const openIdRef = useRef<string | null>(null);
+  openIdRef.current = openId;
 
   const reload = async () => {
     const list = await listSessions();
@@ -180,11 +182,34 @@ function LibraryView() {
 
   useEffect(() => {
     void reload();
+
+    const onMessage = (raw: unknown) => {
+      const msg = raw as ToSidePanel;
+      if (msg?.target !== 'sidepanel' || msg.type !== 'SEGMENTS_ADDED') return;
+      void reload();
+      if (openIdRef.current !== msg.sessionId) return;
+      setOpenSegments((prev) =>
+        [...prev, ...msg.segments].sort((a, b) => a.startMs - b.startMs),
+      );
+    };
+    const onStorage = (c: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area !== 'local') return;
+      if (c.captureState && c.captureState.newValue === 'idle') void reload();
+    };
+    chrome.runtime.onMessage.addListener(onMessage);
+    chrome.storage.onChanged.addListener(onStorage);
+    return () => {
+      chrome.runtime.onMessage.removeListener(onMessage);
+      chrome.storage.onChanged.removeListener(onStorage);
+    };
   }, []);
 
   const openSession = async (id: string) => {
+    openIdRef.current = id;
     setOpenId(id);
-    setOpenSegments(await getSegments(id));
+    setOpenSegments([]);
+    const segs = await getSegments(id);
+    if (openIdRef.current === id) setOpenSegments(segs);
   };
 
   const hits = query.trim() && index ? index.search(query.trim()) : [];
