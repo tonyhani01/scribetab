@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addCostUsd,
   audioTranscribedMs,
   estimateTokens,
   formatUsd,
@@ -21,6 +22,8 @@ describe('sttCostUsd', () => {
   it('is undefined for unknown providers or models (never a wrong guess)', () => {
     expect(sttCostUsd('nope', 120_000)).toBeUndefined();
     expect(sttCostUsd('openai', 60_000, 'gpt-4o-transcribe')).toBeUndefined();
+    expect(sttCostUsd('openrouter', 60_000, 'openai/whisper-large-v3')).toBeUndefined();
+    expect(sttCostUsd('google', 60_000, 'gemini-3.5-transcribe')).toBeUndefined();
   });
 
   it('is zero for non-positive duration even with an unknown model', () => {
@@ -68,6 +71,17 @@ describe('estimateTokens', () => {
     expect(estimateTokens('abcd')).toBe(1);
     expect(estimateTokens('abcdefgh')).toBe(2);
   });
+});
+
+describe('addCostUsd', () => {
+  it('sums known components and skips unknowns',
+    () => {
+      expect(addCostUsd(0.00003036, 0.0001)).toBe(0.00013);
+      expect(addCostUsd(0.00003036, undefined)).toBe(0.00003);
+      expect(addCostUsd(undefined, 0.0001)).toBe(0.0001);
+      expect(addCostUsd(undefined, undefined)).toBeUndefined();
+    },
+  );
 });
 
 describe('formatUsd', () => {

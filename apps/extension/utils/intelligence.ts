@@ -81,12 +81,15 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
     await putSegments(segments);
   }
 
+  const existing = await getSession(sessionId);
   const durationMs = audioTranscribedMs(segments);
-  const stt = settings.providerId
+  const tableStt = settings.providerId
     ? sttCostUsd(settings.providerId, durationMs, settings.model || undefined)
     : 0;
+  // Provider-reported STT (OpenRouter usage.cost) beats an unknown rate table.
+  const stt = existing?.providerCostUsd ?? tableStt;
 
-  let costUsd: number | null | undefined = stt === undefined ? null : stt;
+  let costUsd: number | undefined = stt;
   let summaryMarkdown: string | undefined;
   let intelligence: 'pending' | 'needs-permission' | null = null;
 
@@ -112,8 +115,7 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
           estimateTokens(out),
           settings.llmModel || undefined,
         );
-        costUsd = costUsd === null ? null : addCostUsd(costUsd, added);
-        if (costUsd === undefined) costUsd = null;
+        costUsd = addCostUsd(costUsd, added);
         return out;
       };
       try {
@@ -127,7 +129,6 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
     }
   }
 
-  const existing = await getSession(sessionId);
   await updateSession(sessionId, {
     costUsd: costUsd === undefined ? existing?.costUsd ?? null : costUsd,
     intelligence,

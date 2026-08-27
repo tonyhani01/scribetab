@@ -70,7 +70,15 @@ export function sttProbeRequest(
     if (apiKey) headers.Authorization = `Token ${apiKey}`;
     return { url: join(endpoint, '/v1/projects'), headers };
   }
+  if (providerId === 'google') {
+    if (apiKey) headers['x-goog-api-key'] = apiKey;
+    return { url: join(endpoint, '/models?pageSize=1'), headers };
+  }
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+  // OpenRouter GET /models is public (200 for any key); /key is authenticated.
+  if (providerId === 'openrouter') {
+    return { url: join(endpoint, '/key'), headers };
+  }
   return { url: join(endpoint, '/models'), headers };
 }
 

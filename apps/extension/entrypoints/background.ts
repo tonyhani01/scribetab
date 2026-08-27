@@ -397,6 +397,7 @@ async function handleStart(): Promise<Ack> {
       captureState: 'starting',
       capturedTabId: tab.id,
       lastError: null,
+      lastTranscriptionError: null,
       captureNotice: null,
     });
     notifyMeetTab(tab.id, true);

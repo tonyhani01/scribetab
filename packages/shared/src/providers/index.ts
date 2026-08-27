@@ -1,32 +1,51 @@
 import type { TranscriptionProvider } from '../types.js';
 import { customProvider } from './custom.js';
 import { deepgramProvider } from './deepgram.js';
+import { GOOGLE_API_BASE, googleProvider } from './google.js';
 import { groqProvider } from './groq.js';
 import { mistralProvider } from './mistral.js';
 import { openaiProvider } from './openai.js';
+import { openrouterProvider } from './openrouter.js';
 
-const providers: Record<string, TranscriptionProvider> = {
+export const TRANSCRIPTION_PROVIDER_IDS: readonly [
+  'openai',
+  'groq',
+  'deepgram',
+  'mistral',
+  'openrouter',
+  'google',
+  'custom',
+] = Object.freeze(['openai', 'groq', 'deepgram', 'mistral', 'openrouter', 'google', 'custom']);
+
+export type TranscriptionProviderId = (typeof TRANSCRIPTION_PROVIDER_IDS)[number];
+
+export function isTranscriptionProviderId(id: string): id is TranscriptionProviderId {
+  return (TRANSCRIPTION_PROVIDER_IDS as readonly string[]).includes(id);
+}
+
+const providers: Record<TranscriptionProviderId, TranscriptionProvider> = {
   openai: openaiProvider,
   groq: groqProvider,
   deepgram: deepgramProvider,
   mistral: mistralProvider,
+  openrouter: openrouterProvider,
+  google: googleProvider,
   custom: customProvider,
 };
 
-export const TRANSCRIPTION_PROVIDER_IDS = Object.freeze(Object.keys(providers));
-
 export function getTranscriptionProvider(id: string): TranscriptionProvider {
-  const p = providers[id];
-  if (!p) throw new Error(`Unknown transcription provider: ${id}`);
-  return p;
+  if (!isTranscriptionProviderId(id)) throw new Error(`Unknown transcription provider: ${id}`);
+  return providers[id];
 }
 
 /** Where a config will actually send audio — the origin the extension must hold host permission for. */
-const defaultBaseUrls: Record<string, string | undefined> = {
+const defaultBaseUrls: Record<TranscriptionProviderId, string | undefined> = {
   openai: 'https://api.openai.com/v1',
   groq: 'https://api.groq.com/openai/v1',
   deepgram: 'https://api.deepgram.com',
   mistral: 'https://api.mistral.ai/v1',
+  openrouter: 'https://openrouter.ai/api/v1',
+  google: GOOGLE_API_BASE,
   custom: undefined,
 };
 
@@ -36,10 +55,19 @@ export function transcriptionEndpoint(providerId: string, baseUrl?: string): str
     if (!baseUrl) throw new Error(`${providerId}: baseUrl is required`);
     return baseUrl;
   }
-  const d = defaultBaseUrls[providerId];
+  const d = isTranscriptionProviderId(providerId) ? defaultBaseUrls[providerId] : undefined;
   if (!d) throw new Error(`${providerId}: baseUrl is required`);
   return d;
 }
 
-export { customProvider, deepgramProvider, groqProvider, mistralProvider, openaiProvider };
+export {
+  GOOGLE_API_BASE,
+  customProvider,
+  deepgramProvider,
+  googleProvider,
+  groqProvider,
+  mistralProvider,
+  openaiProvider,
+  openrouterProvider,
+};
 export { openAiCompatible } from './openaiCompatible.js';

@@ -22,7 +22,7 @@ Source: GPL-3.0-only.
 
 - **No ScribeTab backend.** The extension does not phone home.
 - **Audio** is captured in an offscreen document, stored in IndexedDB on this profile, and sent only to the user-configured STT endpoint when transcription is enabled.
-- **API keys** live in `chrome.storage.local` and are sent only as `Authorization` headers to that endpoint (or the LLM endpoint).
+- **API keys** live in `chrome.storage.local` and are sent only as `Authorization` or `x-goog-api-key` headers to that endpoint (or the LLM endpoint). Never as a query parameter.
 - **Transcripts and summaries** stay in IndexedDB unless the user exports them, syncs to the optional native host, or enables Notion (token stored only in the host config file, sent only to `api.notion.com`).
 - **Redaction** is text-only. Raw audio sent to STT cannot be pre-redacted.
 - **Consent.** A reminder banner (default on) asks the user to get participant consent before recording. Recording other people without consent may be illegal in your jurisdiction.

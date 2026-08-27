@@ -11,6 +11,10 @@ export interface TranscriptionQueueOptions {
   sessionId: string;
   transcribe: (req: TranscribeRequest) => Promise<TranscribeResult>;
   onSegments: (segments: TranscriptSegment[]) => void | Promise<void>;
+  /** Most recent provider error, already bounded. */
+  onError?: (message: string) => void | Promise<void>;
+  /** Provider-computed chunk cost when present (e.g. OpenRouter usage.cost). */
+  onCostUsd?: (usd: number) => void | Promise<void>;
   language?: string;
   retryDelaysMs?: number[];
   sleep?: (ms: number) => Promise<void>;
@@ -90,13 +94,27 @@ export class TranscriptionQueue {
           language: this.opts.language,
         });
         break;
-      } catch {
+      } catch (e) {
+        const message = (e instanceof Error && e.message ? e.message : String(e)).slice(0, 200);
+        try {
+          await this.opts.onError?.(message);
+        } catch {
+          // persist failures must not change retry behavior
+        }
         if (this.cancelled || attempt >= delays.length) break;
         await sleep(delays[attempt]!);
         if (this.cancelled) break;
       }
     }
     if (this.cancelled) return;
+
+    if (result && typeof result.costUsd === 'number' && Number.isFinite(result.costUsd) && result.costUsd >= 0) {
+      try {
+        await this.opts.onCostUsd?.(result.costUsd);
+      } catch {
+        // cost persist failures must not drop segments
+      }
+    }
 
     const segments = result
       ? segmentsFromResult(result, job, this.opts.sessionId, makeId)

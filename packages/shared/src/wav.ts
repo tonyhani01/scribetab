@@ -1,6 +1,9 @@
+/** Standard PCM WAV header size; header-only buffers contain no audio. */
+export const WAV_HEADER_BYTES = 44;
+
 /** 44-byte header for a 16-bit mono PCM WAV file with the given data length. */
 export function wavHeader(dataByteLength: number, sampleRate: number): ArrayBuffer {
-  const buf = new ArrayBuffer(44);
+  const buf = new ArrayBuffer(WAV_HEADER_BYTES);
   const view = new DataView(buf);
   const writeAscii = (off: number, s: string) => {
     for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));

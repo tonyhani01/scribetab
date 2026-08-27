@@ -166,6 +166,36 @@ describe('runFinalizeIntelligence', () => {
     expect((await getSession('s1'))?.costUsd).toBeNull();
   });
 
+  it('keeps a known LLM cost when STT is unknown', async () => {
+    stubChat('ok', '- none');
+    await runFinalizeIntelligence(
+      's1',
+      settings({
+        providerId: 'openrouter',
+        llmProviderId: 'openai',
+        llmApiKey: 'sk-x',
+      }),
+    );
+    const got = await getSession('s1');
+    expect(got?.costUsd).toBeGreaterThan(0);
+    expect(got?.costUsd).not.toBeNull();
+  });
+
+  it('sums provider-reported STT cost with the LLM estimate', async () => {
+    stubChat('ok', '- none');
+    await updateSession('s1', { providerCostUsd: 0.00003036 });
+    await runFinalizeIntelligence(
+      's1',
+      settings({
+        providerId: 'openrouter',
+        llmProviderId: 'openai',
+        llmApiKey: 'sk-x',
+      }),
+    );
+    const got = await getSession('s1');
+    expect(got?.costUsd).toBeGreaterThan(0.00003036);
+  });
+
   it('keeps STT cost if the LLM call fails and leaves intelligence pending', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('nope', { status: 500 })));
     await runFinalizeIntelligence(
