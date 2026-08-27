@@ -155,9 +155,13 @@ function degradedFallback(
   };
 }
 
+function oneLine(s: string): string {
+  return s.replace(/\s+/g, ' ').trim();
+}
+
 function stringArray(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
-  return v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).map((x) => x.trim());
+  return v.filter((x): x is string => typeof x === 'string' && oneLine(x).length > 0).map(oneLine);
 }
 
 function toActionItems(v: unknown, newId: () => string): ActionItem[] {
@@ -166,10 +170,10 @@ function toActionItems(v: unknown, newId: () => string): ActionItem[] {
   for (const raw of v) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
     const rec = raw as Record<string, unknown>;
-    const text = typeof rec.text === 'string' ? rec.text.trim() : '';
+    const text = typeof rec.text === 'string' ? oneLine(rec.text) : '';
     if (!text) continue;
-    const owner = typeof rec.owner === 'string' && rec.owner.trim() ? rec.owner.trim() : undefined;
-    const due = typeof rec.due === 'string' && rec.due.trim() ? rec.due.trim() : undefined;
+    const owner = typeof rec.owner === 'string' ? oneLine(rec.owner) || undefined : undefined;
+    const due = typeof rec.due === 'string' ? oneLine(rec.due) || undefined : undefined;
     out.push({ id: newId(), text, ...(owner ? { owner } : {}), ...(due ? { due } : {}) });
   }
   return out;

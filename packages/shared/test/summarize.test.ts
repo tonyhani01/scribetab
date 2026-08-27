@@ -260,6 +260,24 @@ describe('parseStructuredSummary', () => {
     expect(s.narrative).toBe('');
     expect(s.narrative).not.toContain('{');
   });
+  it('collapses newlines in list fields to a single line', () => {
+    const s = parseStructuredSummary(
+      JSON.stringify({
+        narrative: 'keep\nnewlines',
+        actionItems: [{ text: 'a\nb', owner: 'Ann\nLee', due: 'by\nFriday' }],
+        decisions: ['x\ny'],
+        usefulInfo: ['p\nq'],
+      }),
+      P,
+    );
+    expect(s.narrative).toBe('keep\nnewlines');
+    expect(s.actionItems[0]).toEqual({ id: 'fixed-id', text: 'a b', owner: 'Ann Lee', due: 'by Friday' });
+    expect(s.decisions).toEqual(['x y']);
+    expect(s.usefulInfo).toEqual(['p q']);
+    const md = summaryToMarkdown(s);
+    expect(md).toContain('- [ ] Ann Lee — a b (by Friday)');
+    expect(md).toContain('- x y');
+  });
   it('ignores owner/due that are not strings and trims fields', () => {
     const s = parseStructuredSummary(
       JSON.stringify({ narrative: ' n ', actionItems: [{ text: ' t ', owner: 3, due: ' Fri ' }] }),
