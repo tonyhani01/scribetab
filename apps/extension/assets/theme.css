@@ -244,6 +244,7 @@ input[type='checkbox'] {
 
 .st-record--recording {
   background: var(--st-danger);
+  color: #ffffff;
   border-color: var(--st-danger-bg);
   box-shadow: 0 6px 18px rgba(229, 72, 77, 0.35);
   animation: st-pulse 2s infinite;

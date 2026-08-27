@@ -58,7 +58,7 @@ function App() {
     <main data-testid="sidepanel-root" style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
       <header class="st-header" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
         <div class="st-brand">
-          <img src="/icon-128.png" alt="" />
+          <img src="/icon-48.png" alt="" />
           <span class="st-wordmark">
             scribe<b>Tab</b>
           </span>

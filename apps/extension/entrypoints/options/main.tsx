@@ -182,7 +182,7 @@ function App() {
   return (
     <main data-testid="options-root" style={{ maxWidth: 600, margin: '24px auto', padding: 16 }}>
       <div class="st-brand" style={{ marginBottom: 4 }}>
-        <img src="/icon-128.png" alt="" style={{ width: 34, height: 34 }} />
+        <img src="/icon-48.png" alt="" style={{ width: 34, height: 34 }} />
         <h1 class="st-wordmark" aria-label="ScribeTab settings" style={{ margin: 0, fontSize: 20 }}>
           scribe<b>Tab</b> <span style={{ color: 'var(--st-muted)', fontWeight: 600, fontSize: 16 }}>settings</span>
         </h1>

@@ -113,7 +113,7 @@ function App() {
     <main data-testid="popup-root" style={{ width: 340, display: 'flex', flexDirection: 'column' }}>
       <header class="st-header">
         <div class="st-brand">
-          <img src="/icon-128.png" alt="" />
+          <img src="/icon-48.png" alt="" />
           <h1 class="st-wordmark" aria-label="ScribeTab" style={{ margin: 0 }}>
             scribe<b>Tab</b>
           </h1>
