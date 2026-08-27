@@ -208,7 +208,10 @@ function LiveView() {
                 if (res?.hostMissing) {
                   setHostStatus({ state: 'missing', message: res.error });
                 } else if (!res?.ok) {
-                  setHostStatus({ state: 'error', message: humanError(res?.error ?? 'Sync failed') });
+                  setHostStatus({
+                    state: 'error',
+                    message: res?.error ?? humanError('Sync failed'),
+                  });
                 } else {
                   setHostStatus({ state: 'ok', warning: res.warning });
                 }
@@ -220,12 +223,13 @@ function LiveView() {
         </button>
         {hostStatus.state === 'missing' && (
           <p style={{ color: '#8a6d00', background: '#fff8e1', padding: 8, fontSize: 12 }}>
-            Native host not installed. Run <code>npx scribetab-host install</code> then try Sync all.
+            Native host not installed. Run <code>node apps/native-host/dist/host.bin.js install</code>{' '}
+            (or <code>npx scribetab-host install</code> once published) then try Sync all.
           </p>
         )}
         {hostStatus.state === 'error' && hostStatus.message && (
           <p data-testid="sync-error" style={{ color: 'crimson', fontSize: 12 }}>
-            {humanError(hostStatus.message)}
+            {hostStatus.message}
           </p>
         )}
         {hostStatus.state === 'ok' && (
@@ -249,6 +253,7 @@ function LibraryView() {
   const [openSegments, setOpenSegments] = useState<TranscriptSegment[]>([]);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [llmOrigin, setLlmOrigin] = useState<string | null>(null);
   const openIdRef = useRef<string | null>(null);
   openIdRef.current = openId;
 
@@ -269,6 +274,24 @@ function LibraryView() {
 
   useEffect(() => {
     void reload();
+    void getSettings().then((s) => {
+      if (s.llmProviderId === '') {
+        setLlmOrigin(null);
+        return;
+      }
+      try {
+        setLlmOrigin(
+          originPattern(
+            llmEndpoint(
+              s.llmProviderId,
+              s.llmProviderId === 'custom' ? s.llmBaseUrl.trim() || undefined : undefined,
+            ),
+          ),
+        );
+      } catch {
+        setLlmOrigin(null);
+      }
+    });
 
     const onMessage = (raw: unknown) => {
       const msg = raw as ToSidePanel;
@@ -348,7 +371,7 @@ function LibraryView() {
         type: 'REGENERATE_SUMMARY',
         sessionId: open.id,
       } satisfies { target: 'background'; type: 'REGENERATE_SUMMARY'; sessionId: string })) as Ack;
-      if (!res?.ok) setActionError(humanError(res?.error ?? 'Unknown error'));
+      if (!res?.ok) setActionError(res?.error ?? humanError('Unknown error'));
       await refreshOpen(open.id);
     } catch (e) {
       setActionError(humanError(e));
@@ -360,23 +383,26 @@ function LibraryView() {
   const grantLlmAndRegenerate = async () => {
     if (!open) return;
     setBusy(true);
+    setActionError(null);
     try {
-      const s = await getSettings();
-      if (s.llmProviderId === '') return;
-      const origin = originPattern(
-        llmEndpoint(
-          s.llmProviderId,
-          s.llmProviderId === 'custom' ? s.llmBaseUrl.trim() || undefined : undefined,
-        ),
-      );
-      const granted = await chrome.permissions.request({ origins: [origin] });
-      if (!granted) return;
-      await chrome.runtime.sendMessage({
+      if (!llmOrigin) {
+        setActionError('Configure an LLM provider in settings to generate summaries.');
+        return;
+      }
+      const granted = await chrome.permissions.request({ origins: [llmOrigin] });
+      if (!granted) {
+        setActionError('Permission was declined, so that provider cannot be reached.');
+        return;
+      }
+      const res = (await chrome.runtime.sendMessage({
         target: 'background',
         type: 'REGENERATE_SUMMARY',
         sessionId: open.id,
-      });
+      })) as Ack;
+      if (!res?.ok) setActionError(res?.error ?? humanError('Unknown error'));
       await refreshOpen(open.id);
+    } catch (e) {
+      setActionError(humanError(e));
     } finally {
       setBusy(false);
     }
