@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MeetingSession } from '@scribetab/shared';
-import { exportFilename, sessionSlug } from '../utils/exportDownload';
+import { extrasFromSession, exportFilename, sessionSlug } from '../utils/exportDownload';
 
 const session: MeetingSession = {
   id: 's',
@@ -9,6 +9,19 @@ const session: MeetingSession = {
   platform: 'meet',
   status: 'complete',
 };
+
+describe('extrasFromSession', () => {
+  it('copies summaryMarkdown and costUsd off the stored row', () => {
+    expect(
+      extrasFromSession({
+        ...session,
+        summaryMarkdown: '## Summary',
+        costUsd: 0.01,
+      }),
+    ).toEqual({ summaryMarkdown: '## Summary', costUsd: 0.01 });
+    expect(extrasFromSession({ ...session, costUsd: null })).toEqual({ costUsd: null });
+  });
+});
 
 describe('export filenames', () => {
   it('slugifies the title and prefixes the date', () => {

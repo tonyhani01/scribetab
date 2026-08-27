@@ -3,18 +3,19 @@ import {
   exportMarkdown,
   exportSrt,
   exportVtt,
+  type ExportExtras,
   type MeetingSession,
   type TranscriptSegment,
 } from '@scribetab/shared';
 
 export type ExportFormat = 'md' | 'json' | 'srt' | 'vtt';
 
-const EXPORTERS: Record<ExportFormat, (s: MeetingSession, segs: TranscriptSegment[]) => string> = {
-  md: exportMarkdown,
-  json: exportJson,
-  srt: exportSrt,
-  vtt: exportVtt,
-};
+export function extrasFromSession(session: MeetingSession & ExportExtras): ExportExtras {
+  const extras: ExportExtras = {};
+  if (session.summaryMarkdown !== undefined) extras.summaryMarkdown = session.summaryMarkdown;
+  if (session.costUsd !== undefined) extras.costUsd = session.costUsd; // includes null → n/a
+  return extras;
+}
 
 export function sessionSlug(title: string): string {
   const slug = title
@@ -34,16 +35,20 @@ export function exportBody(
   session: MeetingSession,
   segments: TranscriptSegment[],
   format: ExportFormat,
+  extras?: ExportExtras,
 ): string {
-  return EXPORTERS[format](session, segments);
+  if (format === 'md') return exportMarkdown(session, segments, extras);
+  if (format === 'json') return exportJson(session, segments, extras);
+  if (format === 'srt') return exportSrt(session, segments);
+  return exportVtt(session, segments);
 }
 
 export async function downloadExport(
-  session: MeetingSession,
+  session: MeetingSession & ExportExtras,
   segments: TranscriptSegment[],
   format: ExportFormat,
 ): Promise<void> {
-  const body = exportBody(session, segments, format);
+  const body = exportBody(session, segments, format, extrasFromSession(session));
   const blob = new Blob([body], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   try {

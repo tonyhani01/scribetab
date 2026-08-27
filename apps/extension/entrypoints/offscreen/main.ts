@@ -1,4 +1,4 @@
-import { SilenceChunker, TranscriptionQueue, encodeWav, getTranscriptionProvider } from '@scribetab/shared';
+import { SilenceChunker, TranscriptionQueue, encodeWav, getTranscriptionProvider, redactSegments } from '@scribetab/shared';
 import type { Ack, ToOffscreen, ToSidePanel } from '@/utils/messages';
 import { putChunk } from '@/utils/chunkStore';
 import { offscreenStopApplies } from '@/utils/sessionIdentity';
@@ -145,15 +145,18 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
               model: transcription.model,
             }),
           onSegments: async (segments) => {
-            await putSegments(segments);
-            segmentCount += segments.length;
+            const stored = msg.redaction
+              ? redactSegments(segments, { extraTerms: msg.redaction.extraTerms })
+              : segments;
+            await putSegments(stored);
+            segmentCount += stored.length;
             notifyBackground({ target: 'background', type: 'SEGMENT_SAVED', count: segmentCount });
             void chrome.runtime
               .sendMessage({
                 target: 'sidepanel',
                 type: 'SEGMENTS_ADDED',
                 sessionId: msg.sessionId,
-                segments,
+                segments: stored,
               } satisfies ToSidePanel)
               .catch(() => {
                 // Side panel not open — segments are in IndexedDB; it catches up on open.

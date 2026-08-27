@@ -19,7 +19,8 @@ export type ToBackground =
   | { target: 'background'; type: 'SEGMENT_SAVED'; count: number }    // offscreen → SW (running total)
   | { target: 'background'; type: 'MIC_STATUS'; status: 'active' | 'denied' | 'off' } // offscreen → SW
   | { target: 'background'; type: 'CAPTURE_ENDED'; sessionId: string; reason: string; error?: string }  // offscreen → SW
-  | { target: 'background'; type: 'SYNC_ALL' };
+  | { target: 'background'; type: 'SYNC_ALL' }
+  | { target: 'background'; type: 'REGENERATE_SUMMARY'; sessionId: string };
 
 /** Messages handled by the offscreen document (from the service worker only). */
 export type ToOffscreen =
@@ -30,6 +31,8 @@ export type ToOffscreen =
       sessionId: string;
       transcription: TranscriptionSettingsPayload | null; // null = record only, no STT configured
       micEnabled: boolean;
+      /** When set, segment text is redacted before IndexedDB write. */
+      redaction: { extraTerms: string[] } | null;
     }
   | { target: 'offscreen'; type: 'OFFSCREEN_STOP'; sessionId?: string };
 

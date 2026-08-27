@@ -3,6 +3,16 @@ import { deleteChunksForSession } from './chunkStore';
 import { SESSIONS_STORE as STORE, openDb } from './db';
 import { deleteSegmentsForSession } from './segmentStore';
 
+export type IntelligenceState = 'pending' | 'needs-permission';
+
+/** Extension-side session row. Extra fields are not on the locked MeetingSession. */
+export type StoredSession = MeetingSession & {
+  summaryMarkdown?: string;
+  /** null = computed but unknown (UI: n/a). */
+  costUsd?: number | null;
+  intelligence?: IntelligenceState | null;
+};
+
 function txDone(tx: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
     const fail = () => reject(tx.error ?? new Error('IndexedDB transaction failed'));
@@ -12,7 +22,7 @@ function txDone(tx: IDBTransaction): Promise<void> {
   });
 }
 
-export async function createSession(session: MeetingSession): Promise<void> {
+export async function createSession(session: StoredSession): Promise<void> {
   const db = await openDb();
   const tx = db.transaction(STORE, 'readwrite');
   tx.objectStore(STORE).add(session);
@@ -21,7 +31,7 @@ export async function createSession(session: MeetingSession): Promise<void> {
 
 export async function updateSession(
   id: string,
-  patch: Partial<Omit<MeetingSession, 'id'>>,
+  patch: Partial<Omit<StoredSession, 'id'>>,
 ): Promise<void> {
   const current = await getSession(id);
   if (!current) throw new Error(`Session not found: ${id}`);
@@ -31,23 +41,23 @@ export async function updateSession(
   await txDone(tx);
 }
 
-export async function getSession(id: string): Promise<MeetingSession | undefined> {
+export async function getSession(id: string): Promise<StoredSession | undefined> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly');
     const req = tx.objectStore(STORE).get(id);
-    req.onsuccess = () => resolve(req.result as MeetingSession | undefined);
+    req.onsuccess = () => resolve(req.result as StoredSession | undefined);
     req.onerror = () => reject(req.error);
     tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'));
   });
 }
 
-export async function listSessions(): Promise<MeetingSession[]> {
+export async function listSessions(): Promise<StoredSession[]> {
   const db = await openDb();
-  const rows = await new Promise<MeetingSession[]>((resolve, reject) => {
+  const rows = await new Promise<StoredSession[]>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly');
     const req = tx.objectStore(STORE).getAll();
-    req.onsuccess = () => resolve(req.result as MeetingSession[]);
+    req.onsuccess = () => resolve(req.result as StoredSession[]);
     req.onerror = () => reject(req.error);
     tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'));
   });
