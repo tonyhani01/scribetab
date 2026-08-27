@@ -1,11 +1,11 @@
 import { render } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { SessionSummary, TranscriptSegment } from '@scribetab/shared';
+import type { ExportActionsAck, SessionSummary, TranscriptSegment } from '@scribetab/shared';
 import { actionItemLine, formatClock, formatUsd, llmEndpoint, originPattern } from '@scribetab/shared';
 import type MiniSearch from 'minisearch';
 import { ConsentBanner } from '@/components/ConsentBanner';
 import type { Ack, CaptureState, ToSidePanel, TranscriptionIssue } from '@/utils/messages';
-import type { NativeHostStatus } from '@/utils/nativeSync';
+import { isHostForbiddenError, isHostMissingError, type NativeHostStatus } from '@/utils/nativeSync';
 import { downloadExport, type ExportFormat } from '@/utils/exportDownload';
 import { getAllSegments, getSegments } from '@/utils/segmentStore';
 import { createSegmentIndex, snippetAround, type SearchDoc } from '@/utils/search';
@@ -376,8 +376,44 @@ function LibraryView() {
     if (openIdRef.current === id) setOpenSegments(segs);
   };
 
+  const exportSelected = async (itemIds: string[]): Promise<ExportActionsAck | undefined> => {
+    if (!open) return undefined;
+    setBusy(true);
+    setActionError(null);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        target: 'background',
+        type: 'EXPORT_ACTIONS',
+        sessionId: open.id,
+        itemIds,
+      })) as ExportActionsAck;
+      if (!res?.ok) {
+        const err = res?.error ?? 'Unknown error';
+        setActionError(
+          isHostMissingError(err) || isHostForbiddenError(err) ? humanError(err) : err,
+        );
+      }
+      await refreshOpen(open.id);
+      return res;
+    } catch (e) {
+      setActionError(humanError(e));
+      return undefined;
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const regenerateSummary = async () => {
     if (!open) return;
+    if (open.summary && open.actionExports && Object.keys(open.actionExports).length > 0) {
+      if (
+        !confirm(
+          "Regenerating replaces the action items — export history won't carry over. Continue?",
+        )
+      ) {
+        return;
+      }
+    }
     setBusy(true);
     setActionError(null);
     try {
@@ -448,7 +484,13 @@ function LibraryView() {
           </p>
         )}
         {open.summary ? (
-          <SummaryView summary={open.summary} />
+          <SummaryView
+            sessionId={open.id}
+            summary={open.summary}
+            exports={open.actionExports ?? {}}
+            busy={busy}
+            onExport={exportSelected}
+          />
         ) : open.summaryMarkdown ? (
           <article style={{ whiteSpace: 'pre-wrap', background: '#f6f6f6', padding: 8, fontSize: 13, marginBottom: 12 }}>
             {open.summaryMarkdown}
@@ -535,7 +577,31 @@ function LibraryView() {
   );
 }
 
-function SummaryView({ summary }: { summary: SessionSummary }) {
+function SummaryView({
+  sessionId,
+  summary,
+  exports,
+  busy,
+  onExport,
+}: {
+  sessionId: string;
+  summary: SessionSummary;
+  exports: NonNullable<StoredSession['actionExports']>;
+  busy: boolean;
+  onExport: (itemIds: string[]) => Promise<ExportActionsAck | undefined>;
+}) {
+  const initialSel = () =>
+    new Set(summary.actionItems.filter((a) => !exports[a.id]).map((a) => a.id));
+  const [sel, setSel] = useState<Set<string>>(initialSel);
+  const [lastResults, setLastResults] = useState<Record<string, { ok: boolean; error?: string }>>({});
+  const [retryCount, setRetryCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    setSel(new Set(summary.actionItems.filter((a) => !exports[a.id]).map((a) => a.id)));
+    setLastResults({});
+    setRetryCount(null);
+  }, [sessionId, summary.generatedAt]);
+
   const sec = { fontSize: 13, margin: '0 0 4px', fontWeight: 600 };
   return (
     <div style={{ background: '#f6f6f6', padding: 8, fontSize: 13, marginBottom: 12 }}>
@@ -549,15 +615,70 @@ function SummaryView({ summary }: { summary: SessionSummary }) {
         <>
           <h2 style={sec}>Action items</h2>
           <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 8px' }}>
-            {summary.actionItems.map((a) => (
-              <li key={a.id}>
-                <label style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
-                  <input type="checkbox" checked disabled />
-                  <span>{actionItemLine(a)}</span>
-                </label>
-              </li>
-            ))}
+            {summary.actionItems.map((a) => {
+              const exported = Boolean(exports[a.id]);
+              const fail = lastResults[a.id] && !lastResults[a.id]!.ok ? lastResults[a.id]!.error : undefined;
+              return (
+                <li key={a.id} style={{ marginBottom: 4 }}>
+                  <label style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
+                    <input
+                      type="checkbox"
+                      disabled={exported || busy}
+                      checked={exported ? false : sel.has(a.id)}
+                      onChange={(e) => {
+                        const on = (e.currentTarget as HTMLInputElement).checked;
+                        setSel((prev) => {
+                          const next = new Set(prev);
+                          if (on) next.add(a.id);
+                          else next.delete(a.id);
+                          return next;
+                        });
+                      }}
+                    />
+                    <span>{actionItemLine(a)}</span>
+                    {exported && (
+                      <span
+                        style={{
+                          fontSize: 10,
+                          color: '#2a7',
+                          border: '1px solid #2a7',
+                          borderRadius: 3,
+                          padding: '0 3px',
+                        }}
+                      >
+                        exported
+                      </span>
+                    )}
+                  </label>
+                  {fail && (
+                    <p style={{ color: 'crimson', fontSize: 11, margin: '2px 0 0 22px' }}>{fail}</p>
+                  )}
+                </li>
+              );
+            })}
           </ul>
+          <button
+            disabled={busy || sel.size === 0}
+            onClick={() => {
+              void (async () => {
+                const ack = await onExport([...sel]);
+                if (!ack) return;
+                const map: Record<string, { ok: boolean; error?: string }> = {};
+                for (const r of ack.results) map[r.id] = r;
+                setLastResults(map);
+                const failed = ack.results.filter((r) => !r.ok);
+                if (failed.length) {
+                  setSel(new Set(failed.map((r) => r.id)));
+                  setRetryCount(failed.length);
+                } else {
+                  setSel(new Set());
+                  setRetryCount(null);
+                }
+              })();
+            }}
+          >
+            {retryCount != null ? `Retry ${retryCount} failed` : `Export ${sel.size} to Notion`}
+          </button>
         </>
       )}
       {summary.decisions.length > 0 && (
