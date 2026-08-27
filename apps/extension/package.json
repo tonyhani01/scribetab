@@ -1,13 +1,20 @@
 {
   "name": "@scribetab/extension",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "license": "GPL-3.0-only",
   "type": "module",
   "scripts": {
     "dev": "wxt",
     "build": "wxt build",
     "typecheck": "wxt prepare && tsc --noEmit",
-    "test": "wxt prepare && vitest run"
+    "test": "wxt prepare && vitest run",
+    "e2e": "wxt build && playwright test",
+    "zip": "wxt zip",
+    "pretest": "pnpm --filter @scribetab/shared build",
+    "pretypecheck": "pnpm --filter @scribetab/shared build",
+    "prebuild": "pnpm --filter @scribetab/shared build",
+    "pree2e": "pnpm --filter @scribetab/shared build",
+    "prezip": "pnpm --filter @scribetab/shared build"
   },
   "dependencies": {
     "@scribetab/shared": "workspace:*",
@@ -16,6 +23,7 @@
   },
   "devDependencies": {
     "@types/chrome": "^0.0.280",
+    "@playwright/test": "^1.51.0",
     "fake-indexeddb": "^6.0.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0",
