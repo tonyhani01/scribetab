@@ -16,6 +16,7 @@ export interface Settings {
   redactAtRest: boolean;
   redactTerms: string[];
   captionsOnly: boolean; // Meet captions → TranscriptSegment, zero STT provider calls
+  consentReminder: boolean; // banner when a recording starts; default on
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -34,6 +35,7 @@ export const DEFAULT_SETTINGS: Settings = {
   redactAtRest: false,
   redactTerms: [],
   captionsOnly: false,
+  consentReminder: true,
 };
 
 const KEY = 'settings';
