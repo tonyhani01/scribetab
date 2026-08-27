@@ -1,10 +1,19 @@
 import { originPattern, transcriptionEndpoint } from '@scribetab/shared';
 import type { TranscriptSegment } from '@scribetab/shared';
 import {
+  acceptsCaptionEvents,
+  captionsOnlyFallbackNotice,
+  freezeCaptionsOnly,
+  fusionWaitMs,
+  isCaptionSenderAllowed,
+  LIVE_FUSION_MIN_MS,
+} from '@/utils/captionGate';
+import {
   captionCueToSegment,
   clearCaptionTimeline,
   fuseWithCaptions,
   ingestCaptionEvent,
+  rehydrateCaptionTimeline,
   resetCaptionTimeline,
 } from '@/utils/captionSession';
 import {
@@ -13,7 +22,7 @@ import {
   runFinalizeIntelligence,
   scheduleFinalizeIntelligence,
 } from '@/utils/intelligence';
-import type { Ack, ToBackground, ToOffscreen, ToSidePanel, TranscriptionSettingsPayload } from '@/utils/messages';
+import type { Ack, ToBackground, ToMeetCaptions, ToOffscreen, ToSidePanel, TranscriptionSettingsPayload } from '@/utils/messages';
 import { persistHostStatus, syncSessionToHost } from '@/utils/nativeSync';
 import { platformFromUrl, titleFromTab } from '@/utils/platform';
 import { checkQuota } from '@/utils/quota';
@@ -37,6 +46,13 @@ import { getSettings } from '@/utils/settings';
 
 let creatingOffscreen: Promise<void> | null = null;
 let bootReady: Promise<void> = Promise.resolve();
+
+type CaptionMsg = Extract<ToBackground, { type: 'CAPTION_EVENT' }>;
+const captionBuffer: CaptionMsg[] = [];
+let lastFusionMs = 0;
+let fusionTimer: ReturnType<typeof setTimeout> | null = null;
+let fusionQueuedSession: string | null = null;
+let segmentCountChain: Promise<void> = Promise.resolve();
 
 async function offscreenContexts(): Promise<chrome.runtime.ExtensionContext[]> {
   return chrome.runtime.getContexts({
@@ -79,13 +95,51 @@ function notifySidePanel(msg: ToSidePanel): void {
   });
 }
 
-async function bumpSegmentCount(delta: number): Promise<void> {
-  const { segmentCount } = await chrome.storage.local.get('segmentCount');
-  const n = (typeof segmentCount === 'number' ? segmentCount : 0) + delta;
-  await chrome.storage.local.set({ segmentCount: n });
+function notifyMeetTab(tabId: number, active: boolean): void {
+  const msg: ToMeetCaptions = { target: 'meet-captions', type: 'CAPTURE_ACTIVE', active };
+  void chrome.tabs.sendMessage(tabId, msg).catch(() => {
+    // Tab has no Meet content script (not meet.google.com, or not loaded yet).
+  });
 }
 
-async function applyFusion(sessionId: string): Promise<void> {
+function syncSegmentCount(sessionId: string): Promise<void> {
+  const done = segmentCountChain.then(async () => {
+    const segs = await getSegments(sessionId);
+    await chrome.storage.local.set({ segmentCount: segs.length });
+  });
+  segmentCountChain = done.catch(() => {});
+  return done;
+}
+
+function clearFusionTimer(): void {
+  if (fusionTimer != null) {
+    clearTimeout(fusionTimer);
+    fusionTimer = null;
+  }
+  fusionQueuedSession = null;
+}
+
+async function applyFusion(sessionId: string, force = false): Promise<void> {
+  const { sessionCaptionsOnly } = await chrome.storage.local.get('sessionCaptionsOnly');
+  if (sessionCaptionsOnly) return;
+
+  if (!force) {
+    const wait = fusionWaitMs(Date.now(), lastFusionMs, LIVE_FUSION_MIN_MS);
+    if (wait > 0) {
+      fusionQueuedSession = sessionId;
+      if (fusionTimer == null) {
+        fusionTimer = setTimeout(() => {
+          fusionTimer = null;
+          const id = fusionQueuedSession;
+          fusionQueuedSession = null;
+          if (id) void applyFusion(id, true);
+        }, wait);
+      }
+      return;
+    }
+  }
+
+  lastFusionMs = Date.now();
   const segs = await getSegments(sessionId);
   if (segs.length === 0) return;
   const fused = fuseWithCaptions(segs, sessionId);
@@ -100,42 +154,94 @@ async function applyFusion(sessionId: string): Promise<void> {
   });
 }
 
+async function applyCaptionEvent(
+  sessionId: string,
+  msg: CaptionMsg,
+  originMs: number,
+  captionsOnly: boolean,
+): Promise<void> {
+  const cue = await ingestCaptionEvent(sessionId, msg, originMs);
+  if (!cue) return;
+
+  if (captionsOnly) {
+    const segment: TranscriptSegment = captionCueToSegment(sessionId, cue, crypto.randomUUID());
+    await putSegments([segment]);
+    await syncSegmentCount(sessionId);
+    notifySidePanel({
+      target: 'sidepanel',
+      type: 'SEGMENTS_ADDED',
+      sessionId,
+      segments: [segment],
+    });
+  } else {
+    await applyFusion(sessionId);
+  }
+}
+
 async function handleCaptionEvent(
-  msg: Extract<ToBackground, { type: 'CAPTION_EVENT' }>,
+  msg: CaptionMsg,
+  sender: chrome.runtime.MessageSender,
 ): Promise<Ack> {
-  const { currentSessionId, captureState } = await chrome.storage.local.get([
-    'currentSessionId',
-    'captureState',
-  ]);
-  if (captureState !== 'recording' || typeof currentSessionId !== 'string') {
+  const { currentSessionId, captureState, capturedTabId, sessionCaptionsOnly } =
+    await chrome.storage.local.get([
+      'currentSessionId',
+      'captureState',
+      'capturedTabId',
+      'sessionCaptionsOnly',
+    ]);
+  if (!isCaptionSenderAllowed(sender.tab?.id, capturedTabId)) {
+    return { ok: true };
+  }
+  if (!acceptsCaptionEvents(captureState)) {
+    return { ok: true };
+  }
+  if (typeof currentSessionId !== 'string') {
+    captionBuffer.push(msg);
     return { ok: true };
   }
   const session = await getSession(currentSessionId);
   if (!session) return { ok: true };
-  const origin = Date.parse(session.startedAt);
-  if (!Number.isFinite(origin)) return { ok: true };
-  const cue = ingestCaptionEvent(currentSessionId, msg, origin);
-  if (!cue.text) return { ok: true };
+  const { audioStartedAtMs } = await chrome.storage.local.get('audioStartedAtMs');
+  const origin =
+    session.audioStartedAtMs ??
+    (typeof audioStartedAtMs === 'number' ? audioStartedAtMs : undefined);
+  if (origin == null || !Number.isFinite(origin)) {
+    captionBuffer.push(msg);
+    return { ok: true };
+  }
+  const captionsOnly = Boolean(session.captionsOnly ?? sessionCaptionsOnly);
+  await applyCaptionEvent(currentSessionId, msg, origin, captionsOnly);
+  return { ok: true };
+}
 
-  const settings = await getSettings();
-  if (settings.captionsOnly) {
-    const segment: TranscriptSegment = captionCueToSegment(
-      currentSessionId,
-      cue,
-      crypto.randomUUID(),
-    );
-    await putSegments([segment]);
-    await bumpSegmentCount(1);
-    notifySidePanel({
-      target: 'sidepanel',
-      type: 'SEGMENTS_ADDED',
-      sessionId: currentSessionId,
-      segments: [segment],
-    });
-  } else {
-    await applyFusion(currentSessionId);
+async function handleAudioStarted(
+  msg: Extract<ToBackground, { type: 'AUDIO_STARTED' }>,
+): Promise<Ack> {
+  const { currentSessionId, sessionCaptionsOnly } = await chrome.storage.local.get([
+    'currentSessionId',
+    'sessionCaptionsOnly',
+  ]);
+  if (typeof currentSessionId === 'string' && currentSessionId !== msg.sessionId) {
+    return { ok: true };
+  }
+  await updateSession(msg.sessionId, { audioStartedAtMs: msg.startedAtMs }).catch(() => {});
+  await chrome.storage.local.set({ audioStartedAtMs: msg.startedAtMs });
+  const buffered = captionBuffer.splice(0);
+  const captionsOnly = Boolean(sessionCaptionsOnly);
+  for (const ev of buffered) {
+    await applyCaptionEvent(msg.sessionId, ev, msg.startedAtMs, captionsOnly);
   }
   return { ok: true };
+}
+
+async function handleCaptureQuery(sender: chrome.runtime.MessageSender): Promise<Ack> {
+  const { capturedTabId, captureState } = await chrome.storage.local.get([
+    'capturedTabId',
+    'captureState',
+  ]);
+  const captured =
+    isCaptionSenderAllowed(sender.tab?.id, capturedTabId) && acceptsCaptionEvents(captureState);
+  return { ok: true, captured };
 }
 
 function stopOffscreen(sessionId?: string): Promise<Ack> {
@@ -194,13 +300,21 @@ async function maybeSyncSession(sessionId: string | undefined): Promise<void> {
   await persistHostStatus(status);
 }
 
+async function setIdle(extra: Record<string, unknown> = {}): Promise<void> {
+  const { capturedTabId } = await chrome.storage.local.get('capturedTabId');
+  if (typeof capturedTabId === 'number') notifyMeetTab(capturedTabId, false);
+  captionBuffer.length = 0;
+  await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null, ...extra });
+}
+
 async function completeSession(
   sessionId: string | undefined,
   status: 'complete' | 'failed',
 ): Promise<void> {
   if (!sessionId) return;
-  await applyFusion(sessionId).catch(() => {});
-  clearCaptionTimeline(sessionId);
+  clearFusionTimer();
+  await applyFusion(sessionId, true).catch(() => {});
+  await clearCaptionTimeline(sessionId).catch(() => {});
   const s = await getSettings();
   const flipped = await finalizeSession(sessionId, { retainAudio: s.retainAudio, status });
   if (flipped && status === 'complete') {
@@ -226,6 +340,7 @@ async function handleStart(): Promise<Ack> {
   opInFlight = true;
   let offscreenStarted = false;
   let createdId: string | null = null;
+  let startedTabId: number | null = null;
   try {
     const { captureState } = await chrome.storage.local.get('captureState');
     if (captureState === 'recording' || captureState === 'starting') {
@@ -234,8 +349,15 @@ async function handleStart(): Promise<Ack> {
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab?.id == null) throw new Error('No active tab');
+    startedTabId = tab.id;
 
-    await chrome.storage.local.set({ captureState: 'starting', lastError: null });
+    await chrome.storage.local.set({
+      captureState: 'starting',
+      capturedTabId: tab.id,
+      lastError: null,
+      captureNotice: null,
+    });
+    notifyMeetTab(tab.id, true);
 
     // Offscreen must exist BEFORE getMediaStreamId: stream ids are one-use
     // and expire within seconds, so the consumer must be ready.
@@ -244,7 +366,14 @@ async function handleStart(): Promise<Ack> {
     const streamId = await getMediaStreamId({ targetTabId: tab.id });
 
     const settings = await getSettings();
-    const transcription = settings.captionsOnly ? null : await transcriptionPayload();
+    const platform = platformFromUrl(tab.url);
+    const captionsOnly = freezeCaptionsOnly(settings.captionsOnly, platform);
+    const transcription = captionsOnly ? null : await transcriptionPayload();
+    const notice = captionsOnlyFallbackNotice(
+      settings.captionsOnly,
+      platform,
+      transcription !== null,
+    );
     const sessionId = crypto.randomUUID();
     createdId = sessionId;
     resetCaptionTimeline(sessionId);
@@ -253,9 +382,17 @@ async function handleStart(): Promise<Ack> {
       id: sessionId,
       title: titleFromTab(tab),
       startedAt: new Date().toISOString(),
-      platform: platformFromUrl(tab.url),
+      platform,
       tabUrl: tab.url,
       status: 'recording',
+      captionsOnly,
+    });
+    // Publish session id before offscreen start so AUDIO_STARTED / captions can land.
+    await chrome.storage.local.set({
+      currentSessionId: sessionId,
+      sessionCaptionsOnly: captionsOnly,
+      captureNotice: notice,
+      transcriptionConfigured: captionsOnly || transcription !== null,
     });
     const startMsg = {
       target: 'offscreen',
@@ -284,9 +421,11 @@ async function handleStart(): Promise<Ack> {
       chunkCount: 0,
       segmentCount: 0,
       currentSessionId: sessionId,
-      transcriptionConfigured: settings.captionsOnly || transcription !== null,
+      transcriptionConfigured: captionsOnly || transcription !== null,
       micStatus: settings.micEnabled ? 'active' : 'off', // corrected by MIC_STATUS if denied
       capturedTabId: tab.id,
+      sessionCaptionsOnly: captionsOnly,
+      captureNotice: notice,
       lastError: null,
     });
     return { ok: true };
@@ -295,7 +434,14 @@ async function handleStart(): Promise<Ack> {
       await stopOffscreen(createdId ?? undefined).catch(() => {});
     }
     if (createdId) await completeSession(createdId, 'failed').catch(() => {});
-    await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
+    if (startedTabId != null) notifyMeetTab(startedTabId, false);
+    captionBuffer.length = 0;
+    await chrome.storage.local.set({
+      captureState: 'idle',
+      capturedTabId: null,
+      sessionCaptionsOnly: false,
+      captureNotice: null,
+    });
     return { ok: false, error: String(e) };
   } finally {
     opInFlight = false;
@@ -312,7 +458,7 @@ async function handleStop(): Promise<Ack> {
     const res = await stopOffscreen(sessionId);
     if (res?.ok) {
       await completeSession(sessionId, 'complete');
-      await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null, lastError: null });
+      await setIdle({ lastError: null, sessionCaptionsOnly: false });
       return { ok: true };
     }
     // A reply with ok:false means the offscreen listener ran finalize, which
@@ -321,10 +467,9 @@ async function handleStop(): Promise<Ack> {
     // CAPTURE_ENDED handler's 'idle' and leave the partial audio undownloadable
     // (download requires 'idle'). Surface the error and settle at idle.
     await completeSession(sessionId, 'failed');
-    await chrome.storage.local.set({
-      captureState: 'idle',
-      capturedTabId: null,
+    await setIdle({
       lastError: res?.error ?? 'Stop failed',
+      sessionCaptionsOnly: false,
     });
     return { ok: false, error: res?.error ?? 'Stop failed' };
   } catch (e) {
@@ -332,7 +477,7 @@ async function handleStop(): Promise<Ack> {
     const sessionId = typeof currentSessionId === 'string' ? currentSessionId : undefined;
     if ((await offscreenContexts()).length === 0) {
       await completeSession(sessionId, 'failed');
-      await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
+      await setIdle({ sessionCaptionsOnly: false });
       return { ok: true };
     }
     await chrome.storage.local.set({ captureState: 'recording', lastError: String(e) });
@@ -352,10 +497,9 @@ async function finalizeIfCaptured(tabId: number): Promise<void> {
   const sessionId = typeof currentSessionId === 'string' ? currentSessionId : undefined;
   const res = await stopOffscreen(sessionId).catch(() => null);
   await completeSession(sessionId, statusFromOffscreenAck(res));
-  await chrome.storage.local.set({
-    captureState: 'idle',
-    capturedTabId: null,
+  await setIdle({
     lastError: res && !res.ok ? (res.error ?? 'Stop failed') : res ? null : 'Offscreen unreachable',
+    sessionCaptionsOnly: false,
   });
 }
 
@@ -369,15 +513,22 @@ export default defineBackground(() => {
     ]);
     const offscreenAlive = (await offscreenContexts()).length > 0;
     if (bootShouldIdle(captureState, offscreenAlive)) {
-      await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null });
+      await setIdle();
     }
     const exceptId = bootExceptId(captureState, currentSessionId, offscreenAlive);
     const retainAudio = (await getSettings()).retainAudio;
     await failStaleRecordings(exceptId, retainAudio);
     void retryPendingIntelligence();
+    if (
+      typeof currentSessionId === 'string' &&
+      acceptsCaptionEvents(captureState) &&
+      !bootShouldIdle(captureState, offscreenAlive)
+    ) {
+      await rehydrateCaptionTimeline(currentSessionId).catch(() => {});
+    }
   })();
 
-  chrome.runtime.onMessage.addListener((raw: unknown, _sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((raw: unknown, sender, sendResponse) => {
     const msg = raw as ToBackground;
     if (msg?.target !== 'background') return false; // not ours — never hold the port
 
@@ -396,16 +547,22 @@ export default defineBackground(() => {
           sendResponse({ ok: true });
           break;
         case 'SEGMENT_SAVED': {
-          await chrome.storage.local.set({ segmentCount: msg.count });
           const { currentSessionId } = await chrome.storage.local.get('currentSessionId');
           if (typeof currentSessionId === 'string') {
+            await syncSegmentCount(currentSessionId);
             await applyFusion(currentSessionId).catch(() => {});
           }
           sendResponse({ ok: true });
           break;
         }
+        case 'AUDIO_STARTED':
+          sendResponse(await handleAudioStarted(msg));
+          break;
+        case 'CAPTION_CAPTURE_QUERY':
+          sendResponse(await handleCaptureQuery(sender));
+          break;
         case 'CAPTION_EVENT':
-          sendResponse(await handleCaptionEvent(msg));
+          sendResponse(await handleCaptionEvent(msg, sender));
           break;
         case 'MIC_STATUS':
           await chrome.storage.local.set({ micStatus: msg.status });
@@ -415,10 +572,9 @@ export default defineBackground(() => {
           await completeSession(msg.sessionId, statusFromCaptureEnded(msg.error));
           const { currentSessionId } = await chrome.storage.local.get('currentSessionId');
           if (isLiveSession(msg.sessionId, currentSessionId)) {
-            await chrome.storage.local.set({
-              captureState: 'idle',
-              capturedTabId: null,
+            await setIdle({
               lastError: msg.error ?? null,
+              sessionCaptionsOnly: false,
             });
           }
           sendResponse({ ok: true });

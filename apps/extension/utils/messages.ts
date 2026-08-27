@@ -21,14 +21,28 @@ export type ToBackground =
   | { target: 'background'; type: 'CAPTURE_ENDED'; sessionId: string; reason: string; error?: string }  // offscreen → SW
   | {
       target: 'background';
+      type: 'AUDIO_STARTED';
+      sessionId: string;
+      startedAtMs: number; // wall-clock Date.now() when the worklet actually starts
+    }
+  | { target: 'background'; type: 'CAPTION_CAPTURE_QUERY' } // Meet content script → SW
+  | {
+      target: 'background';
       type: 'CAPTION_EVENT';
       speaker: string;
       text: string;
       timestampMs: number; // wall-clock Date.now() at caption start
-      endMs?: number;      // wall-clock Date.now() at emit (stabilize / speaker change)
+      endMs?: number;      // wall-clock last mutation time for the block
     }
   | { target: 'background'; type: 'SYNC_ALL' }
   | { target: 'background'; type: 'REGENERATE_SUMMARY'; sessionId: string };
+
+/** Broadcast to the Meet captions content script when tab capture starts/stops. */
+export type ToMeetCaptions = {
+  target: 'meet-captions';
+  type: 'CAPTURE_ACTIVE';
+  active: boolean;
+};
 
 /** Messages handled by the offscreen document (from the service worker only). */
 export type ToOffscreen =
@@ -63,4 +77,5 @@ export interface Ack {
   ok: boolean;
   error?: string;
   hostMissing?: boolean;
+  captured?: boolean;
 }

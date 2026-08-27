@@ -85,18 +85,20 @@ function LiveView() {
   const [micStatus, setMicStatus] = useState<string>('off');
   const [hostStatus, setHostStatus] = useState<NativeHostStatus>({ state: 'idle' });
   const [syncing, setSyncing] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<string | null>(null);
   sessionRef.current = sessionId;
 
   useEffect(() => {
     void chrome.storage.local
-      .get(['currentSessionId', 'captureState', 'transcriptionConfigured', 'micStatus', 'nativeHostStatus'])
+      .get(['currentSessionId', 'captureState', 'transcriptionConfigured', 'micStatus', 'nativeHostStatus', 'captureNotice'])
       .then(async (v) => {
         setState((v.captureState as CaptureState) ?? 'idle');
         setConfigured((v.transcriptionConfigured as boolean) ?? true);
         setMicStatus((v.micStatus as string) ?? 'off');
         if (v.nativeHostStatus) setHostStatus(v.nativeHostStatus as NativeHostStatus);
+        setNotice(typeof v.captureNotice === 'string' && v.captureNotice ? v.captureNotice : null);
         const sid = (v.currentSessionId as string) ?? null;
         setSessionId(sid);
         if (sid) setSegments(await getSegments(sid));
@@ -108,6 +110,10 @@ function LiveView() {
       if (c.transcriptionConfigured) setConfigured(Boolean(c.transcriptionConfigured.newValue));
       if (c.micStatus) setMicStatus(String(c.micStatus.newValue ?? 'off'));
       if (c.nativeHostStatus) setHostStatus((c.nativeHostStatus.newValue as NativeHostStatus) ?? { state: 'idle' });
+      if (c.captureNotice) {
+        const n = c.captureNotice.newValue;
+        setNotice(typeof n === 'string' && n ? n : null);
+      }
       if (c.currentSessionId) {
         const sid = (c.currentSessionId.newValue as string) ?? null;
         setSessionId(sid);
@@ -154,6 +160,9 @@ function LiveView() {
         </span>
       </header>
 
+      {notice && (
+        <p style={{ color: '#8a6d00', background: '#fff8e1', padding: 8, fontSize: 13 }}>{notice}</p>
+      )}
       {!configured && (
         <p style={{ color: '#8a6d00', background: '#fff8e1', padding: 8, fontSize: 13 }}>
           No transcription provider configured (or its permission is missing) — recording audio only.{' '}

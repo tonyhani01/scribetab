@@ -29,6 +29,7 @@ function notifyBackground(
     | { target: 'background'; type: 'CHUNK_SAVED'; count: number }
     | { target: 'background'; type: 'SEGMENT_SAVED'; count: number }
     | { target: 'background'; type: 'MIC_STATUS'; status: 'active' | 'denied' | 'off' }
+    | { target: 'background'; type: 'AUDIO_STARTED'; sessionId: string; startedAtMs: number }
     | { target: 'background'; type: 'CAPTURE_ENDED'; sessionId: string; reason: string; error?: string },
 ): void {
   void chrome.runtime.sendMessage(msg).catch(() => {
@@ -184,6 +185,12 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
     });
 
     engine = { ctx, stream, micStream, node, chunker, sampleRate };
+    notifyBackground({
+      target: 'background',
+      type: 'AUDIO_STARTED',
+      sessionId: msg.sessionId,
+      startedAtMs: Date.now(),
+    });
   } catch (e) {
     finalized = true;
     node?.disconnect();

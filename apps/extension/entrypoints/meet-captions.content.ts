@@ -6,6 +6,7 @@ import {
   type CaptionReduceState,
 } from '@/utils/captionReduce';
 import { findCaptionsContainer, parseCaptionNodes } from '@/utils/meetSelectors';
+import type { Ack, ToMeetCaptions } from '@/utils/messages';
 
 const STABILIZE_MS = 400;
 const SCAN_MS = 1000;
@@ -18,8 +19,13 @@ export default defineContentScript({
     let container: Element | null = null;
     let containerObserver: MutationObserver | null = null;
     let stabilizeTimer: number | null = null;
+    let boot: MutationObserver | null = null;
+    let scanInterval: number | null = null;
+    let scanTimer: number | null = null;
+    let capturing = false;
 
     const send = (ev: CaptionEvent) => {
+      if (!capturing) return;
       void chrome.runtime
         .sendMessage({
           target: 'background',
@@ -44,7 +50,7 @@ export default defineContentScript({
     };
 
     const handleMutations = () => {
-      if (!container) return;
+      if (!container || !capturing) return;
       const now = Date.now();
       const snaps = parseCaptionNodes(container);
       const applied = applyCaptionSnapshots(reduceState, snaps, now);
@@ -59,7 +65,21 @@ export default defineContentScript({
       container = null;
     };
 
+    const disarmDiscovery = () => {
+      boot?.disconnect();
+      boot = null;
+      if (scanInterval != null) {
+        window.clearInterval(scanInterval);
+        scanInterval = null;
+      }
+      if (scanTimer != null) {
+        window.clearTimeout(scanTimer);
+        scanTimer = null;
+      }
+    };
+
     const scan = () => {
+      if (!capturing) return;
       const found = findCaptionsContainer(document);
       if (found.status === 'not_found') {
         if (container) {
@@ -68,11 +88,13 @@ export default defineContentScript({
           for (const ev of flushed.events) send(ev);
         }
         detach();
+        armDiscovery();
         return;
       }
       if (found.element === container) return;
       detach();
       container = found.element;
+      disarmDiscovery();
       containerObserver = new MutationObserver(handleMutations);
       containerObserver.observe(container, {
         subtree: true,
@@ -82,8 +104,8 @@ export default defineContentScript({
       handleMutations();
     };
 
-    let scanTimer: number | null = null;
     const requestScan = () => {
+      if (!capturing) return;
       if (scanTimer != null) return;
       scanTimer = window.setTimeout(() => {
         scanTimer = null;
@@ -91,9 +113,60 @@ export default defineContentScript({
       }, 100);
     };
 
-    const boot = new MutationObserver(requestScan);
-    boot.observe(document.documentElement, { childList: true, subtree: true });
-    window.setInterval(scan, SCAN_MS);
-    scan();
+    const armDiscovery = () => {
+      if (!capturing) return;
+      if (!boot) {
+        boot = new MutationObserver(requestScan);
+        boot.observe(document.documentElement, { childList: true, subtree: true });
+      }
+      if (scanInterval == null) scanInterval = window.setInterval(scan, SCAN_MS);
+    };
+
+    const stopObserving = () => {
+      if (stabilizeTimer != null) {
+        window.clearTimeout(stabilizeTimer);
+        stabilizeTimer = null;
+      }
+      const flushed = applyCaptionSnapshots(reduceState, [], Date.now());
+      reduceState = EMPTY_CAPTION_STATE;
+      for (const ev of flushed.events) send(ev);
+      disarmDiscovery();
+      detach();
+    };
+
+    const startObserving = () => {
+      reduceState = EMPTY_CAPTION_STATE;
+      armDiscovery();
+      scan();
+    };
+
+    const setCapturing = (active: boolean) => {
+      if (active === capturing) {
+        if (active) scan();
+        return;
+      }
+      if (active) {
+        capturing = true;
+        startObserving();
+      } else {
+        stopObserving(); // flush while capturing is still true so last cues send
+        capturing = false;
+      }
+    };
+
+    chrome.runtime.onMessage.addListener((raw: unknown) => {
+      const msg = raw as ToMeetCaptions;
+      if (msg?.target !== 'meet-captions' || msg.type !== 'CAPTURE_ACTIVE') return;
+      setCapturing(Boolean(msg.active));
+    });
+
+    void chrome.runtime
+      .sendMessage({ target: 'background', type: 'CAPTION_CAPTURE_QUERY' })
+      .then((ack: Ack | undefined) => {
+        if (ack?.captured) setCapturing(true);
+      })
+      .catch(() => {
+        // SW asleep — CAPTURE_ACTIVE broadcast will arm us when capture starts.
+      });
   },
 });

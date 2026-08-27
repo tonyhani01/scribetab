@@ -7,18 +7,24 @@ function App() {
   const [state, setState] = useState<CaptureState>('idle');
   const [chunks, setChunks] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    chrome.storage.local.get(['captureState', 'chunkCount', 'lastError']).then((v) => {
+    chrome.storage.local.get(['captureState', 'chunkCount', 'lastError', 'captureNotice']).then((v) => {
       setState((v.captureState as CaptureState) ?? 'idle');
       setChunks((v.chunkCount as number) ?? 0);
       if (typeof v.lastError === 'string' && v.lastError) setError(v.lastError);
+      if (typeof v.captureNotice === 'string' && v.captureNotice) setNotice(v.captureNotice);
     });
     const onChange = (c: Record<string, chrome.storage.StorageChange>, area: string) => {
       if (area !== 'local') return;
       if (c.captureState) setState((c.captureState.newValue as CaptureState) ?? 'idle');
       if (c.chunkCount) setChunks((c.chunkCount.newValue as number) ?? 0);
       if (c.lastError?.newValue) setError(String(c.lastError.newValue));
+      if (c.captureNotice) {
+        const n = c.captureNotice.newValue;
+        setNotice(typeof n === 'string' && n ? n : null);
+      }
     };
     chrome.storage.onChanged.addListener(onChange);
     return () => chrome.storage.onChanged.removeListener(onChange);
@@ -85,6 +91,7 @@ function App() {
       >
         Open transcript panel
       </button>
+      {notice && <p style={{ color: '#8a6d00', fontSize: 12 }}>{notice}</p>}
       {error && <p style={{ color: 'crimson', fontSize: 12 }}>{error}</p>}
     </main>
   );
