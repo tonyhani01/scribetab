@@ -39,6 +39,22 @@ describe('probe request URLs', () => {
     expect(req.url).toBe('https://api.deepgram.com/v1/projects');
     expect(req.headers.Authorization).toBe('Token dg');
   });
+
+  it('probes OpenRouter /models with Bearer auth on the pinned host', () => {
+    const req = sttProbeRequest('openrouter', 'or-key', 'http://evil.example/v1');
+    expect(req.url).toBe('https://openrouter.ai/api/v1/models');
+    expect(req.headers.Authorization).toBe('Bearer or-key');
+  });
+
+  it('probes Google models with x-goog-api-key and no key in the URL', () => {
+    const req = sttProbeRequest('google', 'g-key', 'http://evil.example/v1');
+    expect(req.url).toBe(
+      'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1',
+    );
+    expect(req.url).not.toMatch(/g-key/);
+    expect(req.headers['x-goog-api-key']).toBe('g-key');
+    expect(req.headers.Authorization).toBeUndefined();
+  });
 });
 
 describe('probeTranscription', () => {

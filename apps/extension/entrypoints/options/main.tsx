@@ -22,7 +22,15 @@ const MODEL_PLACEHOLDERS: Record<string, string> = {
   groq: 'whisper-large-v3-turbo',
   deepgram: 'nova-2',
   mistral: 'voxtral-mini-latest',
+  openrouter: 'openai/whisper-large-v3',
+  google: 'gemini-3.5-transcribe',
   custom: 'whisper-1',
+};
+
+const STT_PROVIDER_LABELS: Record<string, string> = {
+  openrouter: 'OpenRouter',
+  google: 'Google Gemini',
+  custom: 'custom (OpenAI-compatible / local server)',
 };
 
 const LLM_MODEL_PLACEHOLDERS: Record<string, string> = {
@@ -198,7 +206,7 @@ function App() {
         >
           <option value="">Off (record only)</option>
           {TRANSCRIPTION_PROVIDER_IDS.map((id) => (
-            <option value={id}>{id === 'custom' ? 'custom (OpenAI-compatible / local server)' : id}</option>
+            <option value={id}>{STT_PROVIDER_LABELS[id] ?? id}</option>
           ))}
         </select>
 
