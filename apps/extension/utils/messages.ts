@@ -18,7 +18,7 @@ export type ToBackground =
   | { target: 'background'; type: 'CHUNK_SAVED'; count: number }      // offscreen → SW
   | { target: 'background'; type: 'SEGMENT_SAVED'; count: number }    // offscreen → SW (running total)
   | { target: 'background'; type: 'MIC_STATUS'; status: 'active' | 'denied' | 'off' } // offscreen → SW
-  | { target: 'background'; type: 'CAPTURE_ENDED'; reason: string; error?: string };  // offscreen → SW
+  | { target: 'background'; type: 'CAPTURE_ENDED'; sessionId: string; reason: string; error?: string };  // offscreen → SW
 
 /** Messages handled by the offscreen document (from the service worker only). */
 export type ToOffscreen =
@@ -30,7 +30,7 @@ export type ToOffscreen =
       transcription: TranscriptionSettingsPayload | null; // null = record only, no STT configured
       micEnabled: boolean;
     }
-  | { target: 'offscreen'; type: 'OFFSCREEN_STOP' };
+  | { target: 'offscreen'; type: 'OFFSCREEN_STOP'; sessionId?: string };
 
 /** Broadcast to the side panel (from the offscreen document). */
 export type ToSidePanel = {
