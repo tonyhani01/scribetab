@@ -130,6 +130,31 @@ const exportItems = [
 ];
 
 describe('NativeSyncHost export_actions', () => {
+  it('rejects an unsupported protocolVersion with a failed export ack', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      const { stdout, messages } = capturingStdout();
+      let fetches = 0;
+      const fetchImpl: typeof fetch = async () => {
+        fetches += 1;
+        return new Response('{}', { status: 200 });
+      };
+      const host = new NativeSyncHost(stdout, env, { fetchImpl, platform: 'linux' });
+      await host.handle({
+        type: 'export_actions',
+        protocolVersion: 2,
+        sessionId: session.id,
+        items: exportItems,
+      });
+      const ack = messages()[0] as ExportActionsAck;
+      expect(ack.ok).toBe(false);
+      expect(ack.sessionId).toBe(session.id);
+      expect(ack.error).toMatch(/protocolVersion/);
+      expect(ack.results).toEqual([]);
+      expect(fetches).toBe(0);
+    });
+  });
+
   it('replies ok:false when Notion is unconfigured and does not fetch', async () => {
     await withHome(async (home) => {
       const env = linuxEnv(home);

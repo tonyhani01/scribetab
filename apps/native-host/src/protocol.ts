@@ -211,6 +211,10 @@ export class NativeSyncHost {
       });
     };
     try {
+      if (msg.protocolVersion !== 1) {
+        await fail(`Unsupported protocolVersion ${String(msg.protocolVersion)}`);
+        return;
+      }
       if (typeof msg.sessionId !== 'string' || !msg.sessionId) {
         await fail('export_actions missing sessionId');
         return;
