@@ -66,6 +66,10 @@ function App() {
         setStatus({ kind: 'err', text: llmUrlError });
         return;
       }
+      if (sttKeyMissing || llmKeyMissing) {
+        setStatus({ kind: 'err', text: 'This provider needs an API key.' });
+        return;
+      }
       const origins: string[] = [];
       if (s.providerId !== '') {
         origins.push(originPattern(transcriptionEndpoint(s.providerId, s.baseUrl.trim() || undefined)));
