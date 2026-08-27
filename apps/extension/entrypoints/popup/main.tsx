@@ -1,15 +1,22 @@
 import { render } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
+import { ConsentBanner } from '@/components/ConsentBanner';
 import type { Ack, CaptureState } from '@/utils/messages';
 import { assembleRecording } from '@/utils/assemble';
+import { isCapturableUrl } from '@/utils/platform';
+import { humanError } from '@/utils/userError';
 
 function App() {
   const [state, setState] = useState<CaptureState>('idle');
   const [chunks, setChunks] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [capturable, setCapturable] = useState(true);
 
   useEffect(() => {
+    void chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+      setCapturable(isCapturableUrl(tab?.url));
+    });
     chrome.storage.local.get(['captureState', 'chunkCount', 'lastError', 'captureNotice']).then((v) => {
       setState((v.captureState as CaptureState) ?? 'idle');
       setChunks((v.chunkCount as number) ?? 0);
@@ -34,9 +41,9 @@ function App() {
     setError(null);
     try {
       const res = (await chrome.runtime.sendMessage({ target: 'background', type })) as Ack;
-      if (!res?.ok) setError(res?.error ?? 'Unknown error');
+      if (!res?.ok) setError(res?.error ?? humanError('Unknown error'));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanError(e));
     }
   };
 
@@ -62,19 +69,30 @@ function App() {
       };
       chrome.downloads.onChanged.addListener(done);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanError(e));
     }
   };
 
   const busy = state === 'starting' || state === 'stopping';
+  const recording = state === 'recording' || state === 'starting' || state === 'stopping';
   return (
-    <main style={{ minWidth: 260, padding: 12, fontFamily: 'system-ui' }}>
+    <main data-testid="popup-root" style={{ minWidth: 260, padding: 12, fontFamily: 'system-ui' }}>
       <h1 style={{ fontSize: 16, margin: '0 0 8px' }}>ScribeTab</h1>
-      {state === 'recording' || state === 'stopping' ? (
-        <button disabled={busy} onClick={() => send('STOP_CAPTURE')}>■ Stop recording</button>
+      {!capturable && !recording ? (
+        <p data-testid="not-capturable" style={{ fontSize: 13, color: '#555' }}>
+          This page cannot be recorded. Open a meeting tab (Meet, Teams, Zoom, YouTube) or any
+          http(s) page, then try again.
+        </p>
+      ) : state === 'recording' || state === 'stopping' ? (
+        <button disabled={busy} onClick={() => send('STOP_CAPTURE')}>
+          ■ Stop recording
+        </button>
       ) : (
-        <button disabled={busy} onClick={() => send('START_CAPTURE')}>● Start recording this tab</button>
+        <button disabled={busy} onClick={() => send('START_CAPTURE')}>
+          ● Start recording this tab
+        </button>
       )}
+      <ConsentBanner recording={recording} />
       <p data-testid="chunk-count" style={{ fontSize: 12, color: '#555' }}>
         Saved chunks: {chunks}
       </p>
@@ -82,8 +100,9 @@ function App() {
         Download last recording (.wav)
       </button>
       <button
+        data-testid="open-side-panel"
         onClick={() => {
-          void chrome.windows.getCurrent().then((w) => {
+          chrome.windows.getCurrent((w) => {
             if (w.id != null) void chrome.sidePanel.open({ windowId: w.id });
             window.close();
           });
@@ -92,7 +111,11 @@ function App() {
         Open transcript panel
       </button>
       {notice && <p style={{ color: '#8a6d00', fontSize: 12 }}>{notice}</p>}
-      {error && <p style={{ color: 'crimson', fontSize: 12 }}>{error}</p>}
+      {error && (
+        <p data-testid="popup-error" style={{ color: 'crimson', fontSize: 12 }}>
+          {error}
+        </p>
+      )}
     </main>
   );
 }

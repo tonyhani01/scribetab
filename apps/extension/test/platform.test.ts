@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { platformFromUrl, titleFromTab } from '../utils/platform';
+import { isCapturableUrl, isMeetingPlatform, platformFromUrl, titleFromTab } from '../utils/platform';
 
 describe('platformFromUrl', () => {
   it('maps known meeting hosts', () => {
@@ -20,5 +20,23 @@ describe('titleFromTab', () => {
     expect(titleFromTab({ title: '  Weekly  ' })).toBe('Weekly');
     expect(titleFromTab({ title: '' })).toBe('Untitled meeting');
     expect(titleFromTab(undefined)).toBe('Untitled meeting');
+  });
+});
+
+describe('isMeetingPlatform', () => {
+  it('is true only for known meeting hosts', () => {
+    expect(isMeetingPlatform('https://meet.google.com/abc')).toBe(true);
+    expect(isMeetingPlatform('https://example.com')).toBe(false);
+  });
+});
+
+describe('isCapturableUrl', () => {
+  it('rejects browser UI, extensions, and the Web Store', () => {
+    expect(isCapturableUrl(undefined)).toBe(false);
+    expect(isCapturableUrl('chrome://newtab/')).toBe(false);
+    expect(isCapturableUrl('chrome-extension://abc/popup.html')).toBe(false);
+    expect(isCapturableUrl('https://chrome.google.com/webstore/detail/x')).toBe(false);
+    expect(isCapturableUrl('https://chromewebstore.google.com/detail/x')).toBe(false);
+    expect(isCapturableUrl('https://www.youtube.com/watch?v=1')).toBe(true);
   });
 });

@@ -3,13 +3,15 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { TranscriptSegment } from '@scribetab/shared';
 import { formatClock, formatUsd, llmEndpoint, originPattern } from '@scribetab/shared';
 import type MiniSearch from 'minisearch';
-import type { Ack, CaptureState, ToSidePanel } from '@/utils/messages';
+import { ConsentBanner } from '@/components/ConsentBanner';
+import type { Ack, CaptureState, ToSidePanel, TranscriptionIssue } from '@/utils/messages';
 import type { NativeHostStatus } from '@/utils/nativeSync';
 import { downloadExport, type ExportFormat } from '@/utils/exportDownload';
 import { getAllSegments, getSegments } from '@/utils/segmentStore';
 import { createSegmentIndex, snippetAround, type SearchDoc } from '@/utils/search';
 import { getSession, listSessions, type StoredSession } from '@/utils/sessionStore';
 import { getSettings } from '@/utils/settings';
+import { humanError } from '@/utils/userError';
 
 function fmt(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -52,7 +54,7 @@ function App() {
   }, []);
 
   return (
-    <main style={{ padding: 12, fontFamily: 'system-ui', fontSize: 14 }}>
+    <main data-testid="sidepanel-root" style={{ padding: 12, fontFamily: 'system-ui', fontSize: 14 }}>
       <nav style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
         {(['live', 'library'] as const).map((t) => (
           <button
@@ -82,6 +84,7 @@ function LiveView() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [state, setState] = useState<CaptureState>('idle');
   const [configured, setConfigured] = useState(true);
+  const [issue, setIssue] = useState<TranscriptionIssue>(null);
   const [micStatus, setMicStatus] = useState<string>('off');
   const [hostStatus, setHostStatus] = useState<NativeHostStatus>({ state: 'idle' });
   const [syncing, setSyncing] = useState(false);
@@ -92,10 +95,11 @@ function LiveView() {
 
   useEffect(() => {
     void chrome.storage.local
-      .get(['currentSessionId', 'captureState', 'transcriptionConfigured', 'micStatus', 'nativeHostStatus', 'captureNotice'])
+      .get(['currentSessionId', 'captureState', 'transcriptionConfigured', 'transcriptionIssue', 'micStatus', 'nativeHostStatus', 'captureNotice'])
       .then(async (v) => {
         setState((v.captureState as CaptureState) ?? 'idle');
         setConfigured((v.transcriptionConfigured as boolean) ?? true);
+        setIssue((v.transcriptionIssue as TranscriptionIssue) ?? null);
         setMicStatus((v.micStatus as string) ?? 'off');
         if (v.nativeHostStatus) setHostStatus(v.nativeHostStatus as NativeHostStatus);
         setNotice(typeof v.captureNotice === 'string' && v.captureNotice ? v.captureNotice : null);
@@ -108,6 +112,9 @@ function LiveView() {
       if (area !== 'local') return;
       if (c.captureState) setState((c.captureState.newValue as CaptureState) ?? 'idle');
       if (c.transcriptionConfigured) setConfigured(Boolean(c.transcriptionConfigured.newValue));
+      if ('transcriptionIssue' in c) {
+        setIssue((c.transcriptionIssue.newValue as TranscriptionIssue) ?? null);
+      }
       if (c.micStatus) setMicStatus(String(c.micStatus.newValue ?? 'off'));
       if (c.nativeHostStatus) setHostStatus((c.nativeHostStatus.newValue as NativeHostStatus) ?? { state: 'idle' });
       if (c.captureNotice) {
@@ -160,19 +167,34 @@ function LiveView() {
         </span>
       </header>
 
+      <ConsentBanner recording={state === 'recording' || state === 'starting' || state === 'stopping'} />
       {notice && (
         <p style={{ color: '#8a6d00', background: '#fff8e1', padding: 8, fontSize: 13 }}>{notice}</p>
       )}
-      {!configured && (
-        <p style={{ color: '#8a6d00', background: '#fff8e1', padding: 8, fontSize: 13 }}>
-          No transcription provider configured (or its permission is missing) — recording audio only.{' '}
+      {!configured && issue === 'missing-permission' && (
+        <p data-testid="live-permission" style={{ color: '#8a6d00', background: '#fff8e1', padding: 8, fontSize: 13 }}>
+          Host permission for the transcription provider is missing — recording audio only.{' '}
+          <a href="#" onClick={(e) => { e.preventDefault(); void chrome.runtime.openOptionsPage(); }}>
+            Open settings
+          </a>
+        </p>
+      )}
+      {!configured && issue !== 'missing-permission' && (
+        <p data-testid="live-unconfigured" style={{ color: '#8a6d00', background: '#fff8e1', padding: 8, fontSize: 13 }}>
+          No transcription provider configured — recording audio only.{' '}
           <a href="#" onClick={(e) => { e.preventDefault(); void chrome.runtime.openOptionsPage(); }}>
             Open settings
           </a>
         </p>
       )}
 
-      <SegmentList segments={segments} empty="Segments appear here as chunks are transcribed." />
+      {state === 'idle' && segments.length === 0 ? (
+        <p data-testid="live-empty" style={{ color: '#777' }}>
+          No live session. Start recording from the popup or press Alt+Shift+R.
+        </p>
+      ) : (
+        <SegmentList segments={segments} empty="Segments appear here as chunks are transcribed." />
+      )}
       <div ref={endRef} />
 
       <footer style={{ marginTop: 16, borderTop: '1px solid #eee', paddingTop: 8 }}>
@@ -186,7 +208,10 @@ function LiveView() {
                 if (res?.hostMissing) {
                   setHostStatus({ state: 'missing', message: res.error });
                 } else if (!res?.ok) {
-                  setHostStatus({ state: 'error', message: res?.error ?? 'Sync failed' });
+                  setHostStatus({
+                    state: 'error',
+                    message: res?.error ?? humanError('Sync failed'),
+                  });
                 } else {
                   setHostStatus({ state: 'ok', warning: res.warning });
                 }
@@ -198,11 +223,14 @@ function LiveView() {
         </button>
         {hostStatus.state === 'missing' && (
           <p style={{ color: '#8a6d00', background: '#fff8e1', padding: 8, fontSize: 12 }}>
-            Native host not installed. Run <code>npx scribetab-host install</code> then try Sync all.
+            Native host not installed. Run <code>node apps/native-host/dist/host.bin.js install</code>{' '}
+            (or <code>npx scribetab-host install</code> once published) then try Sync all.
           </p>
         )}
         {hostStatus.state === 'error' && hostStatus.message && (
-          <p style={{ color: '#555', fontSize: 12 }}>{hostStatus.message}</p>
+          <p data-testid="sync-error" style={{ color: 'crimson', fontSize: 12 }}>
+            {hostStatus.message}
+          </p>
         )}
         {hostStatus.state === 'ok' && (
           <p style={{ color: 'green', fontSize: 12 }}>Synced to ~/ScribeTab/meetings</p>
@@ -224,6 +252,8 @@ function LibraryView() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [openSegments, setOpenSegments] = useState<TranscriptSegment[]>([]);
   const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [llmOrigin, setLlmOrigin] = useState<string | null>(null);
   const openIdRef = useRef<string | null>(null);
   openIdRef.current = openId;
 
@@ -244,6 +274,24 @@ function LibraryView() {
 
   useEffect(() => {
     void reload();
+    void getSettings().then((s) => {
+      if (s.llmProviderId === '') {
+        setLlmOrigin(null);
+        return;
+      }
+      try {
+        setLlmOrigin(
+          originPattern(
+            llmEndpoint(
+              s.llmProviderId,
+              s.llmProviderId === 'custom' ? s.llmBaseUrl.trim() || undefined : undefined,
+            ),
+          ),
+        );
+      } catch {
+        setLlmOrigin(null);
+      }
+    });
 
     const onMessage = (raw: unknown) => {
       const msg = raw as ToSidePanel;
@@ -288,8 +336,11 @@ function LibraryView() {
   const exportOne = async (format: ExportFormat) => {
     if (!open) return;
     setBusy(true);
+    setActionError(null);
     try {
       await downloadExport(open, openSegments, format);
+    } catch (e) {
+      setActionError(humanError(e));
     } finally {
       setBusy(false);
     }
@@ -313,13 +364,17 @@ function LibraryView() {
   const regenerateSummary = async () => {
     if (!open) return;
     setBusy(true);
+    setActionError(null);
     try {
-      await chrome.runtime.sendMessage({
+      const res = (await chrome.runtime.sendMessage({
         target: 'background',
         type: 'REGENERATE_SUMMARY',
         sessionId: open.id,
-      } satisfies { target: 'background'; type: 'REGENERATE_SUMMARY'; sessionId: string });
+      } satisfies { target: 'background'; type: 'REGENERATE_SUMMARY'; sessionId: string })) as Ack;
+      if (!res?.ok) setActionError(res?.error ?? humanError('Unknown error'));
       await refreshOpen(open.id);
+    } catch (e) {
+      setActionError(humanError(e));
     } finally {
       setBusy(false);
     }
@@ -328,23 +383,26 @@ function LibraryView() {
   const grantLlmAndRegenerate = async () => {
     if (!open) return;
     setBusy(true);
+    setActionError(null);
     try {
-      const s = await getSettings();
-      if (s.llmProviderId === '') return;
-      const origin = originPattern(
-        llmEndpoint(
-          s.llmProviderId,
-          s.llmProviderId === 'custom' ? s.llmBaseUrl.trim() || undefined : undefined,
-        ),
-      );
-      const granted = await chrome.permissions.request({ origins: [origin] });
-      if (!granted) return;
-      await chrome.runtime.sendMessage({
+      if (!llmOrigin) {
+        setActionError('Configure an LLM provider in settings to generate summaries.');
+        return;
+      }
+      const granted = await chrome.permissions.request({ origins: [llmOrigin] });
+      if (!granted) {
+        setActionError('Permission was declined, so that provider cannot be reached.');
+        return;
+      }
+      const res = (await chrome.runtime.sendMessage({
         target: 'background',
         type: 'REGENERATE_SUMMARY',
         sessionId: open.id,
-      });
+      })) as Ack;
+      if (!res?.ok) setActionError(res?.error ?? humanError('Unknown error'));
       await refreshOpen(open.id);
+    } catch (e) {
+      setActionError(humanError(e));
     } finally {
       setBusy(false);
     }
@@ -400,6 +458,11 @@ function LibraryView() {
             Regenerate summary
           </button>
         </div>
+        {actionError && (
+          <p data-testid="library-error" style={{ color: 'crimson', fontSize: 12 }}>
+            {actionError}
+          </p>
+        )}
         <SegmentList segments={openSegments} empty="No transcript segments for this meeting." />
       </section>
     );
@@ -417,7 +480,9 @@ function LibraryView() {
       />
       {query.trim() ? (
         hits.length === 0 ? (
-          <p style={{ color: '#777' }}>No matches.</p>
+          <p data-testid="library-empty-search" style={{ color: '#777' }}>
+            No matches for that search.
+          </p>
         ) : (
           <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
             {hits.map((h) => (
@@ -437,7 +502,9 @@ function LibraryView() {
           </ul>
         )
       ) : sessions.length === 0 ? (
-        <p style={{ color: '#777' }}>Past meetings will show up here after you record.</p>
+        <p data-testid="library-empty" style={{ color: '#777' }}>
+          No meetings yet. Record a tab from the popup — past sessions will show up here.
+        </p>
       ) : (
         <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
           {sessions.map((s) => (

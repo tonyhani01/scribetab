@@ -27,9 +27,27 @@ import {
   runFinalizeIntelligence,
   scheduleFinalizeIntelligence,
 } from '@/utils/intelligence';
-import type { Ack, ToBackground, ToMeetCaptions, ToOffscreen, ToSidePanel, TranscriptionSettingsPayload } from '@/utils/messages';
+import {
+  refreshActionBadge,
+  refreshActiveTabBadge,
+  surfaceCommandError,
+} from '@/utils/actionBadge';
+import {
+  COMMAND_OPEN_SIDE_PANEL,
+  COMMAND_START_CAPTURE,
+  COMMAND_STOP_CAPTURE,
+} from '@/utils/commands';
+import type {
+  Ack,
+  ToBackground,
+  ToMeetCaptions,
+  ToOffscreen,
+  ToSidePanel,
+  TranscriptionIssue,
+  TranscriptionSettingsPayload,
+} from '@/utils/messages';
 import { persistHostStatus, syncSessionToHost } from '@/utils/nativeSync';
-import { platformFromUrl, titleFromTab } from '@/utils/platform';
+import { isCapturableUrl, platformFromUrl, titleFromTab } from '@/utils/platform';
 import { checkQuota } from '@/utils/quota';
 import { getSegments, putSegments } from '@/utils/segmentStore';
 import {
@@ -48,6 +66,7 @@ import {
   updateSession,
 } from '@/utils/sessionStore';
 import { getSettings } from '@/utils/settings';
+import { GENERIC_USER_ERROR, humanError } from '@/utils/userError';
 
 let creatingOffscreen: Promise<void> | null = null;
 let bootReady: Promise<void> = Promise.resolve();
@@ -282,24 +301,30 @@ function getMediaStreamId(options: chrome.tabCapture.GetMediaStreamOptions): Pro
  * cloud provider, or the host permission was never granted). Recording still
  * proceeds — transcription is an overlay on capture, not a precondition.
  */
-async function transcriptionPayload(): Promise<TranscriptionSettingsPayload | null> {
+async function transcriptionStatus(): Promise<{
+  payload: TranscriptionSettingsPayload | null;
+  issue: TranscriptionIssue;
+}> {
   const s = await getSettings();
-  if (s.providerId === '') return null;
+  if (s.providerId === '') return { payload: null, issue: 'unconfigured' };
   let endpoint: string;
   try {
     endpoint = transcriptionEndpoint(s.providerId, s.baseUrl || undefined);
   } catch {
-    return null; // custom without baseUrl
+    return { payload: null, issue: 'unconfigured' }; // custom without baseUrl
   }
-  if (s.providerId !== 'custom' && !s.apiKey) return null;
+  if (s.providerId !== 'custom' && !s.apiKey) return { payload: null, issue: 'unconfigured' };
   const granted = await chrome.permissions.contains({ origins: [originPattern(endpoint)] });
-  if (!granted) return null;
+  if (!granted) return { payload: null, issue: 'missing-permission' };
   return {
-    providerId: s.providerId,
-    apiKey: s.apiKey,
-    model: s.model || undefined,
-    language: s.language || undefined,
-    baseUrl: s.providerId === 'custom' ? s.baseUrl || undefined : undefined,
+    payload: {
+      providerId: s.providerId,
+      apiKey: s.apiKey,
+      model: s.model || undefined,
+      language: s.language || undefined,
+      baseUrl: s.providerId === 'custom' ? s.baseUrl || undefined : undefined,
+    },
+    issue: null,
   };
 }
 
@@ -318,6 +343,9 @@ async function setIdle(extra: Record<string, unknown> = {}): Promise<void> {
   if (typeof capturedTabId === 'number') notifyMeetTab(capturedTabId, false);
   captionBuffer.length = 0;
   await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null, ...extra });
+  // Clear REC on the tab we captured, not whatever is focused now.
+  if (typeof capturedTabId === 'number') void refreshActionBadge(capturedTabId);
+  void refreshActiveTabBadge();
 }
 
 async function completeSession(
@@ -362,6 +390,7 @@ async function handleStart(): Promise<Ack> {
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab?.id == null) throw new Error('No active tab');
+    if (!isCapturableUrl(tab.url)) throw new Error('This page cannot be recorded.');
     startedTabId = tab.id;
 
     await chrome.storage.local.set({
@@ -381,7 +410,10 @@ async function handleStart(): Promise<Ack> {
     const settings = await getSettings();
     const platform = platformFromUrl(tab.url);
     const captionsOnly = freezeCaptionsOnly(settings.captionsOnly, platform);
-    const transcription = captionsOnly ? null : await transcriptionPayload();
+    const { payload, issue } = captionsOnly
+      ? { payload: null, issue: null as TranscriptionIssue }
+      : await transcriptionStatus();
+    const transcription = payload;
     const notice = captionsOnlyFallbackNotice(
       settings.captionsOnly,
       platform,
@@ -406,6 +438,7 @@ async function handleStart(): Promise<Ack> {
       sessionCaptionsOnly: captionsOnly,
       captureNotice: notice,
       transcriptionConfigured: captionsOnly || transcription !== null,
+      transcriptionIssue: captionsOnly ? null : issue,
     });
     const startMsg = {
       target: 'offscreen',
@@ -435,12 +468,14 @@ async function handleStart(): Promise<Ack> {
       segmentCount: 0,
       currentSessionId: sessionId,
       transcriptionConfigured: captionsOnly || transcription !== null,
+      transcriptionIssue: captionsOnly ? null : issue,
       micStatus: settings.micEnabled ? 'active' : 'off', // corrected by MIC_STATUS if denied
       capturedTabId: tab.id,
       sessionCaptionsOnly: captionsOnly,
       captureNotice: notice,
       lastError: null,
     });
+    void refreshActionBadge(tab.id, tab.url);
     return { ok: true };
   } catch (e) {
     if (offscreenStarted) {
@@ -449,13 +484,17 @@ async function handleStart(): Promise<Ack> {
     if (createdId) await completeSession(createdId, 'failed').catch(() => {});
     if (startedTabId != null) notifyMeetTab(startedTabId, false);
     captionBuffer.length = 0;
+    const startError = humanError(e);
     await chrome.storage.local.set({
       captureState: 'idle',
       capturedTabId: null,
       sessionCaptionsOnly: false,
       captureNotice: null,
+      lastError: startError,
     });
-    return { ok: false, error: String(e) };
+    if (startedTabId != null) void refreshActionBadge(startedTabId);
+    void refreshActiveTabBadge();
+    return { ok: false, error: startError };
   } finally {
     opInFlight = false;
   }
@@ -481,10 +520,10 @@ async function handleStop(): Promise<Ack> {
     // (download requires 'idle'). Surface the error and settle at idle.
     await completeSession(sessionId, 'failed');
     await setIdle({
-      lastError: res?.error ?? 'Stop failed',
+      lastError: humanError(res?.error ?? 'Stop failed'),
       sessionCaptionsOnly: false,
     });
-    return { ok: false, error: res?.error ?? 'Stop failed' };
+    return { ok: false, error: humanError(res?.error ?? 'Stop failed') };
   } catch (e) {
     const { currentSessionId } = await chrome.storage.local.get('currentSessionId');
     const sessionId = typeof currentSessionId === 'string' ? currentSessionId : undefined;
@@ -493,8 +532,8 @@ async function handleStop(): Promise<Ack> {
       await setIdle({ sessionCaptionsOnly: false });
       return { ok: true };
     }
-    await chrome.storage.local.set({ captureState: 'recording', lastError: String(e) });
-    return { ok: false, error: String(e) };
+    await chrome.storage.local.set({ captureState: 'recording', lastError: humanError(e) });
+    return { ok: false, error: humanError(e) };
   } finally {
     opInFlight = false;
   }
@@ -511,7 +550,12 @@ async function finalizeIfCaptured(tabId: number): Promise<void> {
   const res = await stopOffscreen(sessionId).catch(() => null);
   await completeSession(sessionId, statusFromOffscreenAck(res));
   await setIdle({
-    lastError: res && !res.ok ? (res.error ?? 'Stop failed') : res ? null : 'Offscreen unreachable',
+    lastError:
+      res && !res.ok
+        ? humanError(res.error ?? 'Stop failed')
+        : res
+          ? null
+          : humanError('Offscreen failed'),
     sessionCaptionsOnly: false,
   });
 }
@@ -586,7 +630,7 @@ export default defineBackground(() => {
           const { currentSessionId } = await chrome.storage.local.get('currentSessionId');
           if (isLiveSession(msg.sessionId, currentSessionId)) {
             await setIdle({
-              lastError: msg.error ?? null,
+              lastError: msg.error ? humanError(msg.error) : null,
               sessionCaptionsOnly: false,
             });
           }
@@ -635,16 +679,71 @@ export default defineBackground(() => {
           break;
         }
       }
-    })().catch((e) => sendResponse({ ok: false, error: String(e) }));
+    })().catch((e) => sendResponse({ ok: false, error: humanError(e) }));
     return true;
+  });
+
+  chrome.commands.onCommand.addListener((command) => {
+    if (command === COMMAND_OPEN_SIDE_PANEL) {
+      // sidePanel.open must run in the user-gesture turn — no await first.
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const queryErr = chrome.runtime.lastError?.message;
+        if (queryErr) {
+          void surfaceCommandError(humanError(queryErr));
+          return;
+        }
+        const windowId = tabs[0]?.windowId;
+        if (windowId == null) {
+          void surfaceCommandError('No active tab to record.');
+          return;
+        }
+        try {
+          const opened = chrome.sidePanel.open({ windowId });
+          void Promise.resolve(opened).catch((e) => {
+            void surfaceCommandError(humanError(e));
+          });
+        } catch (e) {
+          void surfaceCommandError(humanError(e));
+        }
+      });
+      return;
+    }
+    void bootReady.then(async () => {
+      try {
+        if (command === COMMAND_START_CAPTURE) {
+          const res = await handleStart();
+          if (!res.ok) void surfaceCommandError(res.error ?? GENERIC_USER_ERROR);
+          return;
+        }
+        if (command === COMMAND_STOP_CAPTURE) {
+          const res = await handleStop();
+          if (!res.ok) void surfaceCommandError(res.error ?? GENERIC_USER_ERROR);
+        }
+      } catch (e) {
+        void surfaceCommandError(humanError(e));
+      }
+    });
   });
 
   chrome.tabs.onRemoved.addListener((tabId) => {
     void bootReady.then(() => finalizeIfCaptured(tabId));
   });
 
-  chrome.tabs.onUpdated.addListener((tabId, info) => {
-    if (info.status !== 'loading' && info.url === undefined) return;
-    void bootReady.then(() => finalizeIfCaptured(tabId));
+  chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+    if (info.status === 'loading' || info.url !== undefined) {
+      void bootReady.then(() => finalizeIfCaptured(tabId));
+    }
+    void refreshActionBadge(tabId, info.url ?? tab.url);
   });
+
+  chrome.tabs.onActivated.addListener((info) => {
+    void refreshActionBadge(info.tabId);
+  });
+
+  chrome.windows.onFocusChanged.addListener((windowId) => {
+    if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+    void refreshActiveTabBadge();
+  });
+
+  void refreshActiveTabBadge();
 });

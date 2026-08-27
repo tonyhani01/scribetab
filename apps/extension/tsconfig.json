@@ -5,5 +5,5 @@
     "jsxImportSource": "preact",
     "strict": true
   },
-  "exclude": ["test", "vitest.config.ts"]
+  "exclude": ["test", "e2e", "vitest.config.ts", "playwright.config.ts"]
 }

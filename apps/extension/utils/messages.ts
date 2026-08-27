@@ -2,6 +2,9 @@ import type { TranscriptSegment } from '@scribetab/shared';
 
 export type CaptureState = 'idle' | 'starting' | 'recording' | 'stopping';
 
+/** Why live transcription is off. Null when STT (or captions-only) is usable. */
+export type TranscriptionIssue = 'unconfigured' | 'missing-permission' | null;
+
 /** What the offscreen doc needs to run transcription (it has no chrome.storage). */
 export interface TranscriptionSettingsPayload {
   providerId: string;

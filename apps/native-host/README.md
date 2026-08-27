@@ -9,11 +9,15 @@ Node ≥ 20 native messaging host and MCP server for ScribeTab.
 
 ## Install (Chrome native messaging)
 
+From this repo (after `pnpm --filter scribetab-host build`):
+
 ```
-npx scribetab-host install
-npx scribetab-host install --extension-id <id>
-npx scribetab-host uninstall
+node apps/native-host/dist/host.bin.js install
+node apps/native-host/dist/host.bin.js install --extension-id <id>
+node apps/native-host/dist/host.bin.js uninstall
 ```
+
+Once the package is published, the same commands work via `npx scribetab-host …`.
 
 Development extension ID (packed `key` in `apps/extension/wxt.config.ts`):
 
