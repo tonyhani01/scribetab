@@ -128,7 +128,7 @@ IndexedDB → stop assembles a full recording the user can download and play.
   never an error state.
 **Milestone: live transcript of a YouTube video in the side panel via any configured provider, including a localhost whisper server.**
 
-### Phase 4 — Storage, search, export
+### Phase 4 — Storage, search, export  ✅ implemented
 - IndexedDB schema (`sessions`, `segments`, `audioChunks` object stores) behind a
   `SessionStore` module; retention toggle deletes `audioChunks` on finalize.
 - MiniSearch full-text index over segments; search UI in side panel "Library" view.
@@ -138,7 +138,7 @@ IndexedDB → stop assembles a full recording the user can download and play.
   policy for old audio.
 **Milestone: browse past meetings, search them, export any meeting in 4 formats.**
 
-### Phase 5 — Native host + MCP
+### Phase 5 — Native host + MCP  ✅ implemented
 - Prerequisite: `@scribetab/shared` gains a build step (ESM + `.d.ts` to `dist/`
   with a proper `exports` map) so plain Node can import it — WXT bundles TS
   source, Node does not. Tested from both consumers.
@@ -159,7 +159,7 @@ IndexedDB → stop assembles a full recording the user can download and play.
 - Tests: spawn host as child process, drive both protocols over stdio.
 **Milestone: finish a meeting → files appear in `~/ScribeTab/` → Claude reads them via MCP.**
 
-### Phase 6 — Speakers (caption fusion)
+### Phase 6 — Speakers (caption fusion)  ✅ implemented
 - Content script on `meet.google.com`: MutationObserver on the captions container,
   emits `{speaker, text, timestamp}` caption events (selectors isolated in one module
   with a fallback chain — Meet DOM churns).
@@ -169,7 +169,7 @@ IndexedDB → stop assembles a full recording the user can download and play.
 - Captions-only mode: transcription with zero API cost when captions are on.
 **Milestone: Meet transcript with correct speaker names, no diarization model.**
 
-### Phase 7 — Intelligence
+### Phase 7 — Intelligence  ✅ implemented
 - `LlmProvider` adapters (`openai-chat.ts`, `custom-chat.ts` — Ollama via baseUrl).
 - Summary + action-items prompts on finalize; results in `summary.md` and side panel.
 - PII redaction (`packages/shared/src/redact.ts`): regex pass (emails, phones, cards,
@@ -178,14 +178,14 @@ IndexedDB → stop assembles a full recording the user can download and play.
 - Cost meter: per-provider rate table, accumulates `costUsd` per session.
 **Milestone: meeting ends → summary, action items, and total cost, optionally fully local via Ollama.**
 
-### Phase 8 — Integrations
+### Phase 8 — Integrations  ✅ implemented
 - Obsidian: configurable vault path; native host copies markdown into it on sync.
 - Notion: user token → official API (`pages.create` into a chosen parent); runs in
   native host, off by default.
 - NotebookLM: no public API — "Export for NotebookLM" produces upload-ready .md/.txt.
 **Milestone: transcript lands in an Obsidian vault and a Notion page.**
 
-### Phase 9 — Polish & ship
+### Phase 9 — Polish & ship  ✅ implemented
 - Consent reminder (optional banner), meeting auto-detect badge, hotkey audit,
   options UX pass, empty/error states.
 - Playwright e2e suite green; README, per-app docs, CONTRIBUTING, screenshots.
