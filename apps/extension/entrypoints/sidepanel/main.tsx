@@ -1,7 +1,7 @@
 import { render } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { TranscriptSegment } from '@scribetab/shared';
-import { formatClock, formatUsd, llmEndpoint, originPattern } from '@scribetab/shared';
+import type { SessionSummary, TranscriptSegment } from '@scribetab/shared';
+import { actionItemLine, formatClock, formatUsd, llmEndpoint, originPattern } from '@scribetab/shared';
 import type MiniSearch from 'minisearch';
 import { ConsentBanner } from '@/components/ConsentBanner';
 import type { Ack, CaptureState, ToSidePanel, TranscriptionIssue } from '@/utils/messages';
@@ -447,19 +447,13 @@ function LibraryView() {
             to generate a summary for this meeting.
           </p>
         )}
-        {open.summaryMarkdown && (
-          <article
-            style={{
-              whiteSpace: 'pre-wrap',
-              background: '#f6f6f6',
-              padding: 8,
-              fontSize: 13,
-              marginBottom: 12,
-            }}
-          >
+        {open.summary ? (
+          <SummaryView summary={open.summary} />
+        ) : open.summaryMarkdown ? (
+          <article style={{ whiteSpace: 'pre-wrap', background: '#f6f6f6', padding: 8, fontSize: 13, marginBottom: 12 }}>
             {open.summaryMarkdown}
           </article>
-        )}
+        ) : null}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
           {(['md', 'json', 'srt', 'vtt'] as const).map((f) => (
             <button key={f} disabled={busy} onClick={() => void exportOne(f)}>
@@ -538,6 +532,51 @@ function LibraryView() {
         </ul>
       )}
     </section>
+  );
+}
+
+function SummaryView({ summary }: { summary: SessionSummary }) {
+  const sec = { fontSize: 13, margin: '0 0 4px', fontWeight: 600 };
+  return (
+    <div style={{ background: '#f6f6f6', padding: 8, fontSize: 13, marginBottom: 12 }}>
+      {summary.degraded && (
+        <p style={{ color: '#a60', fontSize: 12, margin: '0 0 6px' }}>
+          Structured extraction failed — showing plain summary.
+        </p>
+      )}
+      {summary.narrative && <p style={{ whiteSpace: 'pre-wrap', margin: '0 0 8px' }}>{summary.narrative}</p>}
+      {summary.actionItems.length > 0 && (
+        <>
+          <h2 style={sec}>Action items</h2>
+          <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 8px' }}>
+            {summary.actionItems.map((a) => (
+              <li key={a.id}>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
+                  <input type="checkbox" checked disabled />
+                  <span>{actionItemLine(a)}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {summary.decisions.length > 0 && (
+        <>
+          <h2 style={sec}>Decisions</h2>
+          <ul style={{ margin: '0 0 8px', paddingLeft: 18 }}>
+            {summary.decisions.map((d, i) => <li key={i}>{d}</li>)}
+          </ul>
+        </>
+      )}
+      {summary.usefulInfo.length > 0 && (
+        <>
+          <h2 style={sec}>Useful info</h2>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {summary.usefulInfo.map((u, i) => <li key={i}>{u}</li>)}
+          </ul>
+        </>
+      )}
+    </div>
   );
 }
 
