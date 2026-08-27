@@ -231,6 +231,35 @@ describe('parseStructuredSummary', () => {
   it('falls back when JSON parses but is not an object', () => {
     expect(parseStructuredSummary('[1,2,3]', P).degraded).toBe(true);
   });
+  it('extracts JSON when a stray brace follows the object', () => {
+    const raw = '{"narrative":"A","actionItems":[]} Hope that helps :}';
+    const s = parseStructuredSummary(raw, P);
+    expect(s.narrative).toBe('A');
+    expect(s.degraded).toBeUndefined();
+  });
+  it('ignores stray braces in trailing prose', () => {
+    const s = parseStructuredSummary(good + '\nNote: use {curly} braces.', P);
+    expect(s.narrative).toBe('Short recap.');
+    expect(s.degraded).toBeUndefined();
+  });
+  it('skips a small earlier object in favor of the summary object', () => {
+    const s = parseStructuredSummary('I used {} for empty. Here: ' + good, P);
+    expect(s.narrative).toBe('Short recap.');
+    expect(s.degraded).toBeUndefined();
+  });
+  it('parses JSON with trailing commas', () => {
+    const raw = '{"narrative":"A","actionItems":[{"text":"Do it",}],}';
+    const s = parseStructuredSummary(raw, P);
+    expect(s.narrative).toBe('A');
+    expect(s.actionItems[0]?.text).toBe('Do it');
+    expect(s.degraded).toBeUndefined();
+  });
+  it('does not echo raw JSON in the degraded narrative', () => {
+    const s = parseStructuredSummary('{"narrative": broken', P);
+    expect(s.degraded).toBe(true);
+    expect(s.narrative).toBe('');
+    expect(s.narrative).not.toContain('{');
+  });
   it('ignores owner/due that are not strings and trims fields', () => {
     const s = parseStructuredSummary(
       JSON.stringify({ narrative: ' n ', actionItems: [{ text: ' t ', owner: 3, due: ' Fri ' }] }),

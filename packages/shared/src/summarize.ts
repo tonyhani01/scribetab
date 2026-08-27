@@ -50,23 +50,109 @@ export function buildStructuredSummaryMessages(transcript: string, guidance?: st
   ];
 }
 
+const SUMMARY_KEYS = ['narrative', 'actionItems', 'decisions', 'usefulInfo'] as const;
+
+function matchingBrace(text: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inString) {
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escape = true;
+        continue;
+      }
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function balancedBraceCandidates(text: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '{') continue;
+    const end = matchingBrace(text, i);
+    if (end > i) out.push(text.slice(i, end + 1));
+  }
+  return out;
+}
+
+function tryParseObject(c: string): Record<string, unknown> | undefined {
+  try {
+    const v: unknown = JSON.parse(c);
+    if (v && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>;
+  } catch {
+    // not valid JSON
+  }
+  return undefined;
+}
+
+function hasSummaryKey(v: Record<string, unknown>): boolean {
+  return SUMMARY_KEYS.some((k) => Object.hasOwn(v, k));
+}
+
+function stripTrailingCommas(s: string): string {
+  return s.replace(/,\s*([}\]])/g, '$1');
+}
+
 function extractJsonObject(text: string): unknown | undefined {
   const candidates: string[] = [];
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fenced?.[1]) candidates.push(fenced[1].trim());
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start >= 0 && end > start) candidates.push(text.slice(start, end + 1));
-  candidates.push(text.trim());
+  candidates.push(...balancedBraceCandidates(text));
+
+  let firstPlain: Record<string, unknown> | undefined;
+  const consider = (c: string): Record<string, unknown> | undefined => {
+    const v = tryParseObject(c);
+    if (!v) return undefined;
+    if (!firstPlain) firstPlain = v;
+    return hasSummaryKey(v) ? v : undefined;
+  };
   for (const c of candidates) {
-    try {
-      const v: unknown = JSON.parse(c);
-      if (v && typeof v === 'object' && !Array.isArray(v)) return v;
-    } catch {
-      // try next candidate
-    }
+    const hit = consider(c);
+    if (hit) return hit;
   }
-  return undefined;
+  for (const c of candidates) {
+    const hit = consider(stripTrailingCommas(c));
+    if (hit) return hit;
+  }
+  return firstPlain;
+}
+
+function looksLikeJson(text: string): boolean {
+  const t = text.trim();
+  return t.startsWith('{') || t.startsWith('[') || t.includes('"narrative"');
+}
+
+function degradedFallback(
+  raw: string,
+  common: { version: 1; generatedAt: string; model?: string },
+): SessionSummary {
+  const parsed = parseSummary(raw);
+  return {
+    ...common,
+    narrative: looksLikeJson(parsed) ? '' : parsed,
+    actionItems: [],
+    decisions: [],
+    usefulInfo: [],
+    degraded: true,
+  };
 }
 
 function stringArray(v: unknown): string[] {
@@ -100,16 +186,7 @@ export function parseStructuredSummary(
     ...(opts.model ? { model: opts.model } : {}),
   };
   const obj = extractJsonObject(raw);
-  if (!obj) {
-    return {
-      ...common,
-      narrative: parseSummary(raw),
-      actionItems: [],
-      decisions: [],
-      usefulInfo: [],
-      degraded: true,
-    };
-  }
+  if (!obj) return degradedFallback(raw, common);
   const rec = obj as Record<string, unknown>;
   return {
     ...common,
