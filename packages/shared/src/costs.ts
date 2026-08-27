@@ -9,7 +9,10 @@
  * $0.15 / $0.60 per 1M input/output tokens.
  *
  * Rates are keyed by (provider, model). Unknown models return undefined so
- * the UI can show "n/a" instead of a wrong-by-16x guess.
+ * the UI can show "n/a" instead of a wrong-by-16x guess. OpenRouter and
+ * Google Gemini STT are left unlisted: OpenRouter pricing units mix per-second
+ * and per-minute across whisper-class ids, and Gemini 3.5 Transcribe is
+ * public preview.
  */
 
 const STT_DEFAULT_MODEL: Readonly<Record<string, string>> = Object.freeze({

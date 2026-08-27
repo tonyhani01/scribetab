@@ -1,15 +1,19 @@
 import type { TranscriptionProvider } from '../types.js';
 import { customProvider } from './custom.js';
 import { deepgramProvider } from './deepgram.js';
+import { googleProvider } from './google.js';
 import { groqProvider } from './groq.js';
 import { mistralProvider } from './mistral.js';
 import { openaiProvider } from './openai.js';
+import { openrouterProvider } from './openrouter.js';
 
 const providers: Record<string, TranscriptionProvider> = {
   openai: openaiProvider,
   groq: groqProvider,
   deepgram: deepgramProvider,
   mistral: mistralProvider,
+  openrouter: openrouterProvider,
+  google: googleProvider,
   custom: customProvider,
 };
 
@@ -27,6 +31,8 @@ const defaultBaseUrls: Record<string, string | undefined> = {
   groq: 'https://api.groq.com/openai/v1',
   deepgram: 'https://api.deepgram.com',
   mistral: 'https://api.mistral.ai/v1',
+  openrouter: 'https://openrouter.ai/api/v1',
+  google: 'https://generativelanguage.googleapis.com/v1beta',
   custom: undefined,
 };
 
@@ -41,5 +47,13 @@ export function transcriptionEndpoint(providerId: string, baseUrl?: string): str
   return d;
 }
 
-export { customProvider, deepgramProvider, groqProvider, mistralProvider, openaiProvider };
+export {
+  customProvider,
+  deepgramProvider,
+  googleProvider,
+  groqProvider,
+  mistralProvider,
+  openaiProvider,
+  openrouterProvider,
+};
 export { openAiCompatible } from './openaiCompatible.js';

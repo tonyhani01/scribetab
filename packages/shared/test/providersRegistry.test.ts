@@ -6,9 +6,9 @@ import {
 } from '../src/providers';
 
 describe('provider registry', () => {
-  it('exposes the five v1 provider ids', () => {
+  it('exposes the registered provider ids', () => {
     expect([...TRANSCRIPTION_PROVIDER_IDS].sort()).toEqual(
-      ['custom', 'deepgram', 'groq', 'mistral', 'openai'],
+      ['custom', 'deepgram', 'google', 'groq', 'mistral', 'openai', 'openrouter'],
     );
   });
 
@@ -25,11 +25,21 @@ describe('transcriptionEndpoint', () => {
   it('returns the provider default base url', () => {
     expect(transcriptionEndpoint('openai')).toBe('https://api.openai.com/v1');
     expect(transcriptionEndpoint('deepgram')).toBe('https://api.deepgram.com');
+    expect(transcriptionEndpoint('openrouter')).toBe('https://openrouter.ai/api/v1');
+    expect(transcriptionEndpoint('google')).toBe(
+      'https://generativelanguage.googleapis.com/v1beta',
+    );
   });
 
-  it('ignores a stale baseUrl for openai so keys cannot leak', () => {
+  it('ignores a stale baseUrl for cloud providers so keys cannot leak', () => {
     expect(transcriptionEndpoint('openai', 'http://localhost:9000/v1')).toBe(
       'https://api.openai.com/v1',
+    );
+    expect(transcriptionEndpoint('openrouter', 'http://evil.example/v1')).toBe(
+      'https://openrouter.ai/api/v1',
+    );
+    expect(transcriptionEndpoint('google', 'http://evil.example/v1')).toBe(
+      'https://generativelanguage.googleapis.com/v1beta',
     );
   });
 

@@ -21,6 +21,8 @@ describe('sttCostUsd', () => {
   it('is undefined for unknown providers or models (never a wrong guess)', () => {
     expect(sttCostUsd('nope', 120_000)).toBeUndefined();
     expect(sttCostUsd('openai', 60_000, 'gpt-4o-transcribe')).toBeUndefined();
+    expect(sttCostUsd('openrouter', 60_000, 'openai/whisper-large-v3')).toBeUndefined();
+    expect(sttCostUsd('google', 60_000, 'gemini-3.5-transcribe')).toBeUndefined();
   });
 
   it('is zero for non-positive duration even with an unknown model', () => {

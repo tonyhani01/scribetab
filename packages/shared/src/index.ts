@@ -1,5 +1,6 @@
 export * from './types.js';
 export * from './wav.js';
+export * from './base64.js';
 export * from './chunker.js';
 export * from './providers/index.js';
 export * from './originPattern.js';
