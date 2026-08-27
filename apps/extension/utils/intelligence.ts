@@ -9,7 +9,9 @@ import {
   redactSegments,
   sttCostUsd,
   summarizeMeeting,
+  summaryToMarkdown,
   type ChatMessage,
+  type SessionSummary,
 } from '@scribetab/shared';
 import { getSegments, putSegments } from './segmentStore';
 import { getSession, listSessions, updateSession } from './sessionStore';
@@ -68,8 +70,8 @@ export async function retryPendingIntelligence(): Promise<void> {
 }
 
 /**
- * After a successful complete-finalize: optional at-rest redaction, LLM
- * summary + action items, and a session cost total (transcribed STT minutes
+ * After a successful complete-finalize: optional at-rest redaction, one
+ * structured LLM summary, and a session cost total (transcribed STT minutes
  * + LLM tokens). Failures here must not fail capture finalize.
  */
 export async function runFinalizeIntelligence(sessionId: string, settings: Settings): Promise<void> {
@@ -90,7 +92,7 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
   const stt = existing?.providerCostUsd ?? tableStt;
 
   let costUsd: number | undefined = stt;
-  let summaryMarkdown: string | undefined;
+  let summary: SessionSummary | undefined;
   let intelligence: 'pending' | 'needs-permission' | null = null;
 
   if (llmConfigured(settings) && segments.length > 0) {
@@ -119,11 +121,11 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
         return out;
       };
       try {
-        const md = await summarizeMeeting(complete, forLlm);
-        if (md) summaryMarkdown = md;
+        summary = await summarizeMeeting(complete, forLlm, {
+          model: settings.llmModel.trim() || undefined,
+        });
         intelligence = null;
       } catch {
-        // Keep accumulated cost (including a successful first call). Retry later.
         intelligence = 'pending';
       }
     }
@@ -132,6 +134,6 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
   await updateSession(sessionId, {
     costUsd: costUsd === undefined ? existing?.costUsd ?? null : costUsd,
     intelligence,
-    ...(summaryMarkdown ? { summaryMarkdown } : {}),
+    ...(summary ? { summary, summaryMarkdown: summaryToMarkdown(summary) } : {}),
   });
 }

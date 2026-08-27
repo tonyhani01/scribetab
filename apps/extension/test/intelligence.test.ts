@@ -65,13 +65,18 @@ afterEach(async () => {
   await deleteDb();
 });
 
-function stubChat(summary: string, actions: string) {
-  const fetchMock = vi.fn().mockImplementation(async (_url: string, init: { body: string }) => {
-    const body = JSON.parse(init.body) as { messages: { role: string; content: string }[] };
-    const user = body.messages.find((m) => m.role === 'user')?.content ?? '';
-    const content = user.startsWith('Summarize') ? summary : actions;
-    return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+function stubChat(narrative: string, actionLine = '') {
+  const text = actionLine.replace(/^[-*]\s*/, '').trim();
+  const actionItems = text && !/^none\b/i.test(text) ? [{ text }] : [];
+  const content = JSON.stringify({
+    narrative,
+    actionItems,
+    decisions: [],
+    usefulInfo: [],
   });
+  const fetchMock = vi.fn().mockResolvedValue(
+    new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 }),
+  );
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 }
@@ -93,7 +98,7 @@ describe('runFinalizeIntelligence', () => {
     expect(got?.summaryMarkdown).toContain('- [ ] Ada ships');
     expect(got?.costUsd).toBeGreaterThan(0);
     expect(got?.intelligence).toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     const sent = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as {
       messages: { content: string }[];
     };
@@ -208,24 +213,46 @@ describe('runFinalizeIntelligence', () => {
     expect(got?.intelligence).toBe('pending');
   });
 
-  it('accumulates first-call LLM cost if the second call fails', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ choices: [{ message: { content: 'Summary only' } }] }), {
-          status: 200,
-        }),
-      )
-      .mockResolvedValueOnce(new Response('nope', { status: 500 }));
-    vi.stubGlobal('fetch', fetchMock);
+  it('stores structured summary and derived markdown after finalize', async () => {
+    const reply = JSON.stringify({
+      narrative: 'Shipped decision.',
+      actionItems: [{ text: 'Send the notes', owner: 'Bo' }],
+      decisions: ['Ship it'],
+      usefulInfo: [],
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ choices: [{ message: { content: reply } }] }), { status: 200 }),
+      ),
+    );
     await runFinalizeIntelligence(
       's1',
-      settings({ providerId: 'openai', llmProviderId: 'openai', llmApiKey: 'sk-x' }),
+      settings({ llmProviderId: 'openai', llmApiKey: 'sk-x' }),
     );
-    const got = await getSession('s1');
-    expect(got?.summaryMarkdown).toBeUndefined();
-    expect(got?.costUsd).toBeGreaterThan(0.0001);
-    expect(got?.intelligence).toBe('pending');
+    const row = await getSession('s1');
+    expect(row?.summary?.actionItems).toHaveLength(1);
+    expect(row?.summaryMarkdown).toContain('## Action items');
+    expect(row?.summaryMarkdown).toContain('- [ ] Bo — Send the notes');
+    expect(row?.intelligence).toBeNull();
+  });
+
+  it('stores degraded summary when the model returns prose', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ choices: [{ message: { content: 'plain text' } }] }), {
+          status: 200,
+        }),
+      ),
+    );
+    await runFinalizeIntelligence(
+      's1',
+      settings({ llmProviderId: 'openai', llmApiKey: 'sk-x' }),
+    );
+    const row = await getSession('s1');
+    expect(row?.summary?.degraded).toBe(true);
+    expect(row?.summaryMarkdown).toContain('plain text');
   });
 
   it('does not fetch when the LLM origin is not permitted', async () => {
