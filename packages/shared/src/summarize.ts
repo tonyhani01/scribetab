@@ -29,6 +29,97 @@ function wrapTranscript(transcript: string): string {
   return `<transcript>\n${clipTranscript(transcript)}\n</transcript>`;
 }
 
+export const DEFAULT_SUMMARY_GUIDANCE =
+  'Summarize the meeting in 1–3 short paragraphs covering outcomes and open questions. ' +
+  'Extract concrete action items, naming an owner only when one was actually said and quoting due dates verbatim. ' +
+  'List decisions that were explicitly made, and capture useful details worth keeping (links, numbers, names).';
+
+const JSON_CONTRACT =
+  'You analyze meeting transcripts. Reply with only a JSON object — no prose, no code fences — matching exactly: ' +
+  '{"narrative": string (markdown paragraphs), ' +
+  '"actionItems": [{"text": string, "owner"?: string, "due"?: string}], ' +
+  '"decisions": string[], "usefulInfo": string[]}. ' +
+  'Use empty arrays when a category has nothing. Never invent owners or dates. ' +
+  DATA_FRAMING;
+
+export function buildStructuredSummaryMessages(transcript: string, guidance?: string): ChatMessage[] {
+  const g = guidance?.trim() || DEFAULT_SUMMARY_GUIDANCE;
+  return [
+    { role: 'system', content: JSON_CONTRACT },
+    { role: 'user', content: `${g}\n\n${wrapTranscript(transcript)}` },
+  ];
+}
+
+function extractJsonObject(text: string): unknown | undefined {
+  const candidates: string[] = [];
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) candidates.push(fenced[1].trim());
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start >= 0 && end > start) candidates.push(text.slice(start, end + 1));
+  candidates.push(text.trim());
+  for (const c of candidates) {
+    try {
+      const v: unknown = JSON.parse(c);
+      if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+    } catch {
+      // try next candidate
+    }
+  }
+  return undefined;
+}
+
+function stringArray(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).map((x) => x.trim());
+}
+
+function toActionItems(v: unknown, newId: () => string): ActionItem[] {
+  if (!Array.isArray(v)) return [];
+  const out: ActionItem[] = [];
+  for (const raw of v) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const rec = raw as Record<string, unknown>;
+    const text = typeof rec.text === 'string' ? rec.text.trim() : '';
+    if (!text) continue;
+    const owner = typeof rec.owner === 'string' && rec.owner.trim() ? rec.owner.trim() : undefined;
+    const due = typeof rec.due === 'string' && rec.due.trim() ? rec.due.trim() : undefined;
+    out.push({ id: newId(), text, ...(owner ? { owner } : {}), ...(due ? { due } : {}) });
+  }
+  return out;
+}
+
+export function parseStructuredSummary(
+  raw: string,
+  opts: { generatedAt: string; model?: string; newId?: () => string },
+): SessionSummary {
+  const newId = opts.newId ?? (() => crypto.randomUUID());
+  const common = {
+    version: 1 as const,
+    generatedAt: opts.generatedAt,
+    ...(opts.model ? { model: opts.model } : {}),
+  };
+  const obj = extractJsonObject(raw);
+  if (!obj) {
+    return {
+      ...common,
+      narrative: parseSummary(raw),
+      actionItems: [],
+      decisions: [],
+      usefulInfo: [],
+      degraded: true,
+    };
+  }
+  const rec = obj as Record<string, unknown>;
+  return {
+    ...common,
+    narrative: typeof rec.narrative === 'string' ? rec.narrative.trim() : '',
+    actionItems: toActionItems(rec.actionItems, newId),
+    decisions: stringArray(rec.decisions),
+    usefulInfo: stringArray(rec.usefulInfo),
+  };
+}
+
 export function buildSummaryMessages(transcript: string): ChatMessage[] {
   return [
     {
