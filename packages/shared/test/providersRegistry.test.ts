@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  GOOGLE_API_BASE,
   TRANSCRIPTION_PROVIDER_IDS,
   getTranscriptionProvider,
+  isTranscriptionProviderId,
   transcriptionEndpoint,
 } from '../src/providers';
 
@@ -19,6 +21,13 @@ describe('provider registry', () => {
   it('throws on unknown id', () => {
     expect(() => getTranscriptionProvider('nope')).toThrow(/Unknown transcription provider: nope/);
   });
+
+  it('guards provider ids from the registry list', () => {
+    expect(isTranscriptionProviderId('openrouter')).toBe(true);
+    expect(isTranscriptionProviderId('google')).toBe(true);
+    expect(isTranscriptionProviderId('')).toBe(false);
+    expect(isTranscriptionProviderId('nope')).toBe(false);
+  });
 });
 
 describe('transcriptionEndpoint', () => {
@@ -26,9 +35,8 @@ describe('transcriptionEndpoint', () => {
     expect(transcriptionEndpoint('openai')).toBe('https://api.openai.com/v1');
     expect(transcriptionEndpoint('deepgram')).toBe('https://api.deepgram.com');
     expect(transcriptionEndpoint('openrouter')).toBe('https://openrouter.ai/api/v1');
-    expect(transcriptionEndpoint('google')).toBe(
-      'https://generativelanguage.googleapis.com/v1beta',
-    );
+    expect(transcriptionEndpoint('google')).toBe(GOOGLE_API_BASE);
+    expect(GOOGLE_API_BASE).toBe('https://generativelanguage.googleapis.com/v1beta');
   });
 
   it('ignores a stale baseUrl for cloud providers so keys cannot leak', () => {

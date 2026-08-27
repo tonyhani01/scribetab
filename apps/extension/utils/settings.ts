@@ -1,7 +1,7 @@
-import type { LlmProviderId } from '@scribetab/shared';
+import type { LlmProviderId, TranscriptionProviderId } from '@scribetab/shared';
 
 export interface Settings {
-  providerId: '' | 'openai' | 'groq' | 'deepgram' | 'mistral' | 'openrouter' | 'google' | 'custom';
+  providerId: '' | TranscriptionProviderId;
   apiKey: string;      // chrome.storage.local ONLY — never sync, never any server
   model: string;       // '' = provider default
   language: string;    // '' = provider auto-detect; BCP-47 hint otherwise

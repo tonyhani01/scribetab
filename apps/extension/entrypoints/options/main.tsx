@@ -4,6 +4,7 @@ import {
   LLM_PROVIDER_IDS,
   TRANSCRIPTION_PROVIDER_IDS,
   isLlmProviderId,
+  isTranscriptionProviderId,
   llmEndpoint,
   originPattern,
   transcriptionEndpoint,
@@ -202,7 +203,10 @@ function App() {
           id="provider"
           style={input}
           value={s.providerId}
-          onChange={(e) => set('providerId', (e.currentTarget as HTMLSelectElement).value as Settings['providerId'])}
+          onChange={(e) => {
+            const v = (e.currentTarget as HTMLSelectElement).value;
+            set('providerId', isTranscriptionProviderId(v) ? v : '');
+          }}
         >
           <option value="">Off (record only)</option>
           {TRANSCRIPTION_PROVIDER_IDS.map((id) => (
