@@ -13,10 +13,16 @@ async function launchExtension(): Promise<{
   userDataDir: string;
 }> {
   const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'scribetab-e2e-'));
+  // Block network at process start (before the SW can fetch). context.route
+  // below is a second gate for anything that bypasses DNS.
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: 'chromium',
     headless: true,
-    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
+    args: [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+      '--host-resolver-rules=MAP * ~NOTFOUND',
+    ],
   });
   await context.route(/^(https?|wss?):\/\//i, (route) => route.abort());
 
@@ -81,6 +87,44 @@ test('side panel shows the empty live state', async () => {
     await page.goto(`chrome-extension://${extensionId}/sidepanel.html`);
     await expect(page.getByTestId('sidepanel-root')).toBeVisible();
     await expect(page.getByTestId('live-empty')).toBeVisible();
+  } finally {
+    await context.close();
+    await fs.rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('consent banner appears in the popup during a fake recording', async () => {
+  const { context, extensionId, worker, userDataDir } = await launchExtension();
+  try {
+    await worker.evaluate(async () => {
+      await chrome.storage.local.set({
+        captureState: 'recording',
+        currentSessionId: 'e2e-consent',
+      });
+    });
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+    await expect(page.getByTestId('consent-banner')).toBeVisible();
+  } finally {
+    await context.close();
+    await fs.rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('options blocks save when a cloud STT key is empty', async () => {
+  const { context, extensionId, worker, userDataDir } = await launchExtension();
+  try {
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/options.html`);
+    await expect(page.getByTestId('options-root')).toBeVisible();
+    await page.locator('#provider').selectOption('openai');
+    await page.getByTestId('save-settings').click();
+    await expect(page.getByTestId('save-status')).toContainText(/API key/i);
+    const stored = await worker.evaluate(async () => {
+      const v = await chrome.storage.local.get('settings');
+      return (v.settings as { providerId?: string } | undefined)?.providerId;
+    });
+    expect(stored).not.toBe('openai');
   } finally {
     await context.close();
     await fs.rm(userDataDir, { recursive: true, force: true });
