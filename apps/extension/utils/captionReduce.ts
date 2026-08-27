@@ -11,18 +11,21 @@ export interface CaptionEvent {
 }
 
 export interface OpenCaption {
+  key: string;
   speaker: string;
   text: string;
   startMs: number;
   lastChangeMs: number;
   emitted: boolean;
+  /** Character length of `text` already emitted (prefix). Continuation emits only the suffix. */
+  emittedLength: number;
 }
 
 export interface CaptionReduceState {
-  open: OpenCaption | null;
+  blocks: OpenCaption[];
 }
 
-export const EMPTY_CAPTION_STATE: CaptionReduceState = { open: null };
+export const EMPTY_CAPTION_STATE: CaptionReduceState = { blocks: [] };
 
 export function normalizeSnapshot(s: CaptionSnapshot): CaptionSnapshot {
   return {
@@ -31,28 +34,76 @@ export function normalizeSnapshot(s: CaptionSnapshot): CaptionSnapshot {
   };
 }
 
-function lastActive(snapshots: CaptionSnapshot[]): CaptionSnapshot | null {
-  for (let i = snapshots.length - 1; i >= 0; i--) {
-    const s = normalizeSnapshot(snapshots[i]!);
-    if (s.text) return s;
-  }
-  return null;
+export function blockKey(speaker: string, position: number): string {
+  return `${position}\0${speaker}`;
 }
 
-function flushOpen(open: OpenCaption | null, nowMs: number): CaptionEvent | null {
+function cueEndMs(open: OpenCaption): number {
+  return Math.max(open.lastChangeMs, open.startMs + 1);
+}
+
+function pendingText(open: OpenCaption): string {
+  if (open.emittedLength <= 0) return open.text;
+  return open.text.slice(open.emittedLength).replace(/^\s+/, '').trim();
+}
+
+function flushOpen(open: OpenCaption | null): CaptionEvent | null {
   if (!open || !open.text || open.emitted) return null;
+  const text = pendingText(open);
+  if (!text) return null;
   return {
     speaker: open.speaker,
-    text: open.text,
+    text,
     timestampMs: open.startMs,
-    endMs: Math.max(nowMs, open.startMs + 1),
+    endMs: cueEndMs(open),
+  };
+}
+
+function openBlock(snap: CaptionSnapshot, position: number, nowMs: number): OpenCaption {
+  return {
+    key: blockKey(snap.speaker, position),
+    speaker: snap.speaker,
+    text: snap.text,
+    startMs: nowMs,
+    lastChangeMs: nowMs,
+    emitted: false,
+    emittedLength: 0,
+  };
+}
+
+function applyToBlock(open: OpenCaption, snap: CaptionSnapshot, nowMs: number): OpenCaption {
+  if (open.text === snap.text) return open;
+
+  if (!open.emitted) {
+    return { ...open, text: snap.text, lastChangeMs: nowMs };
+  }
+
+  const emittedPrefix = open.text.slice(0, open.emittedLength);
+  if (snap.text.startsWith(emittedPrefix) && snap.text.length >= open.emittedLength) {
+    // Continued growth after a stabilize-emit: keep emittedLength, start a new interval for the suffix.
+    return {
+      ...open,
+      text: snap.text,
+      startMs: nowMs,
+      lastChangeMs: nowMs,
+      emitted: false,
+    };
+  }
+
+  return {
+    ...open,
+    text: snap.text,
+    startMs: nowMs,
+    lastChangeMs: nowMs,
+    emitted: false,
+    emittedLength: 0,
   };
 }
 
 /**
- * Fold currently-visible caption snapshots into an in-progress caption.
- * Emits the previous caption when the speaker changes or captions disappear.
- * Partial in-place edits of the same speaker stay open until `stabilizeCaption`.
+ * Fold currently-visible caption snapshots into per-block in-progress captions.
+ * Each snapshot index is a block (speaker+position). Speaker changes, disappearances,
+ * and a final update batched with a new block are all applied in one pass.
  */
 export function applyCaptionSnapshots(
   state: CaptionReduceState,
@@ -60,55 +111,43 @@ export function applyCaptionSnapshots(
   nowMs: number,
 ): { state: CaptionReduceState; events: CaptionEvent[] } {
   const events: CaptionEvent[] = [];
-  const active = lastActive(snapshots);
+  const remaining = [...state.blocks];
+  const next: OpenCaption[] = [];
 
-  if (!active) {
-    const flushed = flushOpen(state.open, nowMs);
-    return { state: { open: null }, events: flushed ? [flushed] : [] };
+  for (let i = 0; i < snapshots.length; i++) {
+    const snap = normalizeSnapshot(snapshots[i]!);
+    if (!snap.text) continue;
+    const idx = remaining.findIndex((b) => b.speaker === snap.speaker);
+    if (idx >= 0) {
+      const existing = remaining.splice(idx, 1)[0]!;
+      next.push({ ...applyToBlock(existing, snap, nowMs), key: blockKey(snap.speaker, i) });
+    } else {
+      next.push(openBlock(snap, i, nowMs));
+    }
   }
 
-  let open = state.open;
-  if (open && open.speaker !== active.speaker) {
-    const ev = flushOpen(open, nowMs);
+  for (const prev of remaining) {
+    const ev = flushOpen(prev);
     if (ev) events.push(ev);
-    open = null;
   }
 
-  if (!open) {
-    open = {
-      speaker: active.speaker,
-      text: active.text,
-      startMs: nowMs,
-      lastChangeMs: nowMs,
-      emitted: false,
-    };
-  } else if (open.text !== active.text) {
-    open = {
-      speaker: open.speaker,
-      text: active.text,
-      startMs: open.emitted ? nowMs : open.startMs,
-      lastChangeMs: nowMs,
-      emitted: false,
-    };
-  }
-
-  return { state: { open }, events };
+  return { state: { blocks: next }, events };
 }
 
-/** Emit the open caption once its text has been unchanged for `idleMs`. */
+/** Emit each open caption whose text has been unchanged for `idleMs`. */
 export function stabilizeCaption(
   state: CaptionReduceState,
   nowMs: number,
   idleMs: number,
 ): { state: CaptionReduceState; events: CaptionEvent[] } {
-  const open = state.open;
-  if (!open || open.emitted || !open.text) return { state, events: [] };
-  if (nowMs - open.lastChangeMs < idleMs) return { state, events: [] };
-  const event: CaptionEvent = {
-    speaker: open.speaker,
-    text: open.text,
-    timestampMs: open.startMs,
-    endMs: Math.max(nowMs, open.startMs + 1),
-  };
-  return { state: { open: { ...open, emitted: true } }, events: [event] };
+  const events: CaptionEvent[] = [];
+  const blocks = state.blocks.map((open) => {
+    if (open.emitted || !open.text) return open;
+    if (nowMs - open.lastChangeMs < idleMs) return open;
+    const ev = flushOpen(open);
+    if (!ev) return { ...open, emitted: true, emittedLength: open.text.length };
+    events.push(ev);
+    return { ...open, emitted: true, emittedLength: open.text.length };
+  });
+  return { state: { blocks }, events };
 }
