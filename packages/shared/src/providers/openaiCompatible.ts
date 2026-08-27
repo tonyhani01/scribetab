@@ -29,7 +29,8 @@ export function openAiCompatible(opts: OpenAiCompatibleOptions): TranscriptionPr
   return {
     id: opts.id,
     async transcribe(req: TranscribeRequest, cfg: ProviderConfig): Promise<TranscribeResult> {
-      const baseUrl = (cfg.baseUrl ?? opts.defaultBaseUrl)?.replace(/\/+$/, '');
+      // Official providers pin defaultBaseUrl so a leftover custom URL cannot leak keys.
+      const baseUrl = (opts.defaultBaseUrl ?? cfg.baseUrl)?.replace(/\/+$/, '');
       if (!baseUrl) throw new Error(`${opts.id}: baseUrl is required`);
       if ((opts.requiresApiKey ?? true) && !cfg.apiKey) {
         throw new Error(`${opts.id}: apiKey is required`);

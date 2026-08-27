@@ -21,8 +21,12 @@ describe('llmEndpoint', () => {
     expect(llmEndpoint('openai')).toBe('https://api.openai.com/v1');
   });
 
-  it('prefers an explicit baseUrl', () => {
-    expect(llmEndpoint('openai', 'http://localhost:11434/v1')).toBe('http://localhost:11434/v1');
+  it('ignores a stale baseUrl for openai so keys cannot leak', () => {
+    expect(llmEndpoint('openai', 'http://localhost:11434/v1')).toBe('https://api.openai.com/v1');
+  });
+
+  it('uses an explicit baseUrl only for custom', () => {
+    expect(llmEndpoint('custom', 'http://localhost:11434/v1')).toBe('http://localhost:11434/v1');
   });
 
   it('throws for custom without baseUrl', () => {

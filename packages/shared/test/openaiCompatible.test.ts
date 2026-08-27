@@ -31,6 +31,13 @@ describe('openAiCompatible', () => {
     expect(form.get('file')).toBeInstanceOf(Blob);
   });
 
+  it('ignores cfg.baseUrl for openai so a stale custom URL cannot receive the key', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okJson({ text: 'hello' }));
+    vi.stubGlobal('fetch', fetchMock);
+    await openaiProvider.transcribe(req, { apiKey: 'sk-x', baseUrl: 'http://evil.example/v1' });
+    expect(fetchMock.mock.calls[0]![0]).toBe('https://api.openai.com/v1/audio/transcriptions');
+  });
+
   it('maps verbose_json segments from seconds to chunk-relative ms', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okJson({
       text: 'one two',

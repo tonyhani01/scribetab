@@ -27,8 +27,16 @@ describe('transcriptionEndpoint', () => {
     expect(transcriptionEndpoint('deepgram')).toBe('https://api.deepgram.com');
   });
 
-  it('prefers an explicit baseUrl', () => {
-    expect(transcriptionEndpoint('openai', 'http://localhost:9000/v1')).toBe('http://localhost:9000/v1');
+  it('ignores a stale baseUrl for openai so keys cannot leak', () => {
+    expect(transcriptionEndpoint('openai', 'http://localhost:9000/v1')).toBe(
+      'https://api.openai.com/v1',
+    );
+  });
+
+  it('uses an explicit baseUrl only for custom', () => {
+    expect(transcriptionEndpoint('custom', 'http://localhost:9000/v1')).toBe(
+      'http://localhost:9000/v1',
+    );
   });
 
   it('throws for custom without baseUrl', () => {

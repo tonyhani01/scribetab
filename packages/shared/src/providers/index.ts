@@ -30,8 +30,12 @@ const defaultBaseUrls: Record<string, string | undefined> = {
   custom: undefined,
 };
 
+/** Official cloud endpoints ignore a stale custom baseUrl so keys cannot leak. */
 export function transcriptionEndpoint(providerId: string, baseUrl?: string): string {
-  if (baseUrl) return baseUrl;
+  if (providerId === 'custom') {
+    if (!baseUrl) throw new Error(`${providerId}: baseUrl is required`);
+    return baseUrl;
+  }
   const d = defaultBaseUrls[providerId];
   if (!d) throw new Error(`${providerId}: baseUrl is required`);
   return d;

@@ -42,6 +42,18 @@ describe('openaiChatProvider', () => {
     expect(body.temperature).toBe(0.2);
   });
 
+  it('ignores cfg.baseUrl so a stale custom URL cannot receive the key', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      okJson({ choices: [{ message: { content: 'ok' } }] }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await openaiChatProvider.complete(messages, {
+      apiKey: 'sk-x',
+      baseUrl: 'http://evil.example/v1',
+    });
+    expect(fetchMock.mock.calls[0]![0]).toBe('https://api.openai.com/v1/chat/completions');
+  });
+
   it('uses cfg.model override', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       okJson({ choices: [{ message: { content: 'ok' } }] }),

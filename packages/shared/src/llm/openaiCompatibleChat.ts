@@ -22,7 +22,8 @@ export function openAiCompatibleChat(opts: OpenAiCompatibleChatOptions): LlmProv
   return {
     id: opts.id,
     async complete(messages: ChatMessage[], cfg: ProviderConfig): Promise<string> {
-      const baseUrl = (cfg.baseUrl ?? opts.defaultBaseUrl)?.replace(/\/+$/, '');
+      // Official providers pin defaultBaseUrl so a leftover custom URL cannot leak keys.
+      const baseUrl = (opts.defaultBaseUrl ?? cfg.baseUrl)?.replace(/\/+$/, '');
       if (!baseUrl) throw new Error(`${opts.id}: baseUrl is required`);
       if ((opts.requiresApiKey ?? true) && !cfg.apiKey) {
         throw new Error(`${opts.id}: apiKey is required`);
