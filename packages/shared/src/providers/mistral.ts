@@ -1,4 +1,4 @@
-import { openAiCompatible } from './openaiCompatible';
+import { openAiCompatible } from './openaiCompatible.js';
 
 // Voxtral speaks the OpenAI multipart dialect but takes
 // timestamp_granularities=segment instead of response_format=verbose_json.

@@ -3,7 +3,7 @@ import type {
   TranscribeRequest,
   TranscribeResult,
   TranscriptionProvider,
-} from '../types';
+} from '../types.js';
 
 interface DeepgramResponse {
   results?: {

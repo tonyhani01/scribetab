@@ -1,4 +1,4 @@
-import type { TranscribeRequest, TranscribeResult, TranscriptSegment } from './types';
+import type { TranscribeRequest, TranscribeResult, TranscriptSegment } from './types.js';
 
 export interface TranscriptionJob {
   index: number;
