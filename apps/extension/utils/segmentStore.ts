@@ -1,18 +1,13 @@
-import { CHUNKS_STORE as STORE, openDb } from './db';
+import type { TranscriptSegment } from '@scribetab/shared';
+import { SEGMENTS_STORE as STORE, openDb } from './db';
 
-export interface ChunkRow {
-  index: number;
-  sampleRate: number;
-  startOffsetSamples: number; // cumulative samples before this chunk (session-relative timing)
-  wav: ArrayBuffer;
-  createdAt: number;
-}
-
-export async function putChunk(row: ChunkRow): Promise<void> {
+export async function putSegments(segments: TranscriptSegment[]): Promise<void> {
+  if (segments.length === 0) return;
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).put(row);
+    const store = tx.objectStore(STORE);
+    for (const s of segments) store.put(s);
     const fail = () => reject(tx.error ?? new Error('IndexedDB transaction failed'));
     tx.oncomplete = () => resolve();
     tx.onerror = fail;
@@ -20,19 +15,19 @@ export async function putChunk(row: ChunkRow): Promise<void> {
   });
 }
 
-export async function getAllChunks(): Promise<ChunkRow[]> {
+export async function getSegments(sessionId: string): Promise<TranscriptSegment[]> {
   const db = await openDb();
-  const rows = await new Promise<ChunkRow[]>((resolve, reject) => {
+  const rows = await new Promise<TranscriptSegment[]>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly');
-    const req = tx.objectStore(STORE).getAll();
-    req.onsuccess = () => resolve(req.result as ChunkRow[]);
+    const req = tx.objectStore(STORE).index('bySession').getAll(sessionId);
+    req.onsuccess = () => resolve(req.result as TranscriptSegment[]);
     req.onerror = () => reject(req.error);
     tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'));
   });
-  return rows.sort((a, b) => a.index - b.index);
+  return rows.sort((a, b) => a.startMs - b.startMs);
 }
 
-export async function clearChunks(): Promise<void> {
+export async function clearSegments(): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
