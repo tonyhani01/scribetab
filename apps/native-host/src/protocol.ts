@@ -1,5 +1,6 @@
 import type { HostSyncAck, HostSyncMessage } from '@scribetab/shared';
 import { writeNativeMessage } from './framing.js';
+import { runPostSyncIntegrations } from './integrations.js';
 import { meetingsDir } from './paths.js';
 import {
   abortSync,
@@ -112,9 +113,22 @@ export class NativeSyncHost {
         }
         const sessionId = this.inflight.sessionId;
         const skipped = this.inflight.audioSkipped;
+        const session = this.inflight.session;
+        const segments = this.inflight.segments;
+        const summaryMarkdown = this.inflight.summaryMarkdown;
         await commitSync(this.inflight, meetingsDir(this.env));
         this.inflight = null;
-        await this.ok(sessionId, skipped ? `audio skipped: ${skipped}` : undefined);
+        const integrationErrors = await runPostSyncIntegrations({
+          session,
+          segments,
+          summaryMarkdown,
+          env: this.env,
+        });
+        const notes = [
+          skipped ? `audio skipped: ${skipped}` : '',
+          ...integrationErrors,
+        ].filter(Boolean);
+        await this.ok(sessionId, notes.length ? notes.join('; ') : undefined);
         return;
       }
       default:
