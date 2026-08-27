@@ -1,7 +1,9 @@
 import { render } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import {
+  LLM_PROVIDER_IDS,
   TRANSCRIPTION_PROVIDER_IDS,
+  llmEndpoint,
   originPattern,
   transcriptionEndpoint,
 } from '@scribetab/shared';
@@ -13,6 +15,11 @@ const MODEL_PLACEHOLDERS: Record<string, string> = {
   deepgram: 'nova-2',
   mistral: 'voxtral-mini-latest',
   custom: 'whisper-1',
+};
+
+const LLM_MODEL_PLACEHOLDERS: Record<string, string> = {
+  openai: 'gpt-4o-mini',
+  custom: 'llama3.2',
 };
 
 function App() {
@@ -29,21 +36,40 @@ function App() {
   const save = async () => {
     setStatus(null);
     try {
-      if (s.providerId === '') {
-        // No provider = record-only mode; still a valid save.
-        await saveSettings(s);
-        setStatus({ kind: 'ok', text: 'Saved. Transcription is off (no provider chosen).' });
-        return;
-      }
       if (s.providerId === 'custom' && !s.baseUrl.trim()) {
-        throw new Error('Custom provider needs a base URL (e.g. http://localhost:8080/v1)');
+        throw new Error('Custom STT provider needs a base URL (e.g. http://localhost:8080/v1)');
       }
-      const endpoint = transcriptionEndpoint(s.providerId, s.baseUrl.trim() || undefined);
-      const origin = originPattern(endpoint);
-      const granted = await chrome.permissions.request({ origins: [origin] });
-      if (!granted) throw new Error(`Permission for ${origin} was declined — transcription cannot reach the endpoint`);
-      await saveSettings({ ...s, baseUrl: s.baseUrl.trim() });
-      setStatus({ kind: 'ok', text: `Saved. Access granted for ${origin}` });
+      if (s.llmProviderId === 'custom' && !s.llmBaseUrl.trim()) {
+        throw new Error('Custom LLM needs a base URL (e.g. http://localhost:11434/v1)');
+      }
+      const origins: string[] = [];
+      if (s.providerId !== '') {
+        origins.push(originPattern(transcriptionEndpoint(s.providerId, s.baseUrl.trim() || undefined)));
+      }
+      if (s.llmProviderId !== '') {
+        origins.push(originPattern(llmEndpoint(s.llmProviderId, s.llmBaseUrl.trim() || undefined)));
+      }
+      const uniqueOrigins = [...new Set(origins)];
+      if (uniqueOrigins.length > 0) {
+        const granted = await chrome.permissions.request({ origins: uniqueOrigins });
+        if (!granted) {
+          throw new Error(
+            `Permission for ${uniqueOrigins.join(', ')} was declined — the provider cannot be reached`,
+          );
+        }
+      }
+      await saveSettings({
+        ...s,
+        baseUrl: s.baseUrl.trim(),
+        llmBaseUrl: s.llmBaseUrl.trim(),
+        redactTerms: s.redactTerms.map((t) => t.trim()).filter(Boolean),
+      });
+      setStatus({
+        kind: 'ok',
+        text: uniqueOrigins.length
+          ? `Saved. Access granted for ${uniqueOrigins.join(', ')}`
+          : 'Saved. Transcription and summaries are off (no providers chosen).',
+      });
     } catch (e) {
       setStatus({ kind: 'err', text: e instanceof Error ? e.message : String(e) });
     }
@@ -143,6 +169,92 @@ function App() {
         />{' '}
         Keep audio after a meeting ends (off = delete WAV chunks on finalize; transcript stays)
       </label>
+
+      <h2 style={{ fontSize: 16, marginTop: 28 }}>Summaries (LLM)</h2>
+      <p style={{ color: '#555', fontSize: 13 }}>
+        On finalize, a configured chat model writes a summary and action-item checklist.
+        Ollama / LM Studio work via the custom OpenAI-compatible base URL.
+      </p>
+
+      <label style={row} for="llmProvider">LLM provider</label>
+      <select
+        id="llmProvider"
+        style={input}
+        value={s.llmProviderId}
+        onChange={(e) =>
+          set('llmProviderId', (e.currentTarget as HTMLSelectElement).value as Settings['llmProviderId'])
+        }
+      >
+        <option value="">Off (no summary)</option>
+        {LLM_PROVIDER_IDS.map((id) => (
+          <option value={id}>{id === 'custom' ? 'custom (OpenAI-compatible / Ollama / LM Studio)' : id}</option>
+        ))}
+      </select>
+
+      {s.llmProviderId !== '' && (
+        <>
+          {s.llmProviderId === 'custom' && (
+            <>
+              <label style={row} for="llmBaseUrl">LLM base URL</label>
+              <input
+                id="llmBaseUrl"
+                style={input}
+                placeholder="http://localhost:11434/v1"
+                value={s.llmBaseUrl}
+                onInput={(e) => set('llmBaseUrl', (e.currentTarget as HTMLInputElement).value)}
+              />
+            </>
+          )}
+
+          <label style={row} for="llmApiKey">
+            LLM API key {s.llmProviderId === 'custom' && '(optional for local servers)'}
+          </label>
+          <input
+            id="llmApiKey"
+            type="password"
+            autocomplete="off"
+            style={input}
+            value={s.llmApiKey}
+            onInput={(e) => set('llmApiKey', (e.currentTarget as HTMLInputElement).value)}
+          />
+
+          <label style={row} for="llmModel">LLM model (blank = default)</label>
+          <input
+            id="llmModel"
+            style={input}
+            placeholder={LLM_MODEL_PLACEHOLDERS[s.llmProviderId] ?? ''}
+            value={s.llmModel}
+            onInput={(e) => set('llmModel', (e.currentTarget as HTMLInputElement).value)}
+          />
+        </>
+      )}
+
+      <h2 style={{ fontSize: 16, marginTop: 28 }}>Redaction</h2>
+      <p style={{ color: '#555', fontSize: 13 }}>
+        Text-only. Emails, phone numbers, Luhn-checked cards, SSNs, and custom terms
+        are stripped before LLM calls, and before storage when enabled below.
+        Raw audio sent to STT cannot be pre-redacted; retained WAV files are unredacted.
+      </p>
+      <label style={{ ...row, fontWeight: 400 }}>
+        <input
+          type="checkbox"
+          checked={s.redactAtRest}
+          onChange={(e) => set('redactAtRest', (e.currentTarget as HTMLInputElement).checked)}
+        />{' '}
+        Redact PII at rest (stored segments and live transcript)
+      </label>
+      <label style={row} for="redactTerms">Custom terms (one per line)</label>
+      <textarea
+        id="redactTerms"
+        style={{ ...input, minHeight: 80, fontFamily: 'inherit' }}
+        value={s.redactTerms.join('\n')}
+        onInput={(e) =>
+          set(
+            'redactTerms',
+            (e.currentTarget as HTMLTextAreaElement).value.split(/\r?\n/),
+          )
+        }
+      />
 
       <div style={{ marginTop: 16 }}>
         <button onClick={() => void save()}>Save</button>

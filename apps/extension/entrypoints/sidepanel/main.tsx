@@ -1,14 +1,14 @@
 import { render } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { MeetingSession, TranscriptSegment } from '@scribetab/shared';
-import { formatClock } from '@scribetab/shared';
+import type { TranscriptSegment } from '@scribetab/shared';
+import { formatClock, formatUsd } from '@scribetab/shared';
 import type MiniSearch from 'minisearch';
 import type { Ack, CaptureState, ToSidePanel } from '@/utils/messages';
 import type { NativeHostStatus } from '@/utils/nativeSync';
 import { downloadExport, type ExportFormat } from '@/utils/exportDownload';
 import { getAllSegments, getSegments } from '@/utils/segmentStore';
 import { createSegmentIndex, snippetAround, type SearchDoc } from '@/utils/search';
-import { listSessions } from '@/utils/sessionStore';
+import { listSessions, type StoredSession } from '@/utils/sessionStore';
 
 function fmt(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -16,7 +16,7 @@ function fmt(ms: number): string {
   return `${m}:${String(s % 60).padStart(2, '0')}`;
 }
 
-function durationLabel(session: MeetingSession): string {
+function durationLabel(session: StoredSession): string {
   if (session.status === 'recording') return 'recording';
   if (!session.endedAt) return '';
   const ms = Date.parse(session.endedAt) - Date.parse(session.startedAt);
@@ -195,7 +195,7 @@ function LiveView() {
 }
 
 function LibraryView() {
-  const [sessions, setSessions] = useState<MeetingSession[]>([]);
+  const [sessions, setSessions] = useState<StoredSession[]>([]);
   const [query, setQuery] = useState('');
   const [index, setIndex] = useState<MiniSearch<SearchDoc> | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -273,7 +273,23 @@ function LibraryView() {
         <h1 style={{ fontSize: 15, margin: '0 0 4px' }}>{open.title}</h1>
         <p style={{ fontSize: 12, color: '#555', margin: '0 0 8px' }}>
           {dateLabel(open.startedAt)} · {durationLabel(open)} · {open.platform} · {open.status}
+          {typeof open.costUsd === 'number' && (
+            <> · {formatUsd(open.costUsd)} est.</>
+          )}
         </p>
+        {open.summaryMarkdown && (
+          <article
+            style={{
+              whiteSpace: 'pre-wrap',
+              background: '#f6f6f6',
+              padding: 8,
+              fontSize: 13,
+              marginBottom: 12,
+            }}
+          >
+            {open.summaryMarkdown}
+          </article>
+        )}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
           {(['md', 'json', 'srt', 'vtt'] as const).map((f) => (
             <button key={f} disabled={busy} onClick={() => void exportOne(f)}>

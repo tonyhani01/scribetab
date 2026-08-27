@@ -30,6 +30,8 @@ export type ToOffscreen =
       sessionId: string;
       transcription: TranscriptionSettingsPayload | null; // null = record only, no STT configured
       micEnabled: boolean;
+      /** When set, segment text is redacted before IndexedDB write. */
+      redaction: { extraTerms: string[] } | null;
     }
   | { target: 'offscreen'; type: 'OFFSCREEN_STOP'; sessionId?: string };
 

@@ -1,4 +1,6 @@
 import { originPattern, transcriptionEndpoint } from '@scribetab/shared';
+import { getChunksForSession } from '@/utils/chunkStore';
+import { audioDurationMs, runFinalizeIntelligence } from '@/utils/intelligence';
 import type { Ack, ToBackground, ToOffscreen, TranscriptionSettingsPayload } from '@/utils/messages';
 import { persistHostStatus, syncSessionToHost } from '@/utils/nativeSync';
 import { platformFromUrl, titleFromTab } from '@/utils/platform';
@@ -113,7 +115,13 @@ async function completeSession(
 ): Promise<void> {
   if (!sessionId) return;
   const s = await getSettings();
+  // STT minutes must be measured before finalize may delete audioChunks.
+  const sttDurationMs =
+    status === 'complete' ? audioDurationMs(await getChunksForSession(sessionId)) : 0;
   const flipped = await finalizeSession(sessionId, { retainAudio: s.retainAudio, status });
+  if (flipped && status === 'complete') {
+    await runFinalizeIntelligence(sessionId, s, { sttDurationMs }).catch(() => {});
+  }
   await checkQuota().catch(() => {});
   // Offscreen drain() finishes before CAPTURE_ENDED / STOP ack, so transcripts are complete.
   if (flipped && status === 'complete') {
@@ -170,6 +178,7 @@ async function handleStart(): Promise<Ack> {
       sessionId,
       transcription,
       micEnabled: settings.micEnabled,
+      redaction: settings.redactAtRest ? { extraTerms: settings.redactTerms } : null,
     } as const satisfies ToOffscreen;
 
     const first = await sendToOffscreen(startMsg);

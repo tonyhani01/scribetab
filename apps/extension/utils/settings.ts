@@ -7,6 +7,12 @@ export interface Settings {
   micEnabled: boolean;
   retainAudio: boolean; // when false, audioChunks are deleted on session finalize
   nativeHostEnabled: boolean; // sync finalized sessions to com.scribetab.host
+  llmProviderId: '' | 'openai' | 'custom';
+  llmApiKey: string;
+  llmModel: string;
+  llmBaseUrl: string;  // custom LLM only (Ollama / LM Studio)
+  redactAtRest: boolean;
+  redactTerms: string[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -18,13 +24,21 @@ export const DEFAULT_SETTINGS: Settings = {
   micEnabled: false,
   retainAudio: true,
   nativeHostEnabled: true,
+  llmProviderId: '',
+  llmApiKey: '',
+  llmModel: '',
+  llmBaseUrl: '',
+  redactAtRest: false,
+  redactTerms: [],
 };
 
 const KEY = 'settings';
 
 export async function getSettings(): Promise<Settings> {
   const v = await chrome.storage.local.get(KEY);
-  return { ...DEFAULT_SETTINGS, ...((v[KEY] as Partial<Settings> | undefined) ?? {}) };
+  const merged = { ...DEFAULT_SETTINGS, ...((v[KEY] as Partial<Settings> | undefined) ?? {}) };
+  if (!Array.isArray(merged.redactTerms)) merged.redactTerms = [];
+  return merged;
 }
 
 export async function saveSettings(s: Settings): Promise<void> {
