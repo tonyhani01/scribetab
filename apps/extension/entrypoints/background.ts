@@ -1,4 +1,6 @@
-import type { Ack, ToBackground, ToOffscreen } from '@/utils/messages';
+import { originPattern, transcriptionEndpoint } from '@scribetab/shared';
+import type { Ack, ToBackground, ToOffscreen, TranscriptionSettingsPayload } from '@/utils/messages';
+import { getSettings } from '@/utils/settings';
 
 let creatingOffscreen: Promise<void> | null = null;
 
@@ -49,6 +51,32 @@ function getMediaStreamId(options: chrome.tabCapture.GetMediaStreamOptions): Pro
   });
 }
 
+/**
+ * null when transcription is off or unusable (unconfigured, missing key for a
+ * cloud provider, or the host permission was never granted). Recording still
+ * proceeds — transcription is an overlay on capture, not a precondition.
+ */
+async function transcriptionPayload(): Promise<TranscriptionSettingsPayload | null> {
+  const s = await getSettings();
+  if (s.providerId === '') return null;
+  let endpoint: string;
+  try {
+    endpoint = transcriptionEndpoint(s.providerId, s.baseUrl || undefined);
+  } catch {
+    return null; // custom without baseUrl
+  }
+  if (s.providerId !== 'custom' && !s.apiKey) return null;
+  const granted = await chrome.permissions.contains({ origins: [originPattern(endpoint)] });
+  if (!granted) return null;
+  return {
+    providerId: s.providerId,
+    apiKey: s.apiKey,
+    model: s.model || undefined,
+    language: s.language || undefined,
+    baseUrl: s.baseUrl || undefined,
+  };
+}
+
 let opInFlight = false; // serializes start/stop within one SW lifetime
 
 async function handleStart(): Promise<Ack> {
@@ -72,12 +100,24 @@ async function handleStart(): Promise<Ack> {
 
     const streamId = await getMediaStreamId({ targetTabId: tab.id });
 
-    const first = await sendToOffscreen({ target: 'offscreen', type: 'OFFSCREEN_START', streamId });
+    const settings = await getSettings();
+    const transcription = await transcriptionPayload();
+    const sessionId = crypto.randomUUID();
+    const startMsg = {
+      target: 'offscreen',
+      type: 'OFFSCREEN_START',
+      streamId,
+      sessionId,
+      transcription,
+      micEnabled: settings.micEnabled,
+    } as const satisfies ToOffscreen;
+
+    const first = await sendToOffscreen(startMsg);
     if (first?.ok) {
       offscreenStarted = true;
     } else if (/already running/i.test(first?.error ?? '')) {
       await sendToOffscreen({ target: 'offscreen', type: 'OFFSCREEN_STOP' }).catch(() => {});
-      const retry = await sendToOffscreen({ target: 'offscreen', type: 'OFFSCREEN_START', streamId });
+      const retry = await sendToOffscreen(startMsg);
       if (!retry?.ok) throw new Error(retry?.error ?? first?.error ?? 'Offscreen failed to start');
       offscreenStarted = true;
     } else {
@@ -87,6 +127,10 @@ async function handleStart(): Promise<Ack> {
     await chrome.storage.local.set({
       captureState: 'recording',
       chunkCount: 0,
+      segmentCount: 0,
+      currentSessionId: sessionId,
+      transcriptionConfigured: transcription !== null,
+      micStatus: settings.micEnabled ? 'active' : 'off', // corrected by MIC_STATUS if denied
       capturedTabId: tab.id,
       lastError: null,
     });
@@ -180,6 +224,14 @@ export default defineBackground(() => {
         case 'CHUNK_SAVED':
           // Offscreen cannot use chrome.storage — the SW owns all state.
           await chrome.storage.local.set({ chunkCount: msg.count });
+          sendResponse({ ok: true });
+          break;
+        case 'SEGMENT_SAVED':
+          await chrome.storage.local.set({ segmentCount: msg.count });
+          sendResponse({ ok: true });
+          break;
+        case 'MIC_STATUS':
+          await chrome.storage.local.set({ micStatus: msg.status });
           sendResponse({ ok: true });
           break;
         case 'CAPTURE_ENDED':
