@@ -263,7 +263,7 @@ export class NativeSyncHost {
         platform: this.opts.platform,
       });
       await this.writeExportAck({
-        ok: true,
+        ok: results.every((r) => r.ok),
         sessionId,
         results: results.map((r) => ({
           ...r,

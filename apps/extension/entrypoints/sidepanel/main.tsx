@@ -388,7 +388,7 @@ function LibraryView() {
         sessionId: open.id,
         itemIds,
       })) as ExportActionsAck;
-      if (!res?.ok) {
+      if (!res?.ok && (!res?.results || res.results.length === 0)) {
         const err = res?.error ?? 'Unknown error';
         setActionError(
           isHostMissingError(err) || isHostForbiddenError(err) ? humanError(err) : err,

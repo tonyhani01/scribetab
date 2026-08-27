@@ -205,6 +205,41 @@ describe('NativeSyncHost export_actions', () => {
     });
   });
 
+  it('sets ack.ok false when Notion returns 500 with per-item errors', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      await saveConfig(
+        {
+          obsidianEnabled: false,
+          notionEnabled: true,
+          notion: { token: 'ntn_secret_value', parentPageId: 'parent' },
+        },
+        env,
+        'linux',
+      );
+      await saveNotionPageMap(
+        { [session.id]: { pageId: 'aa-bb-cc', status: 'ok' } },
+        env,
+        'linux',
+      );
+      const { stdout, messages } = capturingStdout();
+      const fetchImpl: typeof fetch = async () => new Response('boom', { status: 500 });
+      const host = new NativeSyncHost(stdout, env, { fetchImpl, platform: 'linux' });
+      await host.handle({
+        type: 'export_actions',
+        protocolVersion: 1,
+        sessionId: session.id,
+        items: exportItems,
+      });
+      const ack = messages()[0] as ExportActionsAck;
+      expect(ack.ok).toBe(false);
+      expect(ack.results).toHaveLength(2);
+      expect(ack.results.every((r) => r.ok === false)).toBe(true);
+      expect(ack.results[0]?.error).toMatch(/500/);
+      expect(JSON.stringify(ack)).not.toContain('ntn_secret_value');
+    });
+  });
+
   it('tells the user to sync first when the session is unknown', async () => {
     await withHome(async (home) => {
       const env = linuxEnv(home);
