@@ -380,6 +380,58 @@ describe('appendActionItems', () => {
     });
   });
 
+  it('resets the action record when the pageId changes', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      await saveNotionActionMap(
+        {
+          [session.id]: {
+            pageId: 'old',
+            headingAdded: true,
+            items: { a1: { ok: true, at: '2026-08-27T00:00:00.000Z' } },
+          },
+        },
+        env,
+        'linux',
+      );
+      const bodies: string[] = [];
+      const fetchImpl: typeof fetch = async (_input, init) => {
+        bodies.push(String(init?.body ?? ''));
+        return new Response('{}', { status: 200 });
+      };
+      const out = await appendActionItems({
+        token: 't',
+        pageId: 'new',
+        sessionId: session.id,
+        items,
+        fetchImpl,
+        env,
+        platform: 'linux',
+        now: () => '2026-08-28T00:00:00.000Z',
+      });
+      expect(bodies).toHaveLength(1);
+      const children = (
+        JSON.parse(bodies[0]!) as {
+          children: Array<{ type: string; to_do?: { rich_text: Array<{ text: { content: string } }> } }>;
+        }
+      ).children;
+      expect(children.map((c) => c.type)).toEqual(['heading_2', 'to_do', 'to_do']);
+      expect(out.results).toEqual([
+        { id: 'a1', ok: true },
+        { id: 'a2', ok: true },
+      ]);
+      const map = await loadNotionActionMap(env, 'linux');
+      expect(map[session.id]).toEqual({
+        pageId: 'new',
+        headingAdded: true,
+        items: {
+          a1: { ok: true, at: '2026-08-28T00:00:00.000Z' },
+          a2: { ok: true, at: '2026-08-28T00:00:00.000Z' },
+        },
+      });
+    });
+  });
+
   it('skips only already-exported items on a partial retry', async () => {
     await withHome(async (home) => {
       const env = linuxEnv(home);

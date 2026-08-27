@@ -293,12 +293,11 @@ export async function appendActionItems(opts: {
   const deadline = opts.deadline ?? Date.now() + NOTION_INTEGRATION_BUDGET_MS;
   const now = opts.now ?? (() => new Date().toISOString());
   const map = await loadNotionActionMap(env, platform);
-  const rec: NotionActionRecord = map[opts.sessionId] ?? {
-    pageId: opts.pageId,
-    headingAdded: false,
-    items: {},
-  };
-  rec.pageId = opts.pageId;
+  const existing = map[opts.sessionId];
+  const rec: NotionActionRecord =
+    existing && existing.pageId === opts.pageId
+      ? existing
+      : { pageId: opts.pageId, headingAdded: false, items: {} };
 
   const results: { id: string; ok: boolean; error?: string }[] = [];
   const pending = opts.items.filter((i) => {
