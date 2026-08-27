@@ -10,6 +10,7 @@ export type IntelligenceState = 'pending' | 'needs-permission';
 export type StoredSession = MeetingSession & {
   summaryMarkdown?: string;
   summary?: SessionSummary;
+  actionExports?: Record<string, { destination: 'notion'; at: string }>;
   /** null = computed but unknown (UI: n/a). */
   costUsd?: number | null;
   /** Accrued provider-computed STT cost (e.g. OpenRouter usage.cost), STT-only. */

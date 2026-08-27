@@ -39,7 +39,8 @@ export type ToBackground =
       endMs?: number;      // wall-clock last mutation time for the block
     }
   | { target: 'background'; type: 'SYNC_ALL' }
-  | { target: 'background'; type: 'REGENERATE_SUMMARY'; sessionId: string };
+  | { target: 'background'; type: 'REGENERATE_SUMMARY'; sessionId: string }
+  | { target: 'background'; type: 'EXPORT_ACTIONS'; sessionId: string; itemIds: string[] };
 
 /** Broadcast to the Meet captions content script when tab capture starts/stops. */
 export type ToMeetCaptions = {

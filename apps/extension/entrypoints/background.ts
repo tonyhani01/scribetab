@@ -46,6 +46,7 @@ import type {
   TranscriptionIssue,
   TranscriptionSettingsPayload,
 } from '@/utils/messages';
+import { exportSelectedActionItems } from '@/utils/actionExport';
 import { persistHostStatus, syncSessionToHost } from '@/utils/nativeSync';
 import { isCapturableUrl, platformFromUrl, titleFromTab } from '@/utils/platform';
 import { checkQuota } from '@/utils/quota';
@@ -657,6 +658,10 @@ export default defineBackground(() => {
             break;
           }
           sendResponse({ ok: true });
+          break;
+        }
+        case 'EXPORT_ACTIONS': {
+          sendResponse(await exportSelectedActionItems(msg.sessionId, msg.itemIds));
           break;
         }
         case 'SYNC_ALL': {
