@@ -256,6 +256,23 @@ describe('runFinalizeIntelligence', () => {
     expect(row?.intelligence).toBeNull();
   });
 
+  it('passes user summaryPrompt into the summary request', async () => {
+    const fetchMock = stubChat('ok', '- none');
+    await runFinalizeIntelligence(
+      's1',
+      settings({
+        llmProviderId: 'openai',
+        llmApiKey: 'sk-x',
+        summaryPrompt: 'Focus on risks.',
+      }),
+    );
+    const sent = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as {
+      messages: { role: string; content: string }[];
+    };
+    const user = sent.messages.find((m) => m.role === 'user');
+    expect(user?.content).toContain('Focus on risks.');
+  });
+
   it('does not fetch when the LLM origin is not permitted', async () => {
     stubChrome({ contains: false });
     const fetchMock = stubChat('nope', '- nope');

@@ -122,6 +122,7 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
       };
       try {
         summary = await summarizeMeeting(complete, forLlm, {
+          guidance: settings.summaryPrompt,
           model: settings.llmModel.trim() || undefined,
         });
         intelligence = null;
