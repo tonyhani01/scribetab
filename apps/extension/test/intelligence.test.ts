@@ -269,8 +269,11 @@ describe('runFinalizeIntelligence', () => {
     const sent = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as {
       messages: { role: string; content: string }[];
     };
+    const system = sent.messages.find((m) => m.role === 'system');
     const user = sent.messages.find((m) => m.role === 'user');
+    expect(system?.content).toContain('JSON');
     expect(user?.content).toContain('Focus on risks.');
+    expect(user?.content.trimEnd().endsWith('</transcript>')).toBe(true);
   });
 
   it('does not fetch when the LLM origin is not permitted', async () => {
