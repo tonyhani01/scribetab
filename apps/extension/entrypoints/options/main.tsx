@@ -267,6 +267,25 @@ function App() {
         }
       />
 
+      <h2 style={{ fontSize: 16, marginTop: 28 }}>Integrations</h2>
+      <p style={{ color: '#555', fontSize: 13 }}>
+        Obsidian vault copy and Notion page creation run in the native host (off by default).
+        Configure with <code>scribetab-host config set</code> — the Notion token is stored only in
+        the host config file and is sent only to <code>api.notion.com</code>.
+      </p>
+      <pre style={{ fontSize: 12, background: '#f6f6f6', padding: 8, overflow: 'auto' }}>{`scribetab-host config set obsidianEnabled true
+scribetab-host config set obsidianVaultPath /path/to/vault
+scribetab-host config set notionEnabled true
+scribetab-host config set notion.token -
+scribetab-host config set notion.parentPageId PAGE_ID`}</pre>
+      <p style={{ color: '#555', fontSize: 13 }}>
+        Config file:
+        macOS <code>~/Library/Application Support/ScribeTab/config.json</code>;
+        Linux <code>~/.local/share/ScribeTab/config.json</code>;
+        Windows <code>%APPDATA%\ScribeTab\config.json</code>.
+        NotebookLM has no public API — use <strong>Export for NotebookLM</strong> in the Library.
+      </p>
+
       <div style={{ marginTop: 16 }}>
         <button onClick={() => void save()}>Save</button>
       </div>

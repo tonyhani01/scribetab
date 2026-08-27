@@ -108,12 +108,14 @@ describe('native messaging protocol (child process)', () => {
     sendNative(child, payload);
     sendNative(child, { type: 'sync_end', sessionId: session.id });
     expect((await readNativeMessage(child) as HostSyncAck).ok).toBe(true);
+    expect((await readNativeMessage(child) as HostSyncAck).ok).toBe(true);
 
     sendNative(child, {
       ...payload,
       session: { ...session, title: 'Protocol Sync Again' },
     });
     sendNative(child, { type: 'sync_end', sessionId: session.id });
+    expect((await readNativeMessage(child) as HostSyncAck).ok).toBe(true);
     expect((await readNativeMessage(child) as HostSyncAck).ok).toBe(true);
 
     const root = join(home, 'ScribeTab', 'meetings');

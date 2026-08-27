@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { MeetingSession, TranscriptSegment } from '../src/types';
 import { exportJson } from '../src/export/json';
 import { exportMarkdown } from '../src/export/markdown';
+import { exportNotebookLm } from '../src/export/notebooklm';
 import { exportSrt } from '../src/export/srt';
 import { exportVtt } from '../src/export/vtt';
 
@@ -226,5 +227,37 @@ describe('exportVtt', () => {
     expect(vtt).not.toContain('inf');
     expect(vtt).not.toContain('reversed');
     expect(vtt).not.toContain('zero');
+  });
+});
+
+describe('exportNotebookLm', () => {
+  it('adds a NotebookLM header and combines summary with transcript', () => {
+    const md = exportNotebookLm(session, segments, {
+      summaryMarkdown: '## Recap\n\nShip it.',
+    });
+    expect(md).toContain('# Weekly standup');
+    expect(md).toContain('Exported for NotebookLM from ScribeTab.');
+    expect(md).toContain(`- Session ID: ${session.id}`);
+    expect(md).toContain('## Recap');
+    expect(md).toContain('Ship it.');
+    expect(md).toContain('[00:00:00] Ada: Hello team');
+    expect(md).toContain('[00:01:01] Second line');
+    expect(md.indexOf('## Summary')).toBeLessThan(md.indexOf('## Transcript'));
+    expect(md.indexOf('Hello team')).toBeLessThan(md.indexOf('Second line'));
+  });
+
+  it('omits the summary section when none is provided', () => {
+    const md = exportNotebookLm(session, []);
+    expect(md).toContain('Exported for NotebookLM from ScribeTab.');
+    expect(md).not.toContain('## Summary');
+    expect(md).toContain('## Transcript');
+  });
+
+  it('does not emit a second ## Summary when the markdown already starts with one', () => {
+    const md = exportNotebookLm(session, [], {
+      summaryMarkdown: '## Summary\n\nAlready headed.',
+    });
+    expect(md.match(/## Summary/g)).toEqual(['## Summary']);
+    expect(md).toContain('Already headed.');
   });
 });

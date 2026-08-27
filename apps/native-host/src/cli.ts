@@ -1,5 +1,14 @@
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_EXTENSION_ID, HOST_NAME } from './constants.js';
+import {
+  configPathHelp,
+  getConfigValue,
+  isConfigKey,
+  loadConfig,
+  redactConfig,
+  saveConfig,
+  setConfigValue,
+} from './config.js';
 import { decodeNativeMessages, isEpipe } from './framing.js';
 import { installNativeHost, uninstallNativeHost, validateExtensionId } from './install.js';
 import { meetingsDir } from './paths.js';
@@ -13,6 +22,9 @@ Usage:
                                          (Chrome launches this; do not run by hand)
   scribetab-host install [--extension-id ID]
   scribetab-host uninstall
+  scribetab-host config get [key]
+  scribetab-host config set <key> <value>
+  scribetab-host config set notion.token -
   scribetab-host --help
 
 Install copies the host into a stable per-user directory (npx cache is evictable)
@@ -27,6 +39,19 @@ allowed_origins uses chrome-extension://${DEFAULT_EXTENSION_ID}/
 Pass --extension-id to override (required once the Web Store ID is assigned).
 
 Meetings are written to ~/ScribeTab/meetings/<date>-<slug>/.
+
+Host config (Obsidian / Notion, all off by default):
+${configPathHelp()}
+
+Keys: obsidianEnabled, obsidianVaultPath, notionEnabled,
+      notion.token, notion.parentPageId
+
+Set notion.token from stdin (recommended, avoids argv exposure):
+
+  scribetab-host config set notion.token -
+
+obsidianVaultPath must be an absolute path. Config writes are atomic
+(temp file + rename, mode 0600) but not locked against concurrent writers.
 `;
 
 export function parseExtensionId(args: string[]): string | undefined {
@@ -97,6 +122,70 @@ export async function runHostCli(args: string[]): Promise<void> {
     process.stdout.write(`Uninstalled ${HOST_NAME}\n  removed: ${result.manifestPath}\n`);
     return;
   }
+  if (cmd === 'config') {
+    await runConfigCli(args.slice(1));
+    return;
+  }
   // Chrome passes chrome-extension://<id>/ as argv[0] (process.argv[2]).
   await runNativeLoop();
+}
+
+async function readStdinValue(stdin: NodeJS.ReadableStream): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString('utf8').replace(/\r?\n$/, '');
+}
+
+export async function runConfigCli(
+  args: string[],
+  io: {
+    stdout: NodeJS.WritableStream;
+    stderr: NodeJS.WritableStream;
+    stdin?: NodeJS.ReadableStream;
+  } = process,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): Promise<void> {
+  const sub = args[0];
+  if (sub === 'get' || sub === undefined) {
+    const cfg = await loadConfig(env, platform);
+    const key = args[1];
+    if (!key) {
+      io.stdout.write(`${JSON.stringify(redactConfig(cfg), null, 2)}\n`);
+      return;
+    }
+    if (!isConfigKey(key)) {
+      throw new Error(`Unknown config key ${JSON.stringify(key)}. Valid: obsidianEnabled, obsidianVaultPath, notionEnabled, notion.token, notion.parentPageId`);
+    }
+    io.stdout.write(`${getConfigValue(cfg, key)}\n`);
+    return;
+  }
+  if (sub === 'set') {
+    const key = args[1];
+    if (!key || !isConfigKey(key)) {
+      throw new Error(
+        'Usage: scribetab-host config set <key> <value>\nKeys: obsidianEnabled, obsidianVaultPath, notionEnabled, notion.token, notion.parentPageId',
+      );
+    }
+    if (args.length > 3) {
+      throw new Error('config set takes a single value argument; quote it if it contains spaces');
+    }
+    let value = args[2];
+    if (value === undefined) {
+      throw new Error(
+        'Usage: scribetab-host config set <key> <value>\nKeys: obsidianEnabled, obsidianVaultPath, notionEnabled, notion.token, notion.parentPageId',
+      );
+    }
+    if (key === 'notion.token' && value === '-') {
+      const stdin = io.stdin ?? process.stdin;
+      value = await readStdinValue(stdin);
+    }
+    const cfg = setConfigValue(await loadConfig(env, platform), key, value);
+    const path = await saveConfig(cfg, env, platform);
+    io.stdout.write(`Wrote ${path}\n`);
+    return;
+  }
+  throw new Error('Usage: scribetab-host config get [key] | config set <key> <value>');
 }
