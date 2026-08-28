@@ -9,7 +9,8 @@ import { isHostForbiddenError, isHostMissingError, type NativeHostStatus } from 
 import { downloadExport, type ExportFormat } from '@/utils/exportDownload';
 import { getAllSegments, getSegments } from '@/utils/segmentStore';
 import { createSegmentIndex, snippetAround, type SearchDoc } from '@/utils/search';
-import { getSession, listSessions, type StoredSession } from '@/utils/sessionStore';
+import { deleteSession, getSession, listSessions, type StoredSession } from '@/utils/sessionStore';
+import { canDeleteSession } from '@/utils/librarySession';
 import { getSettings } from '@/utils/settings';
 import { nextSelection } from '@/utils/actionExport';
 import { humanError } from '@/utils/userError';
@@ -544,6 +545,26 @@ function LibraryView() {
     }
   };
 
+  const deleteOpen = async () => {
+    if (!open) return;
+    if (!canDeleteSession(open.status)) {
+      setActionError('Stop the recording before deleting this meeting.');
+      return;
+    }
+    if (!confirm(`Delete "${open.title}" and its transcript? This cannot be undone.`)) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await deleteSession(open.id);
+      setOpenId(null);
+      await reload();
+    } catch (e) {
+      setActionError(humanError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const grantLlmAndRegenerate = async () => {
     if (!open) return;
     setBusy(true);
@@ -638,6 +659,14 @@ function LibraryView() {
           </button>
           <button class="st-chip" disabled={busy} onClick={() => void regenerateSummary()}>
             Regenerate summary
+          </button>
+          <button
+            data-testid="delete-session"
+            class="st-chip st-chip--danger"
+            disabled={busy}
+            onClick={() => void deleteOpen()}
+          >
+            Delete
           </button>
         </div>
         {actionError && (
