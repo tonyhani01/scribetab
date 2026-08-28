@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_EXTENSION_ID, HOST_NAME } from './constants.js';
+import { DEFAULT_EXTENSION_ID, HOST_NAME, STORE_EXTENSION_ID } from './constants.js';
 import {
   configPathHelp,
   getConfigValue,
@@ -34,9 +34,13 @@ and writes the Chrome NativeMessagingHosts manifest:
   Linux:  ~/.config/google-chrome/NativeMessagingHosts/${HOST_NAME}.json
   Windows: %APPDATA%\\ScribeTab\\host\\ + HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}
 
-allowed_origins uses chrome-extension://${DEFAULT_EXTENSION_ID}/
-(the development ID from the packed key in the extension manifest).
-Pass --extension-id to override (required once the Web Store ID is assigned).
+allowed_origins defaults to both the development ID (from the packed key in
+the extension manifest) and the Chrome Web Store ID:
+
+  chrome-extension://${DEFAULT_EXTENSION_ID}/
+  chrome-extension://${STORE_EXTENSION_ID}/
+
+Pass --extension-id to restrict the manifest to a single custom ID.
 
 Meetings are written to ~/ScribeTab/meetings/<date>-<slug>/.
 
@@ -105,15 +109,15 @@ export async function runHostCli(args: string[]): Promise<void> {
     return;
   }
   if (cmd === 'install') {
-    const extensionId = parseExtensionId(args.slice(1)) ?? DEFAULT_EXTENSION_ID;
-    validateExtensionId(extensionId);
+    const extensionId = parseExtensionId(args.slice(1));
+    if (extensionId) validateExtensionId(extensionId);
     const result = await installNativeHost({
       extensionId,
       hostScript: hostScriptPath(),
       nodePath: process.execPath,
     });
     process.stdout.write(
-      `Installed ${HOST_NAME}\n  manifest: ${result.manifestPath}\n  launcher: ${result.launcherPath}\n  extension: ${result.extensionId}\n`,
+      `Installed ${HOST_NAME}\n  manifest: ${result.manifestPath}\n  launcher: ${result.launcherPath}\n  extensions: ${result.extensionIds.join(', ')}\n`,
     );
     return;
   }

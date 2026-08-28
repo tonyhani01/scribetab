@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_EXTENSION_ID, HOST_NAME } from '../src/constants.js';
+import { DEFAULT_EXTENSION_ID, HOST_NAME, STORE_EXTENSION_ID } from '../src/constants.js';
 import { parseExtensionId } from '../src/cli.js';
 import {
   chromeNativeMessagingDir,
@@ -26,7 +26,7 @@ describe('installNativeHost', () => {
         hostScript,
         nodePath: '/usr/bin/node',
       });
-      expect(result.extensionId).toBe(DEFAULT_EXTENSION_ID);
+      expect(result.extensionIds).toEqual([DEFAULT_EXTENSION_ID, STORE_EXTENSION_ID]);
       expect(result.manifestPath).toBe(
         join(home, 'Library/Application Support/Google/Chrome/NativeMessagingHosts', `${HOST_NAME}.json`),
       );
@@ -40,7 +40,10 @@ describe('installNativeHost', () => {
       expect(json.name).toBe(HOST_NAME);
       expect(json.type).toBe('stdio');
       expect(json.path).toBe(result.launcherPath);
-      expect(json.allowed_origins).toEqual([`chrome-extension://${DEFAULT_EXTENSION_ID}/`]);
+      expect(json.allowed_origins).toEqual([
+        `chrome-extension://${DEFAULT_EXTENSION_ID}/`,
+        `chrome-extension://${STORE_EXTENSION_ID}/`,
+      ]);
       const launcher = await readFile(result.launcherPath, 'utf8');
       expect(launcher).toContain(join(stableHostDir('darwin', env), 'dist', 'host.bin.js'));
     });

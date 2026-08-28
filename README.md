@@ -91,7 +91,8 @@ pnpm --filter scribetab-host build
 node apps/native-host/dist/host.bin.js install
 ```
 
-Use `--extension-id <id>` if you are not on the packed development ID. npm publish
+The default manifest allows both the development ID and the Chrome Web Store ID;
+use `--extension-id <id>` only for a different custom build. npm publish
 is planned; until then install from a clone. Details:
 [`apps/native-host/README.md`](apps/native-host/README.md).
 

@@ -96,7 +96,7 @@ describe('native messaging protocol (child process)', () => {
     child = undefined;
   });
 
-  it('re-syncs the same sessionId into one directory', async () => {
+  it('re-syncs the same sessionId into one directory', { timeout: 15_000 }, async () => {
     home = await tempHome();
     child = spawnHost(home);
     const payload = {

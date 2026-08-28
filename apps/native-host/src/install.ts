@@ -1,7 +1,7 @@
 import { chmod, cp, lstat, mkdir, readdir, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { DEFAULT_EXTENSION_ID, HOST_NAME } from './constants.js';
+import { DEFAULT_EXTENSION_IDS, HOST_NAME } from './constants.js';
 import { homeDir } from './paths.js';
 
 export const EXTENSION_ID_RE = /^[a-p]{32}$/;
@@ -69,14 +69,14 @@ function winLauncher(nodePath: string, hostScript: string): string {
 
 export function nativeHostManifest(opts: {
   path: string;
-  extensionId: string;
+  extensionIds: string[];
 }): { name: string; description: string; path: string; type: 'stdio'; allowed_origins: string[] } {
   return {
     name: HOST_NAME,
     description: 'ScribeTab native messaging host',
     path: opts.path,
     type: 'stdio',
-    allowed_origins: [`chrome-extension://${opts.extensionId}/`],
+    allowed_origins: opts.extensionIds.map((id) => `chrome-extension://${id}/`),
   };
 }
 
@@ -127,13 +127,13 @@ async function copyHostToStable(hostScript: string, destRoot: string): Promise<s
 export async function installNativeHost(opts: InstallOptions = {}): Promise<{
   manifestPath: string;
   launcherPath: string;
-  extensionId: string;
+  extensionIds: string[];
   hostScript: string;
 }> {
   const platform = opts.platform ?? process.platform;
   const env = opts.env ?? process.env;
-  const extensionId = opts.extensionId || DEFAULT_EXTENSION_ID;
-  validateExtensionId(extensionId);
+  const extensionIds = opts.extensionId ? [opts.extensionId] : DEFAULT_EXTENSION_IDS;
+  for (const id of extensionIds) validateExtensionId(id);
   const hostScript = opts.hostScript;
   const nodePath = opts.nodePath ?? process.execPath;
   if (!hostScript) throw new Error('hostScript path is required');
@@ -153,7 +153,7 @@ export async function installNativeHost(opts: InstallOptions = {}): Promise<{
   const dir = chromeNativeMessagingDir(platform, env);
   await mkdir(dir, { recursive: true });
   const manifestPath = join(dir, `${HOST_NAME}.json`);
-  const manifest = nativeHostManifest({ path: launch, extensionId });
+  const manifest = nativeHostManifest({ path: launch, extensionIds });
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 
   if (platform === 'win32') {
@@ -161,7 +161,7 @@ export async function installNativeHost(opts: InstallOptions = {}): Promise<{
     write(windowsRegistryKey(), manifestPath);
   }
 
-  return { manifestPath, launcherPath: launch, extensionId, hostScript: copied };
+  return { manifestPath, launcherPath: launch, extensionIds, hostScript: copied };
 }
 
 export async function uninstallNativeHost(opts: InstallOptions = {}): Promise<{

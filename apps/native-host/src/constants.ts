@@ -8,6 +8,12 @@ export const HOST_NAME = 'com.scribetab.host';
  */
 export const DEFAULT_EXTENSION_ID = 'cambjpbepplcihlihagiheggdkfcpmef';
 
+/** Chrome Web Store ID assigned to the published listing. */
+export const STORE_EXTENSION_ID = 'empcoocfpoihhdjnpnocdgffgdgaknoe';
+
+/** Origins allowed by default: dev (packed key) and Web Store installs both pair without flags. */
+export const DEFAULT_EXTENSION_IDS = [DEFAULT_EXTENSION_ID, STORE_EXTENSION_ID];
+
 export const MAX_AUDIO_CHUNK_BYTES = 8 * 1024 * 1024;
 export const MAX_NATIVE_MESSAGE_BYTES = 64 * 1024 * 1024;
 export const SLUG_MAX = 60;

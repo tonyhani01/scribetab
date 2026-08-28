@@ -17,6 +17,9 @@ node apps/native-host/dist/host.bin.js install --extension-id <id>
 node apps/native-host/dist/host.bin.js uninstall
 ```
 
+`install` allows both the development extension ID and the Chrome Web Store ID
+by default; `--extension-id` restricts the manifest to a single custom ID.
+
 `npm publish` is planned; until then, install from this clone.
 
 Development extension ID (packed `key` in `apps/extension/wxt.config.ts`):
