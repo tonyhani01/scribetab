@@ -6,6 +6,8 @@ import { type NativeHostStatus } from '@/utils/nativeSync';
 import { getSegments } from '@/utils/segmentStore';
 import { humanError } from '@/utils/userError';
 import { addPending, clearPending, resolveBelow, resolvePending, type PendingChunk } from '@/utils/pendingChunks';
+import { canApplySessionRead, type SessionReadToken } from '@/utils/sessionReadGuard';
+import { mergeSegments } from '@/utils/segmentMerge';
 import { SegmentList } from './SegmentList';
 
 export function LiveView() {
@@ -28,10 +30,32 @@ export function LiveView() {
   const [chunkCount, setChunkCount] = useState(0);
   const endRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<string | null>(null);
+  const sessionReadRef = useRef<{ currentSessionId: string | null; version: number }>({
+    currentSessionId: null,
+    version: 0,
+  });
   const highlightTimerRef = useRef<number | undefined>(undefined);
   sessionRef.current = sessionId;
 
+  const selectSession = (id: string | null): number => {
+    const next = { currentSessionId: id, version: sessionReadRef.current.version + 1 };
+    sessionReadRef.current = next;
+    sessionRef.current = id;
+    return next.version;
+  };
+
+  const loadSessionSegments = (id: string, version: number) => {
+    const token: SessionReadToken = { sessionId: id, version };
+    void getSegments(id).then((rows) => {
+      const current = sessionReadRef.current;
+      if (canApplySessionRead(token, current.currentSessionId, current.version)) {
+        setSegments((prev) => mergeSegments(rows, prev));
+      }
+    });
+  };
+
   useEffect(() => {
+    const initialVersion = sessionReadRef.current.version;
     void chrome.storage.local
       .get(['currentSessionId', 'captureState', 'transcriptionConfigured', 'transcriptionIssue', 'lastTranscriptionError', 'micStatus', 'nativeHostStatus', 'captureNotice', 'transcribedCount', 'chunkCount'])
       .then(async (v) => {
@@ -55,9 +79,11 @@ export function LiveView() {
         setMicStatus((v.micStatus as string) ?? 'off');
         if (v.nativeHostStatus) setHostStatus(v.nativeHostStatus as NativeHostStatus);
         setNotice(typeof v.captureNotice === 'string' && v.captureNotice ? v.captureNotice : null);
+        if (sessionReadRef.current.version !== initialVersion) return;
         const sid = (v.currentSessionId as string) ?? null;
+        const version = selectSession(sid);
         setSessionId(sid);
-        if (sid) setSegments(await getSegments(sid));
+        if (sid) loadSessionSegments(sid, version);
       });
 
     const onStorage = (c: Record<string, chrome.storage.StorageChange>, area: string) => {
@@ -87,10 +113,11 @@ export function LiveView() {
       if ('chunkCount' in c) setChunkCount(typeof c.chunkCount.newValue === 'number' ? c.chunkCount.newValue : 0);
       if (c.currentSessionId) {
         const sid = (c.currentSessionId.newValue as string) ?? null;
+        const version = selectSession(sid);
         setSessionId(sid);
         setSegments([]);
         setPending(clearPending());
-        if (sid) void getSegments(sid).then(setSegments);
+        if (sid) loadSessionSegments(sid, version);
       }
     };
     chrome.storage.onChanged.addListener(onStorage);
@@ -110,15 +137,13 @@ export function LiveView() {
           }),
         );
       } else if (msg.type === 'SEGMENTS_ADDED') {
-        setSegments((prev) => [...prev, ...msg.segments].sort((a, b) => a.startMs - b.startMs));
+        if (!sessionRef.current || msg.sessionId !== sessionRef.current) return;
+        setSegments((prev) => mergeSegments(prev, msg.segments));
         const chunkIndex = msg.chunkIndex;
         if (typeof chunkIndex === 'number') setPending((prev) => resolvePending(prev, chunkIndex));
       } else if (msg.type === 'SEGMENTS_UPDATED') {
-        setSegments((prev) => {
-          const map = new Map(prev.map((s) => [s.id, s]));
-          for (const s of msg.segments) map.set(s.id, s);
-          return [...map.values()].sort((a, b) => a.startMs - b.startMs);
-        });
+        if (!sessionRef.current || msg.sessionId !== sessionRef.current) return;
+        setSegments((prev) => mergeSegments(prev, msg.segments));
       }
     };
     chrome.runtime.onMessage.addListener(onMessage);
@@ -221,7 +246,7 @@ export function LiveView() {
         <button
           type="button"
           class="st-btn st-btn--quiet"
-          disabled={highlightBusy || state !== 'recording' || !sessionId}
+          disabled={captureBusy || highlightBusy || state !== 'recording' || !sessionId}
           onClick={() => void addHighlight()}
         >
           {highlightBusy ? 'Adding…' : 'Highlight'}

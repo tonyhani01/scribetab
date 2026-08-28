@@ -57,6 +57,7 @@ import { persistHostStatus, syncSessionToHost } from '@/utils/nativeSync';
 import { isCapturableUrl, platformFromUrl, titleFromTab } from '@/utils/platform';
 import { checkQuota } from '@/utils/quota';
 import { getSegments, putSegments } from '@/utils/segmentStore';
+import { applyStoredSpeakerNames, renameStoredSpeaker } from '@/utils/speakerRename';
 import {
   bootExceptId,
   bootShouldIdle,
@@ -177,12 +178,14 @@ async function applyFusion(sessionId: string, force = false): Promise<void> {
   const segs = await getSegments(sessionId);
   if (segs.length === 0) return;
   const fused = fuseWithCaptions(segs, sessionId);
-  const changed = fused.filter((s, i) => s.speaker !== segs[i]?.speaker);
+  const session = await getSession(sessionId);
+  const named = applyStoredSpeakerNames(fused, session?.speakerNames);
+  const changed = named.filter((s, i) => s.speaker !== segs[i]?.speaker);
   if (changed.length === 0) return;
   const settings = await getSettings();
   const stored = settings.redactAtRest
-    ? redactSegments(fused, { extraTerms: settings.redactTerms })
-    : fused;
+    ? redactSegments(named, { extraTerms: settings.redactTerms })
+    : named;
   await putSegments(stored);
   notifySidePanel({
     target: 'sidepanel',
@@ -203,6 +206,8 @@ async function applyCaptionEvent(
 
   if (captionsOnly) {
     let segment: TranscriptSegment = captionCueToSegment(sessionId, cue, crypto.randomUUID());
+    const session = await getSession(sessionId);
+    segment = applyStoredSpeakerNames([segment], session?.speakerNames)[0]!;
     const settings = await getSettings();
     if (settings.redactAtRest) {
       segment = redactSegment(segment, { extraTerms: settings.redactTerms });
@@ -770,17 +775,10 @@ export default defineBackground(() => {
             sendResponse({ ok: false, error: 'Speaker name cannot be empty' });
             break;
           }
-          const names = { ...(session.speakerNames ?? {}) };
-          if (names[from] === to) {
-            sendResponse({ ok: true });
-            break;
-          }
-          names[from] = to;
           // Rewrite stored segments so search, exports, and the LLM see the new name.
           const segs = await getSegments(msg.sessionId);
-          const renamed = segs.map((s) =>
-            s.speaker === from ? { ...s, speaker: to } : s,
-          );
+          const renamedState = renameStoredSpeaker(segs, session.speakerNames, from, to);
+          const renamed = renamedState.segments;
           if (renamed.some((s, i) => s.speaker !== segs[i]?.speaker)) {
             await putSegments(renamed);
             notifySidePanel({
@@ -790,8 +788,9 @@ export default defineBackground(() => {
               segments: renamed,
             });
           }
-          // Caption cues keep the raw Meet label; renames apply at segment level.
-          await updateSession(msg.sessionId, { speakerNames: names });
+          // Caption cues keep the raw Meet label; new persisted segments receive
+          // the alias map before they are broadcast or indexed.
+          await updateSession(msg.sessionId, { speakerNames: renamedState.speakerNames });
           sendResponse({ ok: true });
           break;
         }

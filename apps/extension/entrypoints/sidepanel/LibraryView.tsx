@@ -19,6 +19,9 @@ import {
   summaryLiveText,
 } from '@/utils/summaryLive';
 import { createIncrementalSearchCache } from '@/utils/searchCache';
+import { loadOpenSessionData } from '@/utils/openSessionData';
+import { canApplySessionRead, type SessionReadToken } from '@/utils/sessionReadGuard';
+import { mergeSegments } from '@/utils/segmentMerge';
 import { snippetAround, type SearchDoc } from '@/utils/search';
 import { SegmentList } from './SegmentList';
 import { SummaryView } from './SummaryView';
@@ -64,6 +67,8 @@ export function LibraryView() {
   const [summaryLive, setSummaryLive] = useState(EMPTY_SUMMARY_LIVE);
   const [, setTick] = useState(0);
   const openIdRef = useRef<string | null>(null);
+  const openReadVersionRef = useRef(0);
+  const openHighlightVersionRef = useRef(0);
   openIdRef.current = openId;
 
   const reload = async () => {
@@ -74,12 +79,15 @@ export function LibraryView() {
     return docs;
   };
 
-  const refreshHighlights = async (id: string) => {
+  const refreshHighlights = async (id: string, version: number) => {
+    const token: SessionReadToken = { sessionId: id, version };
     try {
       const highlights = await getHighlightsForSession(id);
-      if (openIdRef.current === id) setOpenHighlights(highlights);
+      const current = openHighlightVersionRef.current;
+      if (canApplySessionRead(token, openIdRef.current, current)) setOpenHighlights(highlights);
     } catch (e) {
-      if (openIdRef.current === id) setActionError(humanError(e));
+      const current = openHighlightVersionRef.current;
+      if (canApplySessionRead(token, openIdRef.current, current)) setActionError(humanError(e));
     }
   };
 
@@ -116,22 +124,21 @@ export function LibraryView() {
         searchCache.applySegmentsAdded(msg.sessionId, msg.segments);
         setIndex(searchCache.createIndex());
         if (openIdRef.current !== msg.sessionId) return;
-        setOpenSegments((prev) => [...prev, ...msg.segments].sort((a, b) => a.startMs - b.startMs));
+        setOpenSegments((prev) => mergeSegments(prev, msg.segments));
         return;
       }
       if (msg.type === 'SEGMENTS_UPDATED') {
         searchCache.applySegmentsUpdated(msg.sessionId, msg.segments);
         setIndex(searchCache.createIndex());
         if (openIdRef.current !== msg.sessionId) return;
-        setOpenSegments((prev) => {
-          const map = new Map(prev.map((s) => [s.id, s]));
-          for (const s of msg.segments) map.set(s.id, s);
-          return [...map.values()].sort((a, b) => a.startMs - b.startMs);
-        });
+        setOpenSegments((prev) => mergeSegments(prev, msg.segments));
         return;
       }
       if (msg.type === 'HIGHLIGHT_ADDED') {
-        if (openIdRef.current === msg.sessionId) void refreshHighlights(msg.sessionId);
+        if (openIdRef.current === msg.sessionId) {
+          const version = ++openHighlightVersionRef.current;
+          void refreshHighlights(msg.sessionId, version);
+        }
         return;
       }
       void reload();
@@ -149,15 +156,25 @@ export function LibraryView() {
 
   const openSession = async (id: string) => {
     openIdRef.current = id;
+    const version = ++openReadVersionRef.current;
+    const highlightVersion = ++openHighlightVersionRef.current;
+    const token: SessionReadToken = { sessionId: id, version };
+    const highlightToken: SessionReadToken = { sessionId: id, version: highlightVersion };
     setOpenId(id);
     setOpenSegments([]);
     setOpenHighlights([]);
     setSummaryLive(EMPTY_SUMMARY_LIVE);
-    const [segments, highlights] = await Promise.all([getSegments(id), getHighlightsForSession(id)]);
-    if (openIdRef.current === id) {
-      setOpenSegments(segments);
-      setOpenHighlights(highlights);
+    const data = await loadOpenSessionData(id);
+    const currentRead = openReadVersionRef.current;
+    const currentHighlights = openHighlightVersionRef.current;
+    const canApplyTranscript = canApplySessionRead(token, openIdRef.current, currentRead);
+    const canApplyHighlights = canApplySessionRead(highlightToken, openIdRef.current, currentHighlights);
+    if (canApplyTranscript && !data.segmentsError) {
+      setOpenSegments((prev) => mergeSegments(data.segments, prev));
     }
+    if (canApplyHighlights && !data.highlightsError) setOpenHighlights(data.highlights);
+    if (canApplyTranscript && data.segmentsError) setActionError(humanError(data.segmentsError));
+    if (canApplyHighlights && data.highlightsError) setActionError(humanError(data.highlightsError));
   };
 
   const hits = query.trim() && index ? index.search(query.trim()) : [];
@@ -204,7 +221,13 @@ export function LibraryView() {
   };
 
   const refreshOpen = async (id: string) => {
-    const [row, segments] = await Promise.all([getSession(id), getSegments(id)]);
+    const version = ++openReadVersionRef.current;
+    const highlightVersion = ++openHighlightVersionRef.current;
+    const token: SessionReadToken = { sessionId: id, version };
+    const highlightToken: SessionReadToken = { sessionId: id, version: highlightVersion };
+    const [row, data] = await Promise.all([getSession(id), loadOpenSessionData(id)]);
+    const current = openReadVersionRef.current;
+    if (!canApplySessionRead(token, openIdRef.current, current)) return;
     if (row) {
       setSessions((prev) => {
         const i = prev.findIndex((s) => s.id === id);
@@ -214,10 +237,17 @@ export function LibraryView() {
         return next;
       });
     }
-    searchCache.applySegments(id, segments);
+    searchCache.applySegments(id, data.segments);
     setIndex(searchCache.createIndex());
-    if (openIdRef.current === id) setOpenSegments(segments);
-    await refreshHighlights(id);
+    if (!data.segmentsError) setOpenSegments((prev) => mergeSegments(data.segments, prev));
+    const currentHighlights = openHighlightVersionRef.current;
+    if (canApplySessionRead(highlightToken, openIdRef.current, currentHighlights) && !data.highlightsError) {
+      setOpenHighlights(data.highlights);
+    }
+    if (data.segmentsError) setActionError(humanError(data.segmentsError));
+    if (canApplySessionRead(highlightToken, openIdRef.current, currentHighlights) && data.highlightsError) {
+      setActionError(humanError(data.highlightsError));
+    }
   };
 
   const markOpenPending = () => {
@@ -292,6 +322,9 @@ export function LibraryView() {
     setActionError(null);
     try {
       await deleteSession(open.id);
+      openIdRef.current = null;
+      openReadVersionRef.current += 1;
+      openHighlightVersionRef.current += 1;
       setOpenId(null);
       setOpenHighlights([]);
       await reload();
@@ -389,7 +422,7 @@ export function LibraryView() {
     const contextualHighlights = highlightsWithContext(openHighlights, openSegments);
     return (
       <section>
-        <button class="st-chip" onClick={() => setOpenId(null)} style={{ marginBottom: 8 }}>← Library</button>
+        <button class="st-chip" onClick={() => { openIdRef.current = null; openReadVersionRef.current += 1; openHighlightVersionRef.current += 1; setOpenId(null); }} style={{ marginBottom: 8 }}>← Library</button>
         <div class="st-detail-title">
           <h1 style={{ fontSize: 15, margin: '0 0 4px' }}>{open.title}</h1>
           <button type="button" class="st-icon-btn" aria-label="Rename session" disabled={busy} onClick={() => void renameSession()}>✎</button>

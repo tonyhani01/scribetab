@@ -19,6 +19,16 @@ const session = (id: string, status: 'recording' | 'complete' | 'failed', title 
   platform: 'meet' as const,
 });
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('incremental search cache', () => {
   it('loads each session once, reloads recording sessions on completion, and drops deleted sessions', async () => {
     const rows = new Map<string, TranscriptSegment[]>([
@@ -63,5 +73,63 @@ describe('incremental search cache', () => {
     await cache.sync([session('s1', 'complete')]);
     await cache.sync([session('s1', 'complete'), session('s2', 'complete')]);
     expect(load.mock.calls.map(([id]) => id)).toEqual(['s1', 's2']);
+  });
+
+  it('merges pushed segments that arrive while a session load is in flight', async () => {
+    const pending = deferred<TranscriptSegment[]>();
+    const cache = createIncrementalSearchCache(vi.fn(() => pending.promise));
+    const syncing = cache.sync([session('s1', 'complete')]);
+    cache.applySegmentsAdded('s1', [segment('pushed', 's1', 'from live')]);
+    pending.resolve([segment('loaded', 's1', 'from storage')]);
+    await syncing;
+    expect(cache.docs().map((doc) => doc.id)).toEqual(['loaded', 'pushed']);
+  });
+
+  it('coalesces overlapping syncs and keeps the newest session metadata', async () => {
+    const pending = deferred<TranscriptSegment[]>();
+    const load = vi.fn(() => pending.promise);
+    const cache = createIncrementalSearchCache(load);
+    const first = cache.sync([session('s1', 'complete', 'old title')]);
+    const second = cache.sync([session('s1', 'complete', 'new title')]);
+    expect(load).toHaveBeenCalledTimes(1);
+    pending.resolve([segment('a', 's1', 'text')]);
+    await Promise.all([first, second]);
+    expect(cache.docs()[0]).toMatchObject({ sessionTitle: 'new title' });
+  });
+
+  it('does not let a stale load reintroduce a deleted session', async () => {
+    const pending = deferred<TranscriptSegment[]>();
+    const cache = createIncrementalSearchCache(vi.fn(() => pending.promise));
+    const syncing = cache.sync([session('s1', 'complete')]);
+    await cache.sync([]);
+    pending.resolve([segment('a', 's1', 'stale')]);
+    await syncing;
+    expect(cache.docs()).toEqual([]);
+  });
+
+  it('reloads after a pending recording load when the session becomes complete', async () => {
+    const first = deferred<TranscriptSegment[]>();
+    const second = deferred<TranscriptSegment[]>();
+    const load = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const cache = createIncrementalSearchCache(load);
+    const recording = cache.sync([session('s1', 'recording')]);
+    const complete = cache.sync([session('s1', 'complete')]);
+    expect(load).toHaveBeenCalledTimes(1);
+    first.resolve([segment('old', 's1', 'partial')]);
+    for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    expect(load).toHaveBeenCalledTimes(2);
+    second.resolve([segment('new', 's1', 'complete')]);
+    await Promise.all([recording, complete]);
+    expect(cache.docs().map((doc) => doc.id)).toEqual(['new']);
+  });
+
+  it('preserves pushed data that exists before an initial loader starts', async () => {
+    const pending = deferred<TranscriptSegment[]>();
+    const cache = createIncrementalSearchCache(vi.fn(() => pending.promise));
+    cache.applySegmentsAdded('s1', [segment('pushed', 's1', 'from live')]);
+    const syncing = cache.sync([session('s1', 'recording')]);
+    pending.resolve([]);
+    await syncing;
+    expect(cache.docs().map((doc) => doc.id)).toEqual(['pushed']);
   });
 });
