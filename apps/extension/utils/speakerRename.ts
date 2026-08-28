@@ -1,4 +1,4 @@
-import { applySpeakerNames, type TranscriptSegment } from '@scribetab/shared';
+import { applySpeakerNames, normalizeSpeakerNames, type TranscriptSegment } from '@scribetab/shared';
 
 export interface SpeakerRenameResult {
   segments: TranscriptSegment[];
@@ -20,7 +20,9 @@ export function renameStoredSpeaker(
     ? from
     : Object.entries(currentNames).find(([, display]) => display === from)?.[0] ?? from;
   const currentDisplay = currentNames[original] ?? original;
-  const nextNames = { ...currentNames, [original]: to };
+  // normalize drops identity renames, so undoing a rename clears the entry
+  // instead of persisting an inert { alias: alias } row.
+  const nextNames = normalizeSpeakerNames({ ...currentNames, [original]: to });
   return {
     speakerNames: nextNames,
     segments: segments.map((segment) =>

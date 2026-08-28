@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ExportActionsAck, TranscriptSegment } from '@scribetab/shared';
 import { distinctSpeakers, formatClock, formatUsd, highlightsWithContext, llmEndpoint, originPattern } from '@scribetab/shared';
 import type MiniSearch from 'minisearch';
@@ -206,11 +206,21 @@ export function LibraryView() {
     return () => window.clearInterval(t);
   }, [openId, generating]);
 
-  const highlightExtras = highlightsWithContext(openHighlights, openSegments).map(({ highlight, segment }) => ({
-    startMs: highlight.startMs,
-    ...(highlight.label ? { label: highlight.label } : {}),
-    ...(segment?.text ? { text: segment.text } : {}),
-  }));
+  // O(highlights x segments) with two sorts: compute once per data change, not
+  // once per render (a 1s interval re-renders this view while summaries stream).
+  const contextualHighlights = useMemo(
+    () => highlightsWithContext(openHighlights, openSegments),
+    [openHighlights, openSegments],
+  );
+  const highlightExtras = useMemo(
+    () =>
+      contextualHighlights.map(({ highlight, segment }) => ({
+        startMs: highlight.startMs,
+        ...(highlight.label ? { label: highlight.label } : {}),
+        ...(segment?.text ? { text: segment.text } : {}),
+      })),
+    [contextualHighlights],
+  );
 
   const exportOne = async (format: ExportFormat) => {
     if (!open) return;
@@ -424,7 +434,6 @@ export function LibraryView() {
 
   if (open) {
     const speakers = distinctSpeakers(openSegments);
-    const contextualHighlights = highlightsWithContext(openHighlights, openSegments);
     return (
       <section>
         <button class="st-chip" onClick={() => { openIdRef.current = null; openReadVersionRef.current += 1; openHighlightVersionRef.current += 1; setOpenId(null); }} style={{ marginBottom: 8 }}>← Library</button>

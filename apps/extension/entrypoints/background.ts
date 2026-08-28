@@ -393,8 +393,11 @@ function notifyMeetConsent(tabId: number | null | undefined, show: boolean): voi
  */
 export async function sweepRetainedAudio(): Promise<number> {
   const settings = await getSettings();
-  if (!settings.retainAudio) return 0; // chunks already deleted on finalize
-  const cutoff = retentionCutoffMs(Date.now(), settings.retentionDays);
+  // finalizeSession only drops chunks for the session it finalizes, so turning
+  // audio retention off must also clear the backlog kept while it was on.
+  const cutoff = settings.retainAudio
+    ? retentionCutoffMs(Date.now(), settings.retentionDays)
+    : Date.now();
   if (cutoff == null) return 0;
   const sessions = await listSessions();
   const withAudio = new Set<string>();
