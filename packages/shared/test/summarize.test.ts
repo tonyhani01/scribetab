@@ -5,10 +5,15 @@ import {
   SUMMARY_TRANSCRIPT_CHAR_LIMIT,
   actionItemLine,
   buildStructuredSummaryMessages,
+  buildReduceMessages,
   clipTranscript,
+  MAP_OVERLAP_MS,
+  mapWindows,
   parseStructuredSummary,
   parseSummary,
+  REDUCE_CHAR_LIMIT,
   summarizeMeeting,
+  summarizeMeetingLong,
   summaryToMarkdown,
   transcriptPlain,
 } from '../src/summarize';
@@ -182,6 +187,63 @@ describe('buildStructuredSummaryMessages', () => {
     const long = 'x'.repeat(30_000);
     const msgs = buildStructuredSummaryMessages(long);
     expect(msgs[1]!.content).toContain('[... transcript truncated for length ...]');
+  });
+});
+
+describe('map-reduce summaries', () => {
+  it('keeps a short meeting in one window', () => {
+    const windows = mapWindows([
+      { startMs: 0, endMs: 1_000, speaker: 'Ada', text: 'first' },
+      { startMs: 10_000, endMs: 11_000, speaker: 'Bo', text: 'second' },
+    ]);
+    expect(windows).toHaveLength(1);
+    expect(windows[0]?.transcript).toContain('Ada: first');
+  });
+
+  it('splits long meetings with the configured overlap', () => {
+    const windows = mapWindows([
+      { startMs: 0, endMs: 20 * 60 * 1000, speaker: 'Ada', text: 'boundary' },
+      { startMs: 20 * 60 * 1000, endMs: 20 * 60 * 1000 + 1_000, speaker: 'Bo', text: 'next' },
+      { startMs: 40 * 60 * 1000, endMs: 40 * 60 * 1000 + 1_000, speaker: 'Cy', text: 'later' },
+    ]);
+    expect(windows.length).toBeGreaterThan(1);
+    expect(windows[0]?.toMs).toBe(20 * 60 * 1000 + MAP_OVERLAP_MS);
+    expect(windows[1]?.fromMs).toBe(20 * 60 * 1000);
+    expect(windows[0]?.transcript).toContain('boundary');
+    expect(windows[1]?.transcript).toContain('next');
+  });
+
+  it('keeps every window in the reduce prompt within the exact character budget', () => {
+    const summaries = ['WINDOW-ONE-', 'WINDOW-TWO-', 'WINDOW-THREE-'].map(
+      (prefix) => prefix + 'x'.repeat(REDUCE_CHAR_LIMIT),
+    );
+    const user = buildReduceMessages(summaries)[1]?.content ?? '';
+    const start = user.indexOf('<window_summaries>') + '<window_summaries>\n'.length;
+    const end = user.indexOf('\n</window_summaries>');
+    const body = user.slice(start, end);
+    expect(body.length).toBeLessThanOrEqual(REDUCE_CHAR_LIMIT);
+    expect(body).toContain('WINDOW-ONE-');
+    expect(body).toContain('WINDOW-TWO-');
+    expect(body).toContain('WINDOW-THREE-');
+  });
+
+  it('uses one call for short meetings and map calls plus one reduce for long meetings', async () => {
+    const calls: ChatMessage[][] = [];
+    const reply = JSON.stringify({ narrative: 'ok', actionItems: [], decisions: [], usefulInfo: [] });
+    const short = await summarizeMeetingLong(async (m) => { calls.push(m); return reply; }, [
+      { startMs: 0, endMs: 1_000, speaker: 'A', text: 'short' },
+    ], { generatedAt: 'T' });
+    expect(short?.narrative).toBe('ok');
+    expect(calls).toHaveLength(1);
+
+    calls.length = 0;
+    const long = await summarizeMeetingLong(async (m) => { calls.push(m); return reply; }, [
+      { startMs: 0, endMs: 20 * 60 * 1000, speaker: 'A', text: 'first' },
+      { startMs: 20 * 60 * 1000, endMs: 40 * 60 * 1000, speaker: 'B', text: 'second' },
+    ], { generatedAt: 'T' });
+    expect(long?.narrative).toBe('ok');
+    expect(calls).toHaveLength(3);
+    expect(calls.at(-1)?.[1]?.content).toContain('<window_summaries>');
   });
 });
 

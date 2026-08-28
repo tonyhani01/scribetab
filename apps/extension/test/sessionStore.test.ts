@@ -3,6 +3,7 @@ import type { MeetingSession, TranscriptSegment } from '@scribetab/shared';
 import { putChunk, getChunksForSession, sessionHasChunks } from '../utils/chunkStore';
 import { closeDb } from '../utils/db';
 import { getSegments, putSegments } from '../utils/segmentStore';
+import { getHighlightsForSession, putHighlight } from '../utils/highlightStore';
 import {
   createSession,
   deleteSession,
@@ -125,10 +126,14 @@ describe('sessionStore', () => {
       createdAt: 1,
     });
     await putSegments([segment(), segment({ id: 'seg2', sessionId: 's2' })]);
+    await putHighlight({ id: 'hl1', sessionId: 's1', startMs: 100, createdAt: '2026-08-27T10:00:01Z' });
+    await putHighlight({ id: 'hl2', sessionId: 's2', startMs: 200, createdAt: '2026-08-28T00:00:01Z' });
     await deleteSession('s1');
     expect(await getSession('s1')).toBeUndefined();
     expect(await sessionHasChunks('s1')).toBe(false);
     expect(await getSegments('s1')).toEqual([]);
+    expect(await getHighlightsForSession('s1')).toEqual([]);
+    expect((await getHighlightsForSession('s2')).map((h) => h.id)).toEqual(['hl2']);
     expect((await getSession('s2'))?.id).toBe('s2');
     expect((await getSegments('s2')).map((s) => s.id)).toEqual(['seg2']);
   });

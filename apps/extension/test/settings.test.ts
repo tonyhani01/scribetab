@@ -11,6 +11,13 @@ import {
 } from '../utils/settings';
 
 describe('normalizeSettings', () => {
+  it('preserves valid retention choices and normalizes invalid stored values', () => {
+    expect(normalizeSettings({ retentionDays: 7 }).retentionDays).toBe(7);
+    expect(normalizeSettings({ retentionDays: 30 }).retentionDays).toBe(30);
+    expect(normalizeSettings({ retentionDays: 'forever' }).retentionDays).toBe('forever');
+    expect(normalizeSettings({ retentionDays: 14 as unknown as 7 }).retentionDays).toBe('forever');
+    expect(normalizeSettings({ retentionDays: 'bad' as unknown as 'forever' }).retentionDays).toBe('forever');
+  });
   it('defaults summaryPrompt to empty and preserves stored values', () => {
     expect(normalizeSettings(undefined).summaryPrompt).toBe('');
     expect(normalizeSettings({ summaryPrompt: 'Budget focus.' } as Partial<Settings>).summaryPrompt).toBe('Budget focus.');

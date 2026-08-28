@@ -245,3 +245,140 @@ export async function summarizeMeeting(
     newId: opts.newId,
   });
 }
+
+// ---------------------------------------------------------------------------
+// Map-reduce path for long meetings.
+// ---------------------------------------------------------------------------
+
+/** Map windows overlap by this much so sentences spanning a boundary stay in one window. */
+export const MAP_OVERLAP_MS = 15_000;
+/** Reduce pass receives at most this many chars of window summaries. */
+export const REDUCE_CHAR_LIMIT = 24_000;
+
+const REDUCE_JSON_CONTRACT =
+  'You analyze meeting summaries. Reply with only a JSON object — no prose, no code fences — matching exactly: ' +
+  '{"narrative": string (markdown paragraphs), ' +
+  '"actionItems": [{"text": string, "owner"?: string, "due"?: string}], ' +
+  '"decisions": string[], "usefulInfo": string[]}. ' +
+  'Merge duplicates across the window summaries. Use empty arrays when a category has nothing. ' +
+  'Never invent owners or dates. ' +
+  DATA_FRAMING;
+
+export interface MapWindow {
+  fromMs: number;
+  toMs: number;
+  transcript: string;
+}
+
+/** Split segments into ~windowMs map windows with a small overlap. Pure. */
+export function mapWindows(
+  segments: readonly Pick<TranscriptSegment, 'startMs' | 'endMs' | 'speaker' | 'text'>[],
+  windowMs = SUMMARY_WINDOW_MS,
+  overlapMs = MAP_OVERLAP_MS,
+): MapWindow[] {
+  const segs = [...segments].sort((a, b) => a.startMs - b.startMs);
+  if (segs.length === 0) return [];
+  const first = segs[0]!.startMs;
+  const last = Math.max(first, segs[segs.length - 1]!.endMs);
+  if (last - first <= windowMs) {
+    return [{ fromMs: first, toMs: last, transcript: transcriptPlain(segs) }];
+  }
+  const out: MapWindow[] = [];
+  for (let from = first; from < last; from += windowMs) {
+    const to = Math.min(last, from + windowMs + overlapMs);
+    const inWindow = segs.filter((s) => s.startMs < to && s.endMs > from);
+    if (inWindow.length === 0) continue;
+    out.push({ fromMs: from, toMs: to, transcript: transcriptPlain(inWindow) });
+  }
+  return out.length > 0 ? out : [{ fromMs: first, toMs: last, transcript: transcriptPlain(segs) }];
+}
+
+/** Size of each map window for long meetings (20 minutes). */
+export const SUMMARY_WINDOW_MS = 20 * 60 * 1000;
+
+function formatWindowStamp(ms: number): string {
+  const total = Math.round(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/** Build the map-pass messages for one window (same contract as the single pass). */
+export function buildMapMessages(window: MapWindow, guidance?: string): ChatMessage[] {
+  const g = guidance?.trim() || DEFAULT_SUMMARY_GUIDANCE;
+  const stamp = `[${formatWindowStamp(window.fromMs)}–${formatWindowStamp(window.toMs)}]`;
+  return [
+    { role: 'system', content: JSON_CONTRACT },
+    {
+      role: 'user',
+      content: `${g}\n\nThis is part ${stamp} of a longer meeting transcript.\n\n${wrapTranscript(window.transcript)}`,
+    },
+  ];
+}
+
+/**
+ * Reduce: merge per-window summaries (JSON objects) into one. Falls back to
+ * the degraded single-pass parser when extraction fails, preserving narrative text.
+ */
+export function buildReduceMessages(windowSummaries: string[], guidance?: string): ChatMessage[] {
+  const g = guidance?.trim() || DEFAULT_SUMMARY_GUIDANCE;
+  // Keep every window represented, while accounting for separators and the
+  // ellipsis itself in the hard budget. A proportional first pass would still
+  // exceed the limit when many windows are truncated, so allocate a character
+  // budget to each window before rendering them.
+  const separator = '\n\n';
+  const separatorBudget = Math.max(0, (windowSummaries.length - 1) * separator.length);
+  const contentBudget = Math.max(0, REDUCE_CHAR_LIMIT - separatorBudget);
+  const allocations = windowSummaries.map((w) => Math.min(w.length, 1));
+  let remaining = Math.max(0, contentBudget - allocations.reduce((a, b) => a + b, 0));
+  while (remaining > 0) {
+    let changed = false;
+    for (let i = 0; i < windowSummaries.length && remaining > 0; i++) {
+      const room = windowSummaries[i]!.length - allocations[i]!;
+      if (room <= 0) continue;
+      allocations[i]!++;
+      remaining--;
+      changed = true;
+    }
+    if (!changed) break;
+  }
+  const body = windowSummaries
+    .map((w, i) => {
+      const budget = allocations[i]!;
+      if (w.length <= budget) return w;
+      if (budget <= 1) return '…';
+      return `${w.slice(0, budget - 1)}…`;
+    })
+    .join(separator);
+  return [
+    { role: 'system', content: REDUCE_JSON_CONTRACT },
+    {
+      role: 'user',
+      content: `${g}\n\nThese are summaries of consecutive parts of one meeting. Merge them into a single summary of the whole meeting.\n\n<window_summaries>\n${body}\n</window_summaries>`,
+    },
+  ];
+}
+
+/**
+ * Long-meeting path: map per ~20-min window, then reduce. Each window uses
+ * the same JSON contract, so the reduce input is structured text; a window
+ * that fails to parse is passed through as raw text (the reduce prompt accepts both).
+ */
+export async function summarizeMeetingLong(
+  complete: (messages: ChatMessage[]) => Promise<string>,
+  segments: Pick<TranscriptSegment, 'startMs' | 'endMs' | 'speaker' | 'text'>[],
+  opts: { guidance?: string; model?: string; generatedAt?: string; newId?: () => string } = {},
+): Promise<SessionSummary | undefined> {
+  const windows = mapWindows(segments);
+  if (windows.length <= 1) return summarizeMeeting(complete, segments, opts);
+  const raws: string[] = [];
+  for (const w of windows) {
+    raws.push(await complete(buildMapMessages(w, opts.guidance)));
+  }
+  const raw = await complete(buildReduceMessages(raws, opts.guidance));
+  return parseStructuredSummary(raw, {
+    generatedAt: opts.generatedAt ?? new Date().toISOString(),
+    model: opts.model,
+    newId: opts.newId,
+  });
+}

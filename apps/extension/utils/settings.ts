@@ -1,5 +1,5 @@
-import type { LlmProviderId, TranscriptionProviderId } from '@scribetab/shared';
-import { isLlmProviderId, isTranscriptionProviderId } from '@scribetab/shared';
+import type { LlmProviderId, RetentionDays, TranscriptionProviderId } from '@scribetab/shared';
+import { isLlmProviderId, isRetentionDays, isTranscriptionProviderId } from '@scribetab/shared';
 
 export interface Settings {
   providerId: '' | TranscriptionProviderId;
@@ -23,6 +23,8 @@ export interface Settings {
   captionsOnly: boolean; // Meet captions → TranscriptSegment, zero STT provider calls
   consentReminder: boolean; // banner when a recording starts; default on
   summaryPrompt: string; // '' = use default guidance
+  /** Audio retention: auto-delete chunks this many days after the meeting ends. */
+  retentionDays: RetentionDays;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -47,6 +49,7 @@ export const DEFAULT_SETTINGS: Settings = {
   captionsOnly: false,
   consentReminder: true,
   summaryPrompt: '',
+  retentionDays: 'forever',
 };
 
 const KEY = 'settings';
@@ -107,6 +110,7 @@ export function normalizeSettings(raw: Partial<Settings> | undefined): Settings 
   };
   if (!Array.isArray(merged.redactTerms)) merged.redactTerms = [];
   if (typeof merged.summaryPrompt !== 'string') merged.summaryPrompt = '';
+  if (!isRetentionDays(merged.retentionDays)) merged.retentionDays = 'forever';
   return merged;
 }
 

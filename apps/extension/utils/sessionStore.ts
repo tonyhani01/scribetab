@@ -3,6 +3,7 @@ import { deleteCuesForSession } from './captionCueStore';
 import { deleteChunksForSession } from './chunkStore';
 import { SESSIONS_STORE as STORE, openDb } from './db';
 import { deleteSegmentsForSession } from './segmentStore';
+import { deleteHighlightsForSession } from './highlightStore';
 
 export type IntelligenceState = 'pending' | 'needs-permission';
 
@@ -22,6 +23,10 @@ export type StoredSession = MeetingSession & {
   intelligenceStartedAt?: number;
   audioStartedAtMs?: number;
   captionsOnly?: boolean;
+  /** Number of failed summary attempts, persisted for durable backoff. */
+  intelligenceRetryCount?: number | null;
+  /** Earliest wall-clock time at which the next summary attempt may run. */
+  intelligenceNextRetryAt?: number | null;
 };
 
 function txDone(tx: IDBTransaction): Promise<void> {
@@ -114,6 +119,7 @@ export async function finalizeSession(
 export async function deleteSession(id: string): Promise<void> {
   await deleteChunksForSession(id);
   await deleteSegmentsForSession(id);
+  await deleteHighlightsForSession(id);
   await deleteCuesForSession(id);
   const db = await openDb();
   const tx = db.transaction(STORE, 'readwrite');

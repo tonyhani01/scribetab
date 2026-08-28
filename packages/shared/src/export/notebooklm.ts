@@ -32,6 +32,16 @@ export function exportNotebookLm(
     }
   }
 
+  if (extras?.highlights?.length) {
+    lines.push('', '## Highlights', '');
+    for (const hl of [...extras.highlights].sort((a, b) => a.startMs - b.startMs)) {
+      const label = hl.label?.trim();
+      const text = hl.text?.trim();
+      const desc = label || text || '';
+      lines.push(`[${formatClock(hl.startMs)}]${desc ? ` ${desc}` : ''}`);
+    }
+  }
+
   lines.push('', '## Transcript', '');
   for (const seg of orderedSegments(segments)) {
     const stamp = formatClock(seg.startMs);

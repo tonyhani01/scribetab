@@ -73,6 +73,19 @@ describe('exportMarkdown', () => {
     expect(md).toContain('Ship it.');
     expect(md.indexOf('## Summary')).toBeLessThan(md.indexOf('## Transcript'));
   });
+
+  it('renders highlights in timestamp order and prefers labels over context', () => {
+    const md = exportMarkdown(session, segments, {
+      highlights: [
+        { startMs: 61_000, label: 'Decide rollout', text: 'Second line' },
+        { startMs: 2_000, text: 'Hello team' },
+      ],
+    });
+    expect(md.indexOf('Decide rollout')).toBeGreaterThan(md.indexOf('Hello team'));
+    expect(md).toContain('- **[00:00:02]** Hello team');
+    expect(md).toContain('- **[00:01:01]** Decide rollout');
+    expect(md).not.toContain('Decide rollout Second line');
+  });
 });
 
 describe('exportJson', () => {
@@ -276,5 +289,16 @@ describe('exportNotebookLm', () => {
     });
     expect(md.match(/## Summary/g)).toEqual(['## Summary']);
     expect(md).toContain('Already headed.');
+  });
+
+  it('renders ordered highlights and prefers labels over context', () => {
+    const md = exportNotebookLm(session, segments, {
+      highlights: [
+        { startMs: 61_000, label: 'Decide rollout', text: 'Second line' },
+        { startMs: 2_000, text: 'Hello team' },
+      ],
+    });
+    expect(md.indexOf('[00:00:02] Hello team')).toBeLessThan(md.indexOf('[00:01:01] Decide rollout'));
+    expect(md).not.toContain('Decide rollout Second line');
   });
 });
