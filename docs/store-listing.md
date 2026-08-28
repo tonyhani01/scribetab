@@ -1,6 +1,6 @@
 # Chrome Web Store listing (draft)
 
-Version: 1.0.0. Do not treat this file as legal advice.
+Version: 1.1.0. Do not treat this file as legal advice.
 
 ## Short description (132 chars max — draft)
 
@@ -12,9 +12,9 @@ ScribeTab records the active browser tab (Google Meet, Teams web, Zoom web, YouT
 
 You bring your own transcription and (optional) LLM provider. API keys stay in this browser profile. Audio and transcripts are not sent to ScribeTab — there are no ScribeTab servers. Cloud STT/LLM calls go only to the origin you configure and grant. A localhost OpenAI-compatible server (whisper.cpp, Speaches, LM Studio, Ollama) never leaves the machine.
 
-Optional native host (`node apps/native-host/dist/host.bin.js install`; `npx scribetab-host install` once published) writes meetings to `~/ScribeTab/meetings/` and can copy Markdown into Obsidian or create a Notion page. MCP tools let an agent read those files.
+Optional native host (npm package planned) — install from a clone with `node apps/native-host/dist/host.bin.js install`. It writes meetings to `~/ScribeTab/meetings/` and can copy Markdown into Obsidian or create a Notion page. MCP tools let an agent read those files.
 
-Hotkeys (rebind at chrome://extensions/shortcuts): Alt+Shift+R start, Alt+Shift+S stop, Alt+Shift+T side panel. A `REC?` badge appears on known meeting tabs.
+Hotkeys (rebind at chrome://extensions/shortcuts): Alt+Shift+R start, Alt+Shift+S stop, Alt+Shift+T side panel, and Alt+Shift+H to add a highlight moment. The `add-highlight` command is available to automation and needs no new permission. A `REC?` badge appears on known meeting tabs.
 
 Source: GPL-3.0-only.
 
@@ -25,7 +25,7 @@ Source: GPL-3.0-only.
 - **API keys** live in `chrome.storage.local` and are sent only as `Authorization` or `x-goog-api-key` headers to that endpoint (or the LLM endpoint). Never as a query parameter.
 - **Transcripts and summaries** stay in IndexedDB unless the user exports them, syncs to the optional native host, or enables Notion (token stored only in the host config file, sent only to `api.notion.com`).
 - **Redaction** is text-only. Raw audio sent to STT cannot be pre-redacted.
-- **Consent.** A reminder banner (default on) asks the user to get participant consent before recording. Recording other people without consent may be illegal in your jurisdiction.
+- **Consent.** A reminder banner in the Meet tab (default on) asks the user to get participant consent before recording. Recording other people without consent may be illegal in your jurisdiction.
 
 ## Permission justifications
 
@@ -38,10 +38,10 @@ Source: GPL-3.0-only.
 | `activeTab` | Act on the tab the user invoked the extension on. |
 | `sidePanel` | Live transcript + library UI. |
 | `nativeMessaging` | Optional sync to `com.scribetab.host`. Unused if the host is not installed. |
-| `tabs` | Observe tab URLs (and titles) for badge detection: `REC?` on Meet/Teams/Zoom, `REC` on the captured tab, and to hide capture on `chrome://` pages. Least privilege vs site host permissions (those would allow injecting into meeting sites). The Meet content script already matches `https://meet.google.com/*` only. |
+| `tabs` | Observe tab URLs (and titles) for badge detection: `REC?` on Meet/Teams/Zoom, `REC` on the captured tab, and to hide capture on `chrome://` pages. Least privilege vs site host permissions (those would allow injecting into meeting sites). The Meet content script already matches `https://meet.google.com/*` only and displays the in-tab consent banner. |
 | `optional_host_permissions` (`http://*/*`, `https://*/*`) | Granted per origin from options (Save / Test connection) for the STT or LLM endpoint the user typed — cloud or localhost. Never granted for all sites up front. |
 
-Commands (`chrome.commands`) need no extra permission.
+Commands (`chrome.commands`) need no extra permission; `add-highlight` marks a moment in the active recording.
 
 ## Single-purpose
 

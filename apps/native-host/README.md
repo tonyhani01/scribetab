@@ -17,7 +17,7 @@ node apps/native-host/dist/host.bin.js install --extension-id <id>
 node apps/native-host/dist/host.bin.js uninstall
 ```
 
-Once the package is published, the same commands work via `npx scribetab-host …`.
+`npm publish` is planned; until then, install from this clone.
 
 Development extension ID (packed `key` in `apps/extension/wxt.config.ts`):
 
@@ -31,7 +31,7 @@ Manifest locations (per-user):
 | --- | --- |
 | macOS | `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.scribetab.host.json` |
 | Linux | `~/.config/google-chrome/NativeMessagingHosts/com.scribetab.host.json` |
-| Windows | `%USERPROFILE%\ScribeTab\NativeMessagingHosts\com.scribetab.host.json` + `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.scribetab.host` |
+| Windows | `%APPDATA%\ScribeTab\host\NativeMessagingHosts\com.scribetab.host.json` + `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.scribetab.host` |
 
 ## Layout
 

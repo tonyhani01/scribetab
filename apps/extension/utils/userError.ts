@@ -17,7 +17,7 @@ const RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/Failed to fetch|NetworkError|Load failed|network error/i, 'Network error — check the URL, your connection, and host permission.'],
   [
     /Specified native messaging host|host not installed|not found|native messaging host/i,
-    'Native host is not installed. Run node apps/native-host/dist/host.bin.js install (or npx scribetab-host install once published).',
+    'Native host is not installed. Run node apps/native-host/dist/host.bin.js install (npm package planned).',
   ],
   [
     /forbidden/i,
