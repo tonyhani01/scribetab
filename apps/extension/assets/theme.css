@@ -280,6 +280,15 @@ input[type='checkbox'] {
   text-align: center;
 }
 
+.st-elapsed {
+  color: var(--st-ink);
+  font-size: 24px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
 /* Segmented control */
 .st-seg {
   display: flex;

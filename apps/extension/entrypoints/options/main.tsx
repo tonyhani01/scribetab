@@ -3,11 +3,13 @@ import { useEffect, useState } from 'preact/hooks';
 import {
   DEFAULT_SUMMARY_GUIDANCE,
   LLM_PROVIDER_IDS,
+  RETENTION_CHOICES,
   TRANSCRIPTION_PROVIDER_IDS,
   isLlmProviderId,
   isTranscriptionProviderId,
   llmEndpoint,
   originPattern,
+  retentionLabel,
   transcriptionEndpoint,
 } from '@scribetab/shared';
 import {
@@ -30,6 +32,7 @@ import { humanError } from '@/utils/userError';
 import { listSessions } from '@/utils/sessionStore';
 import { monthlySpend, type MonthlySpend } from '@/utils/costMeter';
 import { formatUsd } from '@scribetab/shared';
+import { wipeAllData } from '@/utils/wipe';
 import '@/assets/theme.css';
 
 const MODEL_PLACEHOLDERS: Record<string, string> = {
@@ -66,6 +69,7 @@ function App() {
   const [llmProbe, setLlmProbe] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [probing, setProbing] = useState<'stt' | 'llm' | null>(null);
   const [spend, setSpend] = useState<MonthlySpend | null>(null);
+  const [wiping, setWiping] = useState(false);
 
   useEffect(() => {
     void getSettings().then(setS);
@@ -181,6 +185,28 @@ function App() {
     }
   };
 
+  const wipe = async () => {
+    if (!confirm('Deletes all API keys, settings, and stored recordings in this browser profile. This cannot be undone.')) return;
+    setWiping(true);
+    setStatus(null);
+    try {
+      await wipeAllData();
+      setS({
+        ...DEFAULT_SETTINGS,
+        apiKeys: {},
+        models: {},
+        llmApiKeys: {},
+        llmModels: {},
+        redactTerms: [],
+      });
+      setStatus({ kind: 'ok', text: 'All data wiped.' });
+    } catch (e) {
+      setStatus({ kind: 'err', text: humanError(e) });
+    } finally {
+      setWiping(false);
+    }
+  };
+
   return (
     <main data-testid="options-root" style={{ maxWidth: 600, margin: '24px auto', padding: 16 }}>
       <div class="st-brand" style={{ marginBottom: 4 }}>
@@ -232,6 +258,21 @@ function App() {
           />{' '}
           Show a consent reminder when recording starts
         </label>
+        <label style={row} for="retentionDays">Audio retention</label>
+        <select
+          id="retentionDays"
+          data-testid="retention-days"
+          class="st-select"
+          value={String(s.retentionDays)}
+          onChange={(e) => {
+            const value = (e.currentTarget as HTMLSelectElement).value;
+            set('retentionDays', value === 'forever' ? 'forever' : Number(value) as 7 | 30);
+          }}
+        >
+          {RETENTION_CHOICES.map((choice) => (
+            <option value={String(choice)}>{retentionLabel(choice)}</option>
+          ))}
+        </select>
       </section>
 
       <section class="st-section">
@@ -511,7 +552,16 @@ scribetab-host config set notion.parentPageId PAGE_ID`}</pre>
       </section>
 
       <div style={{ marginTop: 16 }}>
-        <button class="st-btn" data-testid="save-settings" onClick={() => void save()}>Save changes</button>
+        <button class="st-btn" data-testid="save-settings" disabled={wiping} onClick={() => void save()}>Save changes</button>{' '}
+        <button
+          type="button"
+          class="st-chip st-chip--danger"
+          data-testid="wipe-data"
+          disabled={wiping}
+          onClick={() => void wipe()}
+        >
+          {wiping ? 'Wiping…' : 'Wipe all data'}
+        </button>
       </div>
       {status && (
         <p data-testid="save-status" style={{ color: status.kind === 'ok' ? 'var(--st-success)' : 'var(--st-danger)', fontSize: 13 }}>
