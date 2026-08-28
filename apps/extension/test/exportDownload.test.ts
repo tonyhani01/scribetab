@@ -21,6 +21,21 @@ describe('extrasFromSession', () => {
     ).toEqual({ summaryMarkdown: '## Summary', costUsd: 0.01 });
     expect(extrasFromSession({ ...session, costUsd: null })).toEqual({ costUsd: null });
   });
+
+  it('copies structured summary when present', () => {
+    const summary = {
+      version: 1 as const,
+      narrative: 'Hi',
+      actionItems: [],
+      decisions: [],
+      usefulInfo: [],
+      generatedAt: '2026-08-28T00:00:00.000Z',
+    };
+    expect(extrasFromSession({ ...session, summaryMarkdown: '## Summary', summary })).toEqual({
+      summaryMarkdown: '## Summary',
+      summary,
+    });
+  });
 });
 
 describe('export filenames', () => {

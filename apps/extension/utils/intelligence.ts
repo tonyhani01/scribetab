@@ -9,9 +9,11 @@ import {
   redactSegments,
   sttCostUsd,
   summarizeMeeting,
+  summaryToMarkdown,
   type ChatMessage,
   type LlmProvider,
   type ProviderConfig,
+  type SessionSummary,
 } from '@scribetab/shared';
 import type { ToSidePanel } from './messages';
 import { getSegments, putSegments } from './segmentStore';
@@ -79,8 +81,8 @@ export async function retryPendingIntelligence(): Promise<void> {
 }
 
 /**
- * After a successful complete-finalize: optional at-rest redaction, LLM
- * summary + action items, and a session cost total (transcribed STT minutes
+ * After a successful complete-finalize: optional at-rest redaction, one
+ * structured LLM summary, and a session cost total (transcribed STT minutes
  * + LLM tokens). Failures here must not fail capture finalize.
  */
 export async function runFinalizeIntelligence(sessionId: string, settings: Settings): Promise<void> {
@@ -101,7 +103,7 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
   const stt = existing?.providerCostUsd ?? tableStt;
 
   let costUsd: number | undefined = stt;
-  let summaryMarkdown: string | undefined;
+  let summary: SessionSummary | undefined;
   let intelligence: 'pending' | 'needs-permission' | null = null;
   let intelligenceError: string | null = null;
 
@@ -120,12 +122,9 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
       };
       const runId = crypto.randomUUID();
       const emitDelta = createDeltaEmitter(sessionId, runId);
-      let llmCalls = 0;
       const complete = async (messages: ChatMessage[]) => {
-        const phase: 'summary' | 'actions' = llmCalls === 0 ? 'summary' : 'actions';
-        llmCalls += 1;
         const out = await completePreferringStream(provider, messages, cfg, (text) => {
-          emitDelta(phase, text);
+          emitDelta('summary', text);
         });
         const prompt = messages.map((m) => m.content).join('\n');
         const added = llmCostUsd(
@@ -138,11 +137,13 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
         return out;
       };
       try {
-        const md = await summarizeMeeting(complete, forLlm);
-        if (md) summaryMarkdown = md;
+        summary = await summarizeMeeting(complete, forLlm, {
+          guidance: settings.summaryPrompt,
+          model: settings.llmModel.trim() || undefined,
+        });
         intelligence = null;
       } catch (e) {
-        // Keep accumulated cost (including a successful first call). Retry later.
+        // Keep accumulated cost. Retry later.
         intelligence = 'pending';
         intelligenceError = humanError(e);
       }
@@ -153,7 +154,7 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
     costUsd: costUsd === undefined ? existing?.costUsd ?? null : costUsd,
     intelligence,
     intelligenceError,
-    ...(summaryMarkdown ? { summaryMarkdown } : {}),
+    ...(summary ? { summary, summaryMarkdown: summaryToMarkdown(summary) } : {}),
   });
 }
 

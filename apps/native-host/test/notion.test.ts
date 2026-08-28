@@ -1,17 +1,21 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { MeetingSession, TranscriptSegment } from '@scribetab/shared';
+import type { ActionItem, MeetingSession, TranscriptSegment } from '@scribetab/shared';
 import {
   MAX_429_RETRIES,
   NOTION_API,
   NOTION_BATCH_MAX_BYTES,
   NOTION_CHILDREN_MAX,
   NOTION_RICH_TEXT_MAX,
+  actionItemBlocks,
+  appendActionItems,
   batchBlocks,
   buildNotionBlocks,
   chunkRichText,
   createNotionPage,
+  loadNotionActionMap,
   loadNotionPageMap,
+  saveNotionActionMap,
 } from '../src/notion.js';
 import { withHome } from './helpers.js';
 
@@ -293,5 +297,234 @@ describe('createNotionPage', () => {
     await expect(
       createNotionPage({ token: 't', parentPageId: '  ', session, segments: [] }),
     ).rejects.toThrow(/parentPageId/);
+  });
+});
+
+const items: ActionItem[] = [
+  { id: 'a1', text: 'Send deck', owner: 'Sam', due: 'Fri' },
+  { id: 'a2', text: 'Book the room' },
+];
+
+describe('actionItemBlocks', () => {
+  it('maps items to unchecked to_do blocks with composed lines', () => {
+    const blocks = actionItemBlocks([{ id: 'a', text: 'Send deck', owner: 'Sam', due: 'Fri' }]);
+    expect(blocks[0]).toMatchObject({
+      type: 'to_do',
+      to_do: { checked: false, rich_text: [{ text: { content: 'Sam — Send deck (Fri)' } }] },
+    });
+  });
+  it('chunks >2000-char items across rich_text parts in one block', () => {
+    const blocks = actionItemBlocks([{ id: 'a', text: 'x'.repeat(4100) }]);
+    expect(blocks).toHaveLength(1);
+    expect((blocks[0] as { to_do: { rich_text: unknown[] } }).to_do.rich_text.length).toBe(3);
+  });
+});
+
+describe('appendActionItems', () => {
+  it('appends heading once, marks items exported, and is idempotent', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      const calls: { url: string; method: string; body: string }[] = [];
+      const fetchImpl: typeof fetch = async (input, init) => {
+        calls.push({ url: String(input), method: String(init?.method), body: String(init?.body ?? '') });
+        return new Response('{}', { status: 200 });
+      };
+      const first = await appendActionItems({
+        token: 'ntn_secret',
+        pageId: 'PAGE',
+        sessionId: session.id,
+        items,
+        fetchImpl,
+        env,
+        platform: 'linux',
+        now: () => '2026-08-28T00:00:00.000Z',
+      });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.method).toBe('PATCH');
+      expect(calls[0]?.url).toBe(`${NOTION_API}/blocks/PAGE/children`);
+      const children = (JSON.parse(calls[0]!.body) as { children: Array<{ type: string; heading_2?: { rich_text: Array<{ text: { content: string } }> }; to_do?: { rich_text: Array<{ text: { content: string } }> } }> }).children;
+      expect(children[0]?.type).toBe('heading_2');
+      expect(children[0]?.heading_2?.rich_text[0]?.text.content).toBe('Action items');
+      expect(children.map((c) => c.type)).toEqual(['heading_2', 'to_do', 'to_do']);
+      expect(children[1]?.to_do?.rich_text[0]?.text.content).toBe('Sam — Send deck (Fri)');
+      expect(children[2]?.to_do?.rich_text[0]?.text.content).toBe('Book the room');
+      expect(first.results).toEqual([
+        { id: 'a1', ok: true },
+        { id: 'a2', ok: true },
+      ]);
+      const map = await loadNotionActionMap(env, 'linux');
+      expect(map[session.id]).toEqual({
+        pageId: 'PAGE',
+        headingAdded: true,
+        items: {
+          a1: { ok: true, at: '2026-08-28T00:00:00.000Z' },
+          a2: { ok: true, at: '2026-08-28T00:00:00.000Z' },
+        },
+      });
+
+      calls.length = 0;
+      const second = await appendActionItems({
+        token: 'ntn_secret',
+        pageId: 'PAGE',
+        sessionId: session.id,
+        items,
+        fetchImpl,
+        env,
+        platform: 'linux',
+      });
+      expect(calls).toHaveLength(0);
+      expect(second.results).toEqual([
+        { id: 'a1', ok: true },
+        { id: 'a2', ok: true },
+      ]);
+    });
+  });
+
+  it('resets the action record when the pageId changes', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      await saveNotionActionMap(
+        {
+          [session.id]: {
+            pageId: 'old',
+            headingAdded: true,
+            items: { a1: { ok: true, at: '2026-08-27T00:00:00.000Z' } },
+          },
+        },
+        env,
+        'linux',
+      );
+      const bodies: string[] = [];
+      const fetchImpl: typeof fetch = async (_input, init) => {
+        bodies.push(String(init?.body ?? ''));
+        return new Response('{}', { status: 200 });
+      };
+      const out = await appendActionItems({
+        token: 't',
+        pageId: 'new',
+        sessionId: session.id,
+        items,
+        fetchImpl,
+        env,
+        platform: 'linux',
+        now: () => '2026-08-28T00:00:00.000Z',
+      });
+      expect(bodies).toHaveLength(1);
+      const children = (
+        JSON.parse(bodies[0]!) as {
+          children: Array<{ type: string; to_do?: { rich_text: Array<{ text: { content: string } }> } }>;
+        }
+      ).children;
+      expect(children.map((c) => c.type)).toEqual(['heading_2', 'to_do', 'to_do']);
+      expect(out.results).toEqual([
+        { id: 'a1', ok: true },
+        { id: 'a2', ok: true },
+      ]);
+      const map = await loadNotionActionMap(env, 'linux');
+      expect(map[session.id]).toEqual({
+        pageId: 'new',
+        headingAdded: true,
+        items: {
+          a1: { ok: true, at: '2026-08-28T00:00:00.000Z' },
+          a2: { ok: true, at: '2026-08-28T00:00:00.000Z' },
+        },
+      });
+    });
+  });
+
+  it('skips only already-exported items on a partial retry', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      await saveNotionActionMap(
+        {
+          [session.id]: {
+            pageId: 'PAGE',
+            headingAdded: true,
+            items: { a1: { ok: true, at: '2026-08-27T00:00:00.000Z' } },
+          },
+        },
+        env,
+        'linux',
+      );
+      const bodies: string[] = [];
+      const fetchImpl: typeof fetch = async (_input, init) => {
+        bodies.push(String(init?.body ?? ''));
+        return new Response('{}', { status: 200 });
+      };
+      const out = await appendActionItems({
+        token: 't',
+        pageId: 'PAGE',
+        sessionId: session.id,
+        items,
+        fetchImpl,
+        env,
+        platform: 'linux',
+        now: () => '2026-08-28T00:00:00.000Z',
+      });
+      expect(bodies).toHaveLength(1);
+      const children = (JSON.parse(bodies[0]!) as { children: Array<{ type: string; to_do?: { rich_text: Array<{ text: { content: string } }> } }> }).children;
+      expect(children.map((c) => c.type)).toEqual(['to_do']);
+      expect(children[0]?.to_do?.rich_text[0]?.text.content).toBe('Book the room');
+      expect(out.results.filter((r) => r.ok).map((r) => r.id).sort()).toEqual(['a1', 'a2']);
+    });
+  });
+
+  it('marks nothing exported when the batch request fails', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      const out = await appendActionItems({
+        token: 'ntn_secret_value',
+        pageId: 'PAGE',
+        sessionId: session.id,
+        items,
+        fetchImpl: async () => new Response('boom', { status: 500 }),
+        env,
+        platform: 'linux',
+      });
+      expect(out.results.every((r) => r.ok === false)).toBe(true);
+      expect(out.results.map((r) => r.id).sort()).toEqual(['a1', 'a2']);
+      expect(out.results[0]?.error).toMatch(/500/);
+      expect(JSON.stringify(out.results)).not.toContain('ntn_secret_value');
+      const map = await loadNotionActionMap(env, 'linux');
+      expect(map[session.id]?.items ?? {}).toEqual({});
+    });
+  });
+
+  it('splits >100 blocks into batches and marks per landed batch', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      const many: ActionItem[] = Array.from({ length: 120 }, (_, i) => ({
+        id: `i${i}`,
+        text: `t${i}`,
+      }));
+      let n = 0;
+      const fetchImpl: typeof fetch = async () => {
+        n += 1;
+        if (n === 1) return new Response('{}', { status: 200 });
+        return new Response('nope', { status: 500 });
+      };
+      const out = await appendActionItems({
+        token: 't',
+        pageId: 'PAGE',
+        sessionId: session.id,
+        items: many,
+        fetchImpl,
+        env,
+        platform: 'linux',
+        now: () => 'T',
+      });
+      expect(n).toBe(2);
+      const okIds = out.results.filter((r) => r.ok).map((r) => r.id);
+      const failIds = out.results.filter((r) => !r.ok).map((r) => r.id);
+      // heading_2 + 120 to_dos = 121 blocks → 100 + 21; first batch lands 99 items
+      expect(okIds).toHaveLength(99);
+      expect(failIds).toHaveLength(21);
+      expect(okIds).toEqual(many.slice(0, 99).map((i) => i.id));
+      expect(failIds).toEqual(many.slice(99).map((i) => i.id));
+      const map = await loadNotionActionMap(env, 'linux');
+      expect(map[session.id]?.headingAdded).toBe(true);
+      for (const id of okIds) expect(map[session.id]?.items[id]?.ok).toBe(true);
+      for (const id of failIds) expect(map[session.id]?.items[id]).toBeUndefined();
+    });
   });
 });

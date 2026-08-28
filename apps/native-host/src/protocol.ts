@@ -1,6 +1,15 @@
-import type { HostSyncAck, HostSyncMessage } from '@scribetab/shared';
+import type {
+  ActionItem,
+  ExportActionsAck,
+  ExportActionsMessage,
+  HostMessage,
+  HostSyncAck,
+} from '@scribetab/shared';
+import { loadConfig } from './config.js';
 import { writeNativeMessage } from './framing.js';
-import { integrationFollowUpError, runPostSyncIntegrations } from './integrations.js';
+import { integrationFollowUpError, runPostSyncIntegrations, sanitizeIntegrationError } from './integrations.js';
+import { getMeeting } from './meetings.js';
+import { appendActionItems, createNotionPage, loadNotionPageMap } from './notion.js';
 import { meetingsDir } from './paths.js';
 import {
   abortSync,
@@ -12,6 +21,9 @@ import {
 
 const MAX_ACK_ERROR = 1000;
 const MAX_ACK_ID = 80;
+const MAX_EXPORT_ITEMS = 200;
+const MAX_ITEM_TEXT = 4000;
+const MAX_ITEM_META = 200;
 
 export type NativeSyncHostOpts = {
   fetchImpl?: typeof fetch;
@@ -35,7 +47,7 @@ function cap(s: string, n: number): string {
 }
 
 function chunkPayload(
-  msg: Extract<HostSyncMessage, { type: 'sync_audio_chunk' }>,
+  msg: Extract<HostMessage, { type: 'sync_audio_chunk' }>,
   format: string | undefined,
 ): string {
   const hasWav = typeof msg.wavBase64 === 'string';
@@ -52,6 +64,21 @@ function chunkPayload(
     return msg.wavBase64!;
   }
   return hasWav ? msg.wavBase64! : msg.dataBase64!;
+}
+
+function parseExportItems(raw: unknown): ActionItem[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: ActionItem[] = [];
+  for (const it of raw) {
+    if (!it || typeof it !== 'object' || Array.isArray(it)) return undefined;
+    const rec = it as Record<string, unknown>;
+    if (typeof rec.id !== 'string' || typeof rec.text !== 'string') return undefined;
+    const item: ActionItem = { id: rec.id, text: rec.text.slice(0, MAX_ITEM_TEXT) };
+    if (typeof rec.owner === 'string') item.owner = rec.owner.slice(0, MAX_ITEM_META);
+    if (typeof rec.due === 'string') item.due = rec.due.slice(0, MAX_ITEM_META);
+    out.push(item);
+  }
+  return out;
 }
 
 export class NativeSyncHost {
@@ -72,7 +99,7 @@ export class NativeSyncHost {
   async handle(raw: unknown): Promise<void> {
     if (this.silenced) return;
     try {
-      await this.dispatch(raw as HostSyncMessage);
+      await this.dispatch(raw as HostMessage);
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
       await this.fail(sessionIdOf(raw), error);
@@ -105,12 +132,31 @@ export class NativeSyncHost {
     await writeNativeMessage(this.stdout, ack);
   }
 
-  private async dispatch(msg: HostSyncMessage): Promise<void> {
+  private async writeExportAck(ack: ExportActionsAck): Promise<void> {
+    const out: ExportActionsAck = {
+      ok: ack.ok,
+      sessionId: cap(ack.sessionId, MAX_ACK_ID),
+      results: ack.results.map((r) => ({
+        id: r.id,
+        ok: r.ok,
+        ...(r.error ? { error: cap(r.error, MAX_ACK_ERROR) } : {}),
+      })),
+    };
+    if (ack.error) out.error = cap(ack.error, MAX_ACK_ERROR);
+    if (ack.pageUrl) out.pageUrl = ack.pageUrl;
+    await writeNativeMessage(this.stdout, out);
+  }
+
+  private async dispatch(msg: HostMessage): Promise<void> {
     if (!msg || typeof msg !== 'object' || !('type' in msg)) {
-      throw new Error('Invalid HostSyncMessage');
+      throw new Error('Invalid HostMessage');
     }
 
     switch (msg.type) {
+      case 'export_actions': {
+        await this.exportActions(msg);
+        return;
+      }
       case 'sync_begin': {
         if (msg.protocolVersion !== 1 && msg.protocolVersion !== 2) {
           throw new Error(`Unsupported protocolVersion ${String(msg.protocolVersion)}`);
@@ -176,6 +222,97 @@ export class NativeSyncHost {
       }
       default:
         throw new Error(`Unknown message type: ${String((msg as { type: string }).type)}`);
+    }
+  }
+
+  private async exportActions(msg: ExportActionsMessage): Promise<void> {
+    const sessionId = typeof msg.sessionId === 'string' && msg.sessionId ? msg.sessionId : 'unknown';
+    let token: string | undefined;
+    const fail = async (
+      error: string,
+      results: ExportActionsAck['results'] = [],
+    ): Promise<void> => {
+      await this.writeExportAck({
+        ok: false,
+        sessionId,
+        error: sanitizeIntegrationError(error, token),
+        results: results.map((r) => ({
+          ...r,
+          error: r.error ? sanitizeIntegrationError(r.error, token) : undefined,
+        })),
+      });
+    };
+    try {
+      if (msg.protocolVersion !== 1) {
+        await fail(`Unsupported protocolVersion ${String(msg.protocolVersion)}`);
+        return;
+      }
+      if (typeof msg.sessionId !== 'string' || !msg.sessionId) {
+        await fail('export_actions missing sessionId');
+        return;
+      }
+      const items = parseExportItems(msg.items);
+      if (!items) {
+        await fail('export_actions items must be an array of {id, text} strings');
+        return;
+      }
+      if (items.length > MAX_EXPORT_ITEMS) {
+        await fail(`export_actions accepts at most ${MAX_EXPORT_ITEMS} items`);
+        return;
+      }
+      const cfg = await loadConfig(this.env, this.opts.platform);
+      token = cfg.notion?.token;
+      if (!cfg.notionEnabled || !cfg.notion?.token || !cfg.notion?.parentPageId) {
+        await fail(
+          'Notion is not configured on the native host (run: scribetab-host config set …)',
+        );
+        return;
+      }
+      const pageMap = await loadNotionPageMap(this.env, this.opts.platform);
+      const existing = pageMap[sessionId];
+      let pageId: string;
+      if (existing?.status === 'ok' && existing.pageId) {
+        pageId = existing.pageId;
+      } else {
+        const meeting = await getMeeting(meetingsDir(this.env), sessionId);
+        if (!meeting?.session) {
+          await fail(
+            'Meeting not synced to disk yet — stop the recording and wait for sync, then retry',
+          );
+          return;
+        }
+        const created = await createNotionPage({
+          token: cfg.notion.token,
+          parentPageId: cfg.notion.parentPageId,
+          session: meeting.session,
+          segments: meeting.segments,
+          summaryMarkdown: meeting.summaryMd,
+          fetchImpl: this.opts.fetchImpl,
+          env: this.env,
+          platform: this.opts.platform,
+        });
+        pageId = created.pageId;
+      }
+      const { results } = await appendActionItems({
+        token: cfg.notion.token,
+        pageId,
+        sessionId,
+        items,
+        fetchImpl: this.opts.fetchImpl,
+        env: this.env,
+        platform: this.opts.platform,
+      });
+      await this.writeExportAck({
+        ok: results.every((r) => r.ok),
+        sessionId,
+        results: results.map((r) => ({
+          ...r,
+          error: r.error ? sanitizeIntegrationError(r.error, token) : undefined,
+        })),
+        pageUrl: `https://www.notion.so/${pageId.replace(/-/g, '')}`,
+      });
+    } catch (e) {
+      await fail(e instanceof Error ? e.message : String(e));
     }
   }
 }

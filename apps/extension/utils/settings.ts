@@ -22,6 +22,7 @@ export interface Settings {
   redactTerms: string[];
   captionsOnly: boolean; // Meet captions → TranscriptSegment, zero STT provider calls
   consentReminder: boolean; // banner when a recording starts; default on
+  summaryPrompt: string; // '' = use default guidance
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -45,6 +46,7 @@ export const DEFAULT_SETTINGS: Settings = {
   redactTerms: [],
   captionsOnly: false,
   consentReminder: true,
+  summaryPrompt: '',
 };
 
 const KEY = 'settings';
@@ -104,6 +106,7 @@ export function normalizeSettings(raw: Partial<Settings> | undefined): Settings 
     llmModel: llmProviderId ? (llmModels[llmProviderId] ?? '') : '',
   };
   if (!Array.isArray(merged.redactTerms)) merged.redactTerms = [];
+  if (typeof merged.summaryPrompt !== 'string') merged.summaryPrompt = '';
   return merged;
 }
 

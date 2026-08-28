@@ -14,6 +14,7 @@ export type ExportFormat = 'md' | 'json' | 'srt' | 'vtt' | 'notebooklm';
 export function extrasFromSession(session: MeetingSession & ExportExtras): ExportExtras {
   const extras: ExportExtras = {};
   if (session.summaryMarkdown !== undefined) extras.summaryMarkdown = session.summaryMarkdown;
+  if (session.summary !== undefined) extras.summary = session.summary;
   if (session.costUsd !== undefined) extras.costUsd = session.costUsd; // includes null → n/a
   return extras;
 }

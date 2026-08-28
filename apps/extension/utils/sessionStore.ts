@@ -1,4 +1,4 @@
-import type { MeetingSession } from '@scribetab/shared';
+import type { MeetingSession, SessionSummary } from '@scribetab/shared';
 import { deleteCuesForSession } from './captionCueStore';
 import { deleteChunksForSession } from './chunkStore';
 import { SESSIONS_STORE as STORE, openDb } from './db';
@@ -9,6 +9,8 @@ export type IntelligenceState = 'pending' | 'needs-permission';
 /** Extension-side session row. Extra fields are not on the locked MeetingSession. */
 export type StoredSession = MeetingSession & {
   summaryMarkdown?: string;
+  summary?: SessionSummary;
+  actionExports?: Record<string, { destination: 'notion'; at: string }>;
   /** null = computed but unknown (UI: n/a). */
   costUsd?: number | null;
   /** Accrued provider-computed STT cost (e.g. OpenRouter usage.cost), STT-only. */

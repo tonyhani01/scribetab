@@ -57,6 +57,24 @@ export interface LlmProvider {
   ): Promise<string>;
 }
 
+export interface ActionItem {
+  id: string;               // crypto.randomUUID(); assigned client-side
+  text: string;
+  owner?: string;
+  due?: string;             // verbatim phrase, never an inferred date
+}
+
+export interface SessionSummary {
+  version: 1;
+  narrative: string;        // markdown paragraphs
+  actionItems: ActionItem[];
+  decisions: string[];
+  usefulInfo: string[];
+  generatedAt: string;      // ISO 8601
+  model?: string;
+  degraded?: true;          // set when JSON extraction failed (raw text fallback)
+}
+
 export type HostSyncAudio =
   | { format: 'wav'; sampleRate: number; totalChunks: number }
   | { format: 'ogg-opus'; totalChunks: number }; // ogg-opus is valid only with protocolVersion 2
@@ -84,3 +102,20 @@ export interface HostSyncAck {
   sessionId: string;
   error?: string;            // host replies after sync_end (and on any failure)
 }
+
+export type ExportActionsMessage = {
+  type: 'export_actions';
+  protocolVersion: 1;
+  sessionId: string;
+  items: ActionItem[];
+};
+
+export interface ExportActionsAck {
+  ok: boolean;
+  sessionId: string;
+  error?: string;                 // transport/config-level failure
+  results: { id: string; ok: boolean; error?: string }[];
+  pageUrl?: string;
+}
+
+export type HostMessage = HostSyncMessage | ExportActionsMessage;

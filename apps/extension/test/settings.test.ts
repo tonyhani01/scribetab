@@ -7,9 +7,18 @@ import {
   withLlmProvider,
   withSttField,
   withSttProvider,
+  type Settings,
 } from '../utils/settings';
 
 describe('normalizeSettings', () => {
+  it('defaults summaryPrompt to empty and preserves stored values', () => {
+    expect(normalizeSettings(undefined).summaryPrompt).toBe('');
+    expect(normalizeSettings({ summaryPrompt: 'Budget focus.' } as Partial<Settings>).summaryPrompt).toBe('Budget focus.');
+  });
+  it('coerces a non-string summaryPrompt to empty', () => {
+    expect(normalizeSettings({ summaryPrompt: 42 as unknown as string }).summaryPrompt).toBe('');
+  });
+
   it('migrates a single apiKey/model into the current provider map', () => {
     const s = normalizeSettings({
       providerId: 'openai',

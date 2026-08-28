@@ -77,14 +77,20 @@ function jsonChat(content: string): Response {
   return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
 }
 
-function stubChat(summary: string, actions: string) {
+function structuredContent(narrative: string, actionLine = ''): string {
+  const text = actionLine.replace(/^[-*]\s*/, '').trim();
+  const actionItems = text && !/^none\b/i.test(text) ? [{ text }] : [];
+  return JSON.stringify({
+    narrative,
+    actionItems,
+    decisions: [],
+    usefulInfo: [],
+  });
+}
+
+function stubChatRaw(content: string) {
   const fetchMock = vi.fn().mockImplementation(async (_url: string, init: { body: string }) => {
-    const body = JSON.parse(init.body) as {
-      messages: { role: string; content: string }[];
-      stream?: boolean;
-    };
-    const user = body.messages.find((m) => m.role === 'user')?.content ?? '';
-    const content = user.startsWith('Summarize') ? summary : actions;
+    const body = JSON.parse(init.body) as { stream?: boolean };
     if (body.stream) {
       return new Response(ssePayload(content), {
         status: 200,
@@ -95,6 +101,10 @@ function stubChat(summary: string, actions: string) {
   });
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
+}
+
+function stubChat(narrative: string, actionLine = '') {
+  return stubChatRaw(structuredContent(narrative, actionLine));
 }
 
 describe('runFinalizeIntelligence', () => {
@@ -114,7 +124,7 @@ describe('runFinalizeIntelligence', () => {
     expect(got?.summaryMarkdown).toContain('- [ ] Ada ships');
     expect(got?.costUsd).toBeGreaterThan(0);
     expect(got?.intelligence).toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     const sent = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as {
       messages: { content: string }[];
     };
@@ -253,11 +263,11 @@ describe('runFinalizeIntelligence', () => {
     expect(got?.intelligenceError).toBeNull();
   });
 
-  it('accumulates first-call LLM cost if the second call fails', async () => {
+  it('does not issue a second LLM call (structured summary is one-call)', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
-        new Response(ssePayload('Summary only'), {
+        new Response(ssePayload(structuredContent('Summary only')), {
           status: 200,
           headers: { 'Content-Type': 'text/event-stream' },
         }),
@@ -268,10 +278,62 @@ describe('runFinalizeIntelligence', () => {
       's1',
       settings({ providerId: 'openai', llmProviderId: 'openai', llmApiKey: 'sk-x' }),
     );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     const got = await getSession('s1');
-    expect(got?.summaryMarkdown).toBeUndefined();
+    expect(got?.summaryMarkdown).toContain('Summary only');
     expect(got?.costUsd).toBeGreaterThan(0.0001);
-    expect(got?.intelligence).toBe('pending');
+    expect(got?.intelligence).toBeNull();
+  });
+
+  it('stores structured summary and derived markdown after finalize', async () => {
+    const reply = JSON.stringify({
+      narrative: 'Shipped decision.',
+      actionItems: [{ text: 'Send the notes', owner: 'Bo' }],
+      decisions: ['Ship it'],
+      usefulInfo: [],
+    });
+    stubChatRaw(reply);
+    await runFinalizeIntelligence(
+      's1',
+      settings({ llmProviderId: 'openai', llmApiKey: 'sk-x' }),
+    );
+    const row = await getSession('s1');
+    expect(row?.summary?.actionItems).toHaveLength(1);
+    expect(row?.summaryMarkdown).toContain('## Action items');
+    expect(row?.summaryMarkdown).toContain('- [ ] Bo — Send the notes');
+    expect(row?.intelligence).toBeNull();
+  });
+
+  it('stores degraded summary when the model returns prose', async () => {
+    stubChatRaw('plain text');
+    await runFinalizeIntelligence(
+      's1',
+      settings({ llmProviderId: 'openai', llmApiKey: 'sk-x' }),
+    );
+    const row = await getSession('s1');
+    expect(row?.summary?.degraded).toBe(true);
+    expect(row?.summaryMarkdown).toContain('plain text');
+    expect(row?.intelligence).toBeNull();
+  });
+
+  it('passes user summaryPrompt into the summary request', async () => {
+    const fetchMock = stubChat('ok', '- none');
+    await runFinalizeIntelligence(
+      's1',
+      settings({
+        llmProviderId: 'openai',
+        llmApiKey: 'sk-x',
+        summaryPrompt: 'Focus on risks.',
+      }),
+    );
+    const sent = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as {
+      messages: { role: string; content: string }[];
+    };
+    const system = sent.messages.find((m) => m.role === 'system');
+    const user = sent.messages.find((m) => m.role === 'user');
+    expect(system?.content).toContain('JSON');
+    expect(user?.content).toContain('Focus on risks.');
+    expect(user?.content.trimEnd().endsWith('</transcript>')).toBe(true);
   });
 
   it('does not fetch when the LLM origin is not permitted', async () => {
@@ -391,7 +453,7 @@ describe('runFinalizeIntelligence streaming', () => {
     const bodies = fetchMock.mock.calls.map(
       (c) => JSON.parse(c[1].body as string) as { stream?: boolean },
     );
-    expect(bodies).toHaveLength(2);
+    expect(bodies).toHaveLength(1);
     expect(bodies.every((b) => b.stream === true)).toBe(true);
     const got = await getSession('s1');
     expect(got?.summaryMarkdown).toContain('Ship on Friday.');
@@ -400,8 +462,8 @@ describe('runFinalizeIntelligence streaming', () => {
     const deltas = send.mock.calls
       .map((c) => c[0] as { type?: string; phase?: string; text?: string; runId?: string })
       .filter((m) => m?.type === 'SUMMARY_DELTA');
-    expect(deltas.some((d) => d.phase === 'summary' && d.text === 'Ship on Friday.')).toBe(true);
-    expect(deltas.some((d) => d.phase === 'actions')).toBe(true);
+    expect(deltas.some((d) => d.phase === 'summary' && d.text.includes('Ship on Friday.'))).toBe(true);
+    expect(deltas.every((d) => d.phase === 'summary')).toBe(true);
     expect(new Set(deltas.map((d) => d.runId)).size).toBe(1);
     expect(typeof deltas[0]?.runId).toBe('string');
   });
@@ -413,9 +475,7 @@ describe('runFinalizeIntelligence streaming', () => {
         stream?: boolean;
       };
       if (body.stream) return new Response('nope', { status: 500 });
-      const user = body.messages.find((m) => m.role === 'user')?.content ?? '';
-      const content = user.startsWith('Summarize') ? 'Ship on Friday.' : '- Ada ships';
-      return jsonChat(content);
+      return jsonChat(structuredContent('Ship on Friday.', '- Ada ships'));
     });
     vi.stubGlobal('fetch', fetchMock);
     await runFinalizeIntelligence('s1', llm);
@@ -423,7 +483,7 @@ describe('runFinalizeIntelligence streaming', () => {
     expect(got?.summaryMarkdown).toContain('Ship on Friday.');
     expect(got?.intelligence).toBeNull();
     expect(got?.intelligenceError).toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('still persists intelligenceError when stream and complete both fail', async () => {

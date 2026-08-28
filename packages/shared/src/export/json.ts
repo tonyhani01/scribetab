@@ -12,6 +12,7 @@ export function exportJson(
     segments: orderedSegments(segments),
   };
   if (extras?.summaryMarkdown !== undefined) body.summaryMarkdown = extras.summaryMarkdown;
+  if (extras?.summary !== undefined) body.summary = extras.summary;
   if (extras?.costUsd !== undefined) body.costUsd = extras.costUsd;
   return JSON.stringify(body, null, 2) + '\n';
 }

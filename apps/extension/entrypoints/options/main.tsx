@@ -1,6 +1,7 @@
 import { render } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import {
+  DEFAULT_SUMMARY_GUIDANCE,
   LLM_PROVIDER_IDS,
   TRANSCRIPTION_PROVIDER_IDS,
   isLlmProviderId,
@@ -131,6 +132,7 @@ function App() {
         baseUrl: s.baseUrl.trim(),
         llmBaseUrl: s.llmBaseUrl.trim(),
         redactTerms: s.redactTerms.map((t) => t.trim()).filter(Boolean),
+        summaryPrompt: s.summaryPrompt.trim(),
       });
       setStatus({
         kind: 'ok',
@@ -373,6 +375,24 @@ function App() {
                 setS((prev) => withLlmField(prev, 'llmModel', (e.currentTarget as HTMLInputElement).value))
               }
             />
+
+            <label style={row} for="summaryPrompt">Summary guidance</label>
+            <textarea
+              id="summaryPrompt"
+              data-testid="summary-prompt"
+              rows={5}
+              maxLength={4000}
+              style={{ ...input, minHeight: 80, fontFamily: 'inherit' }}
+              placeholder={DEFAULT_SUMMARY_GUIDANCE}
+              value={s.summaryPrompt}
+              onInput={(e) => set('summaryPrompt', (e.currentTarget as HTMLTextAreaElement).value)}
+            />
+            <p style={{ fontSize: 11, color: '#666', margin: '2px 0 8px' }}>
+              Customize what the summary focuses on. Output format and transcript handling are set by ScribeTab; guidance that contradicts them will produce a lower-quality summary.
+              <button type="button" data-testid="summary-prompt-reset" style={{ marginLeft: 8 }} onClick={() => set('summaryPrompt', '')}>
+                Reset to default
+              </button>
+            </p>
 
             <div style={{ marginTop: 8 }}>
               <button type="button" class="st-btn st-btn--quiet" disabled={probing !== null} onClick={() => void testLlm()}>
