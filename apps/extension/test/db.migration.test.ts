@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CAPTIONS_STORE, CHUNKS_STORE, SEGMENTS_STORE, SESSIONS_STORE, closeDb, openDb } from '../utils/db';
+import { CAPTIONS_STORE, CHUNKS_STORE, HIGHLIGHTS_STORE, SEGMENTS_STORE, SESSIONS_STORE, closeDb, openDb } from '../utils/db';
 
 function deleteDb(): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -68,7 +68,7 @@ describe('v2 → v3 upgrade', () => {
 
     const v3 = await openDb();
     expect([...v3.objectStoreNames].sort()).toEqual(
-      [CAPTIONS_STORE, CHUNKS_STORE, SEGMENTS_STORE, SESSIONS_STORE].sort(),
+      [CAPTIONS_STORE, CHUNKS_STORE, HIGHLIGHTS_STORE, SEGMENTS_STORE, SESSIONS_STORE].sort(),
     );
 
     const chunksStore = v3.transaction(CHUNKS_STORE, 'readonly').objectStore(CHUNKS_STORE);
@@ -76,6 +76,11 @@ describe('v2 → v3 upgrade', () => {
     expect(chunksStore.indexNames.contains('bySession')).toBe(true);
     expect(chunksStore.indexNames.contains('wav')).toBe(false);
     expect([...chunksStore.indexNames]).toEqual(['bySession']);
+
+    const highlightsStore = v3.transaction(HIGHLIGHTS_STORE, 'readonly').objectStore(HIGHLIGHTS_STORE);
+    expect(highlightsStore.keyPath).toBe('id');
+    expect(highlightsStore.indexNames.contains('bySession')).toBe(true);
+    expect(highlightsStore.index('bySession').unique).toBe(false);
 
     const leftoverSegs = await new Promise<unknown[]>((resolve, reject) => {
       const tx = v3.transaction(SEGMENTS_STORE, 'readonly');

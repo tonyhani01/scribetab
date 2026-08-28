@@ -34,24 +34,30 @@ import {
   surfaceCommandError,
 } from '@/utils/actionBadge';
 import {
+  COMMAND_ADD_HIGHLIGHT,
   COMMAND_OPEN_SIDE_PANEL,
   COMMAND_START_CAPTURE,
   COMMAND_STOP_CAPTURE,
+  liveHighlightStartMs,
+  normalizeHighlightLabel,
 } from '@/utils/commands';
 import type {
   Ack,
   ToBackground,
   ToMeetCaptions,
+  ToMeetConsent,
   ToOffscreen,
   ToSidePanel,
   TranscriptionIssue,
   TranscriptionSettingsPayload,
 } from '@/utils/messages';
 import { exportSelectedActionItems } from '@/utils/actionExport';
+import { putHighlight } from '@/utils/highlightStore';
 import { persistHostStatus, syncSessionToHost } from '@/utils/nativeSync';
 import { isCapturableUrl, platformFromUrl, titleFromTab } from '@/utils/platform';
 import { checkQuota } from '@/utils/quota';
 import { getSegments, putSegments } from '@/utils/segmentStore';
+import { applyStoredSpeakerNames, renameStoredSpeaker } from '@/utils/speakerRename';
 import {
   bootExceptId,
   bootShouldIdle,
@@ -70,6 +76,9 @@ import {
 import { getSettings } from '@/utils/settings';
 import { persistLastTranscriptionError } from '@/utils/transcriptionError';
 import { GENERIC_USER_ERROR, humanError } from '@/utils/userError';
+import { deleteChunksForSession, sessionHasChunks } from '@/utils/chunkStore';
+import { retentionCutoffMs, sessionsPastRetention } from '@scribetab/shared';
+import { PerSessionMutationQueue } from '@/utils/sessionMutationQueue';
 
 let creatingOffscreen: Promise<void> | null = null;
 let bootReady: Promise<void> = Promise.resolve();
@@ -80,6 +89,7 @@ let lastFusionMs = 0;
 let fusionTimer: ReturnType<typeof setTimeout> | null = null;
 let fusionQueuedSession: string | null = null;
 let segmentCountChain: Promise<void> = Promise.resolve();
+const segmentMutationQueue = new PerSessionMutationQueue();
 
 async function offscreenContexts(): Promise<chrome.runtime.ExtensionContext[]> {
   return chrome.runtime.getContexts({
@@ -167,21 +177,25 @@ async function applyFusion(sessionId: string, force = false): Promise<void> {
   }
 
   lastFusionMs = Date.now();
-  const segs = await getSegments(sessionId);
-  if (segs.length === 0) return;
-  const fused = fuseWithCaptions(segs, sessionId);
-  const changed = fused.filter((s, i) => s.speaker !== segs[i]?.speaker);
-  if (changed.length === 0) return;
-  const settings = await getSettings();
-  const stored = settings.redactAtRest
-    ? redactSegments(fused, { extraTerms: settings.redactTerms })
-    : fused;
-  await putSegments(stored);
-  notifySidePanel({
-    target: 'sidepanel',
-    type: 'SEGMENTS_UPDATED',
-    sessionId,
-    segments: stored,
+  await segmentMutationQueue.run(sessionId, async () => {
+    const segs = await getSegments(sessionId);
+    if (segs.length === 0) return;
+    const fused = fuseWithCaptions(segs, sessionId);
+    const session = await getSession(sessionId);
+    const named = applyStoredSpeakerNames(fused, session?.speakerNames);
+    const changed = named.filter((s, i) => s.speaker !== segs[i]?.speaker);
+    if (changed.length === 0) return;
+    const settings = await getSettings();
+    const stored = settings.redactAtRest
+      ? redactSegments(named, { extraTerms: settings.redactTerms })
+      : named;
+    await putSegments(stored);
+    notifySidePanel({
+      target: 'sidepanel',
+      type: 'SEGMENTS_UPDATED',
+      sessionId,
+      segments: stored,
+    });
   });
 }
 
@@ -195,18 +209,22 @@ async function applyCaptionEvent(
   if (!cue) return;
 
   if (captionsOnly) {
-    let segment: TranscriptSegment = captionCueToSegment(sessionId, cue, crypto.randomUUID());
-    const settings = await getSettings();
-    if (settings.redactAtRest) {
-      segment = redactSegment(segment, { extraTerms: settings.redactTerms });
-    }
-    await putSegments([segment]);
-    await syncSegmentCount(sessionId);
-    notifySidePanel({
-      target: 'sidepanel',
-      type: 'SEGMENTS_ADDED',
-      sessionId,
-      segments: [segment],
+    await segmentMutationQueue.run(sessionId, async () => {
+      let segment: TranscriptSegment = captionCueToSegment(sessionId, cue, crypto.randomUUID());
+      const session = await getSession(sessionId);
+      segment = applyStoredSpeakerNames([segment], session?.speakerNames)[0]!;
+      const settings = await getSettings();
+      if (settings.redactAtRest) {
+        segment = redactSegment(segment, { extraTerms: settings.redactTerms });
+      }
+      await putSegments([segment]);
+      await syncSegmentCount(sessionId);
+      notifySidePanel({
+        target: 'sidepanel',
+        type: 'SEGMENTS_ADDED',
+        sessionId,
+        segments: [segment],
+      });
     });
   } else {
     await applyFusion(sessionId);
@@ -343,12 +361,54 @@ async function maybeSyncSession(sessionId: string | undefined): Promise<void> {
 
 async function setIdle(extra: Record<string, unknown> = {}): Promise<void> {
   const { capturedTabId } = await chrome.storage.local.get('capturedTabId');
-  if (typeof capturedTabId === 'number') notifyMeetTab(capturedTabId, false);
+  if (typeof capturedTabId === 'number') {
+    notifyMeetTab(capturedTabId, false);
+    notifyMeetConsent(capturedTabId, false);
+  }
   captionBuffer.length = 0;
   await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null, ...extra });
   // Clear REC on the tab we captured, not whatever is focused now.
   if (typeof capturedTabId === 'number') void refreshActionBadge(capturedTabId);
   void refreshActiveTabBadge();
+  void sweepRetainedAudio().catch(() => {});
+}
+
+/** Show or hide the in-tab consent reminder on the captured Meet tab. */
+function notifyMeetConsent(tabId: number | null | undefined, show: boolean): void {
+  if (typeof tabId !== 'number') return;
+  const msg: ToMeetConsent = { target: 'meet-consent', type: show ? 'SHOW_CONSENT' : 'HIDE_CONSENT' };
+  try {
+    void Promise.resolve(chrome.tabs.sendMessage(tabId, msg)).catch(() => {
+      // Tab has no content script (not Meet) — fine.
+    });
+  } catch {
+    // Best effort: stopping capture must not fail because the tab disappeared.
+  }
+}
+
+/**
+ * Retention sweep: delete audio chunks of completed sessions older than the
+ * configured window. Runs on finalize and on SW boot. Never touches the live
+ * recording, segments, or session rows.
+ */
+export async function sweepRetainedAudio(): Promise<number> {
+  const settings = await getSettings();
+  // finalizeSession only drops chunks for the session it finalizes, so turning
+  // audio retention off must also clear the backlog kept while it was on.
+  const cutoff = settings.retainAudio
+    ? retentionCutoffMs(Date.now(), settings.retentionDays)
+    : Date.now();
+  if (cutoff == null) return 0;
+  const sessions = await listSessions();
+  const withAudio = new Set<string>();
+  for (const s of sessions) {
+    if (await sessionHasChunks(s.id)) withAudio.add(s.id);
+  }
+  const victims = sessionsPastRetention(sessions, withAudio, cutoff);
+  for (const id of victims) {
+    await deleteChunksForSession(id).catch(() => {});
+  }
+  return victims.length;
 }
 
 async function completeSession(
@@ -406,7 +466,9 @@ async function handleStart(): Promise<Ack> {
       transcribedCount: 0,
       segmentCount: 0,
     });
+    const settings = await getSettings();
     notifyMeetTab(tab.id, true);
+    if (settings.consentReminder) notifyMeetConsent(tab.id, true);
 
     // Offscreen must exist BEFORE getMediaStreamId: stream ids are one-use
     // and expire within seconds, so the consumer must be ready.
@@ -414,7 +476,6 @@ async function handleStart(): Promise<Ack> {
 
     const streamId = await getMediaStreamId({ targetTabId: tab.id });
 
-    const settings = await getSettings();
     const platform = platformFromUrl(tab.url);
     const captionsOnly = freezeCaptionsOnly(settings.captionsOnly, platform);
     const { payload, issue } = captionsOnly
@@ -490,7 +551,10 @@ async function handleStart(): Promise<Ack> {
       await stopOffscreen(createdId ?? undefined).catch(() => {});
     }
     if (createdId) await completeSession(createdId, 'failed').catch(() => {});
-    if (startedTabId != null) notifyMeetTab(startedTabId, false);
+    if (startedTabId != null) {
+      notifyMeetTab(startedTabId, false);
+      notifyMeetConsent(startedTabId, false);
+    }
     captionBuffer.length = 0;
     const startError = humanError(e);
     await chrome.storage.local.set({
@@ -584,6 +648,7 @@ export default defineBackground(() => {
     const retainAudio = (await getSettings()).retainAudio;
     await failStaleRecordings(exceptId, retainAudio);
     void retryPendingIntelligence();
+    void sweepRetainedAudio().catch(() => {});
     if (
       typeof currentSessionId === 'string' &&
       acceptsCaptionEvents(captureState) &&
@@ -676,6 +741,80 @@ export default defineBackground(() => {
           sendResponse(await exportSelectedActionItems(msg.sessionId, msg.itemIds));
           break;
         }
+        case 'ADD_HIGHLIGHT': {
+          const { currentSessionId, captureState, audioStartedAtMs } = await chrome.storage.local.get([
+            'currentSessionId',
+            'captureState',
+            'audioStartedAtMs',
+          ]);
+          const startMs = liveHighlightStartMs(
+            captureState,
+            typeof currentSessionId === 'string' ? currentSessionId : undefined,
+            msg.sessionId,
+            audioStartedAtMs,
+          );
+          if (startMs == null) {
+            sendResponse({ ok: false, error: 'No recording is active' });
+            break;
+          }
+          await putHighlight({
+            id: crypto.randomUUID(),
+            sessionId: msg.sessionId,
+            startMs,
+            label: normalizeHighlightLabel(msg.label),
+            createdAt: new Date().toISOString(),
+          });
+          notifySidePanel({
+            target: 'sidepanel',
+            type: 'HIGHLIGHT_ADDED',
+            sessionId: msg.sessionId,
+          });
+          sendResponse({ ok: true });
+          break;
+        }
+        case 'RENAME_SPEAKER': {
+          const result = await segmentMutationQueue.run(msg.sessionId, async () => {
+            const session = await getSession(msg.sessionId);
+            if (!session) return { ok: false, error: 'Session not found' } satisfies Ack;
+            const from = msg.from.trim();
+            const to = msg.to.trim();
+            if (!from || !to) {
+              return { ok: false, error: 'Speaker name cannot be empty' } satisfies Ack;
+            }
+            // Rewrite stored segments so search, exports, and the LLM see the new name.
+            // The read and alias-map update are in the same session queue as fusion
+            // and captions-only writes, so an older in-flight write cannot restore
+            // the pre-rename speaker after this transaction completes.
+            const segs = await getSegments(msg.sessionId);
+            const renamedState = renameStoredSpeaker(segs, session.speakerNames, from, to);
+            const renamed = renamedState.segments;
+            if (renamed.some((s, i) => s.speaker !== segs[i]?.speaker)) {
+              await putSegments(renamed);
+              notifySidePanel({
+                target: 'sidepanel',
+                type: 'SEGMENTS_UPDATED',
+                sessionId: msg.sessionId,
+                segments: renamed,
+              });
+            }
+            // Caption cues keep the raw Meet label; new persisted segments receive
+            // the alias map before they are broadcast or indexed.
+            await updateSession(msg.sessionId, { speakerNames: renamedState.speakerNames });
+            return { ok: true } satisfies Ack;
+          });
+          sendResponse(result);
+          break;
+        }
+        case 'RENAME_SESSION': {
+          const title = msg.title.trim().slice(0, 200);
+          if (!title) {
+            sendResponse({ ok: false, error: 'Title cannot be empty' });
+            break;
+          }
+          await updateSession(msg.sessionId, { title });
+          sendResponse({ ok: true });
+          break;
+        }
         case 'SYNC_ALL': {
           const { captureState } = await chrome.storage.local.get('captureState');
           if (captureState === 'recording' || captureState === 'starting' || captureState === 'stopping') {
@@ -741,6 +880,39 @@ export default defineBackground(() => {
         if (command === COMMAND_STOP_CAPTURE) {
           const res = await handleStop();
           if (!res.ok) void surfaceCommandError(res.error ?? GENERIC_USER_ERROR);
+          return;
+        }
+        if (command === COMMAND_ADD_HIGHLIGHT) {
+          const { currentSessionId, captureState } = await chrome.storage.local.get([
+            'currentSessionId',
+            'captureState',
+          ]);
+          if (captureState !== 'recording' || typeof currentSessionId !== 'string') {
+            void surfaceCommandError('No recording is active.');
+            return;
+          }
+          const { audioStartedAtMs } = await chrome.storage.local.get('audioStartedAtMs');
+          const startMs = liveHighlightStartMs(
+            captureState,
+            typeof currentSessionId === 'string' ? currentSessionId : undefined,
+            currentSessionId,
+            audioStartedAtMs,
+          );
+          if (startMs == null) {
+            void surfaceCommandError('No recording is active.');
+            return;
+          }
+          await putHighlight({
+            id: crypto.randomUUID(),
+            sessionId: currentSessionId,
+            startMs,
+            createdAt: new Date().toISOString(),
+          });
+          notifySidePanel({
+            target: 'sidepanel',
+            type: 'HIGHLIGHT_ADDED',
+            sessionId: currentSessionId,
+          });
         }
       } catch (e) {
         void surfaceCommandError(humanError(e));

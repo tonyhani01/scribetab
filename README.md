@@ -8,9 +8,11 @@ configure (cloud key or localhost), and optional Notion page create from the
 native host (`api.notion.com`). Transcripts are exposed to AI agents and
 notetaking apps via MCP.
 
-**Status: v1.0.0.** Capture, live transcription, library/search/export, native
+**Status: v1.1.0.** Capture, live transcription, library/search/export, native
 host + MCP, Meet caption speakers, summaries, and Obsidian/Notion/NotebookLM
 integrations are implemented.
+
+Requirements: Chrome ≥ 116, Node ≥ 20, macOS/Linux/Windows
 
 License: GPL-3.0-only
 
@@ -22,8 +24,11 @@ License: GPL-3.0-only
   (whisper.cpp, Speaches, LM Studio)
 - Captions-only mode on Google Meet (zero STT cost)
 - Library search, Markdown/JSON/SRT/VTT export, NotebookLM-ready Markdown
+- Manual speaker renaming and highlight moments (Alt+Shift+H)
+- Configurable audio retention (7 days, 30 days, or until storage runs low)
 - Optional summaries and action items (OpenAI or local Ollama)
 - PII redaction on text (not on audio sent to STT)
+- In-Meet consent toast, elapsed recording timer, and side-panel recording controls
 - Native host sync to `~/ScribeTab/meetings/` plus MCP tools
 - Optional Obsidian vault copy and Notion page create (host-side, off by default)
 - Consent reminder, meeting-tab badge (`REC?`), and capture hotkeys
@@ -38,12 +43,18 @@ License: GPL-3.0-only
    `cambjpbepplcihlihagiheggdkfcpmef`
 
 Store-submittable zip: `pnpm --filter @scribetab/extension zip` →
-`apps/extension/.output/scribetab-1.0.0-chrome.zip` (exact name is printed by
+`apps/extension/.output/scribetab-1.1.0-chrome.zip` (exact name is printed by
 the command). Listing copy and permission justifications:
 [`docs/store-listing.md`](docs/store-listing.md).
 
-Add screenshots later under `docs/screenshots/` (popup, side panel, options).
-This repo does not ship product screenshots.
+Product screenshots:
+
+| View | Screenshot |
+| --- | --- |
+| Popup | [popup.png](docs/screenshots/popup.png) |
+| Side panel — live | [sidepanel-live.png](docs/screenshots/sidepanel-live.png) |
+| Side panel — library | [sidepanel-library.png](docs/screenshots/sidepanel-library.png) |
+| Options | [options-full.png](docs/screenshots/options-full.png) |
 
 ## Provider setup
 
@@ -80,8 +91,8 @@ pnpm --filter scribetab-host build
 node apps/native-host/dist/host.bin.js install
 ```
 
-Use `--extension-id <id>` if you are not on the packed development ID. After the
-host package is published, `npx scribetab-host install` works the same. Details:
+Use `--extension-id <id>` if you are not on the packed development ID. npm publish
+is planned; until then install from a clone. Details:
 [`apps/native-host/README.md`](apps/native-host/README.md).
 
 Obsidian / Notion (off by default):
@@ -101,6 +112,8 @@ The same host package exposes `scribetab-mcp` (stdio) over `~/ScribeTab/meetings
 Tools: `list_transcripts`, `get_transcript`, `get_latest_transcript`,
 `search_transcripts`, `export_transcript`.
 
+Any MCP client on this machine can read every saved transcript — grant access only to agents you trust.
+
 Point your MCP client at the `scribetab-mcp` binary from
 `apps/native-host/dist/mcp.bin.js` after `pnpm --filter scribetab-host build`.
 
@@ -114,6 +127,7 @@ Suggested defaults (Chrome may ignore them on conflict — rebind at
 | Start recording the active tab | Alt+Shift+R |
 | Stop recording | Alt+Shift+S |
 | Open the transcript side panel | Alt+Shift+T |
+| Add a highlight moment | Alt+Shift+H |
 
 ## Packages
 

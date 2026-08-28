@@ -8,7 +8,7 @@ import {
   originPattern,
   redactSegments,
   sttCostUsd,
-  summarizeMeeting,
+  summarizeMeetingLong,
   summaryToMarkdown,
   type ChatMessage,
   type LlmProvider,
@@ -17,7 +17,7 @@ import {
 } from '@scribetab/shared';
 import type { ToSidePanel } from './messages';
 import { getSegments, putSegments } from './segmentStore';
-import { getSession, listSessions, updateSession } from './sessionStore';
+import { getSession, listSessions, updateSession, type StoredSession } from './sessionStore';
 import { humanError } from './userError';
 import { getSettings, type Settings } from './settings';
 
@@ -55,6 +55,10 @@ export async function markIntelligencePending(sessionId: string, settings: Setti
     intelligence: 'pending',
     intelligenceError: null,
     intelligenceStartedAt: Date.now(),
+    // A manual regeneration (and a newly finalized session) starts a fresh
+    // durable retry sequence rather than inheriting stale backoff state.
+    intelligenceRetryCount: null,
+    intelligenceNextRetryAt: null,
   });
 }
 
@@ -66,15 +70,38 @@ export async function scheduleFinalizeIntelligence(
   void runFinalizeIntelligence(sessionId, settings).catch(() => {});
 }
 
+/** Retry backoff: 1m, 5m, 25m, then hourly — capped so we stop hammering a dead endpoint. */
+const RETRY_BACKOFF_MS = [60_000, 5 * 60_000, 25 * 60_000, 60 * 60_000] as const;
+function backoffForFailureCount(failures: number): number {
+  const idx = Math.min(Math.max(failures - 1, 0), RETRY_BACKOFF_MS.length - 1);
+  return RETRY_BACKOFF_MS[idx] ?? RETRY_BACKOFF_MS[RETRY_BACKOFF_MS.length - 1]!;
+}
+
+function retryPatch(row: StoredSession | undefined): Pick<StoredSession, 'intelligenceRetryCount' | 'intelligenceNextRetryAt'> {
+  const failures = Math.max(0, row?.intelligenceRetryCount ?? 0) + 1;
+  return {
+    intelligenceRetryCount: failures,
+    intelligenceNextRetryAt: Date.now() + backoffForFailureCount(failures),
+  };
+}
+
 export async function retryPendingIntelligence(): Promise<void> {
   const settings = await getSettings();
   const sessions = await listSessions();
+  const now = Date.now();
   for (const s of sessions) {
     if (s.status !== 'complete' || s.intelligence !== 'pending') continue;
     if (!llmConfigured(settings)) {
-      await updateSession(s.id, { intelligence: null }).catch(() => {});
+      await updateSession(s.id, {
+        intelligence: null,
+        intelligenceRetryCount: null,
+        intelligenceNextRetryAt: null,
+      }).catch(() => {});
       continue;
     }
+    // Respect the backoff window; skip sessions whose next attempt is in the future.
+    const nextAt = s.intelligenceNextRetryAt;
+    if (typeof nextAt === 'number' && nextAt > now) continue;
     await updateSession(s.id, { intelligenceError: null, intelligenceStartedAt: Date.now() });
     await runFinalizeIntelligence(s.id, settings).catch(() => {});
   }
@@ -106,6 +133,10 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
   let summary: SessionSummary | undefined;
   let intelligence: 'pending' | 'needs-permission' | null = null;
   let intelligenceError: string | null = null;
+  let retry: Pick<StoredSession, 'intelligenceRetryCount' | 'intelligenceNextRetryAt'> = {
+    intelligenceRetryCount: null,
+    intelligenceNextRetryAt: null,
+  };
 
   if (llmConfigured(settings) && segments.length > 0) {
     if (!(await llmOriginGranted(settings))) {
@@ -137,7 +168,9 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
         return out;
       };
       try {
-        summary = await summarizeMeeting(complete, forLlm, {
+        // Long meetings use map-reduce so nothing is silently dropped by the
+        // 24k-char clip; short ones keep the single-pass call.
+        summary = await summarizeMeetingLong(complete, forLlm, {
           guidance: settings.summaryPrompt,
           model: settings.llmModel.trim() || undefined,
         });
@@ -146,6 +179,7 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
         // Keep accumulated cost. Retry later.
         intelligence = 'pending';
         intelligenceError = humanError(e);
+        retry = retryPatch(existing);
       }
     }
   }
@@ -154,6 +188,7 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
     costUsd: costUsd === undefined ? existing?.costUsd ?? null : costUsd,
     intelligence,
     intelligenceError,
+    ...retry,
     ...(summary ? { summary, summaryMarkdown: summaryToMarkdown(summary) } : {}),
   });
 }

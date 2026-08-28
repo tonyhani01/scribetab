@@ -56,6 +56,10 @@ export default defineConfig({
         suggested_key: { default: 'Alt+Shift+T' },
         description: 'Open the transcript side panel',
       },
+      'add-highlight': {
+        suggested_key: { default: 'Alt+Shift+H' },
+        description: 'Highlight this moment in the transcript',
+      },
     },
     // Granted per-origin from the options page (chrome.permissions.request)
     // for exactly the STT endpoint the user configures — cloud or localhost.

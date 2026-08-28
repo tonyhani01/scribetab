@@ -80,6 +80,56 @@ test('options saves a setting', async () => {
   }
 });
 
+test('options persists the audio retention choice', async () => {
+  const { context, extensionId, worker, userDataDir } = await launchExtension();
+  try {
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/options.html`);
+    await page.getByTestId('retention-days').selectOption('30');
+    await page.getByTestId('save-settings').click();
+    await expect(page.getByTestId('save-status')).toContainText('Saved');
+    const stored = await worker.evaluate(async () => {
+      const v = await chrome.storage.local.get('settings');
+      return (v.settings as { retentionDays?: number } | undefined)?.retentionDays;
+    });
+    expect(stored).toBe(30);
+  } finally {
+    await context.close();
+    await fs.rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('popup shows first-run transcription onboarding', async () => {
+  const { context, extensionId, worker, userDataDir } = await launchExtension();
+  try {
+    await worker.evaluate(async () => {
+      await chrome.storage.local.set({ settings: { providerId: '' }, captureState: 'idle' });
+    });
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+    await expect(page.getByTestId('popup-onboarding')).toContainText('No transcription provider yet — set one up to get live transcripts.');
+    await expect(page.getByTestId('popup-open-options')).toBeVisible();
+  } finally {
+    await context.close();
+    await fs.rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('popup displays a seeded recording elapsed timer', async () => {
+  const { context, extensionId, worker, userDataDir } = await launchExtension();
+  try {
+    await worker.evaluate(async () => {
+      await chrome.storage.local.set({ captureState: 'recording', audioStartedAtMs: Date.now() - 65_000 });
+    });
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+    await expect(page.getByTestId('elapsed-time')).toHaveText(/^01:0\d$/);
+  } finally {
+    await context.close();
+    await fs.rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test('side panel shows the empty live state', async () => {
   const { context, extensionId, userDataDir } = await launchExtension();
   try {
@@ -87,6 +137,8 @@ test('side panel shows the empty live state', async () => {
     await page.goto(`chrome-extension://${extensionId}/sidepanel.html`);
     await expect(page.getByTestId('sidepanel-root')).toBeVisible();
     await expect(page.getByTestId('live-empty')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Start recording' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Highlight' })).toBeDisabled();
   } finally {
     await context.close();
     await fs.rm(userDataDir, { recursive: true, force: true });

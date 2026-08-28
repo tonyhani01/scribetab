@@ -1,5 +1,6 @@
 {
   "name": "scribetab",
+  "version": "1.1.0",
   "private": true,
   "license": "GPL-3.0-only",
   "packageManager": "pnpm@9.15.0",

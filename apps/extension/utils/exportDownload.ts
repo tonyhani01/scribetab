@@ -11,11 +11,22 @@ import {
 
 export type ExportFormat = 'md' | 'json' | 'srt' | 'vtt' | 'notebooklm';
 
-export function extrasFromSession(session: MeetingSession & ExportExtras): ExportExtras {
+export function extrasFromSession(
+  session: MeetingSession & ExportExtras,
+  override?: ExportExtras,
+): ExportExtras {
   const extras: ExportExtras = {};
   if (session.summaryMarkdown !== undefined) extras.summaryMarkdown = session.summaryMarkdown;
   if (session.summary !== undefined) extras.summary = session.summary;
   if (session.costUsd !== undefined) extras.costUsd = session.costUsd; // includes null → n/a
+  if (session.highlights?.length) extras.highlights = [...session.highlights];
+  if (session.speakerNames !== undefined) extras.speakerNames = { ...session.speakerNames };
+  if (override) {
+    Object.assign(extras, override);
+    if (session.highlights?.length || override.highlights?.length) {
+      extras.highlights = [...(session.highlights ?? []), ...(override.highlights ?? [])];
+    }
+  }
   return extras;
 }
 
@@ -41,10 +52,11 @@ export function exportBody(
   format: ExportFormat,
   extras?: ExportExtras,
 ): string {
-  if (format === 'md') return exportMarkdown(session, segments, extras);
-  if (format === 'json') return exportJson(session, segments, extras);
+  const merged = extrasFromSession(session as MeetingSession & ExportExtras, extras);
+  if (format === 'md') return exportMarkdown(session, segments, merged);
+  if (format === 'json') return exportJson(session, segments, merged);
   if (format === 'srt') return exportSrt(session, segments);
-  if (format === 'notebooklm') return exportNotebookLm(session, segments, extras);
+  if (format === 'notebooklm') return exportNotebookLm(session, segments, merged);
   return exportVtt(session, segments);
 }
 
@@ -52,8 +64,9 @@ export async function downloadExport(
   session: MeetingSession & ExportExtras,
   segments: TranscriptSegment[],
   format: ExportFormat,
+  extras?: ExportExtras,
 ): Promise<void> {
-  const body = exportBody(session, segments, format, extrasFromSession(session));
+  const body = exportBody(session, segments, format, extras);
   const blob = new Blob([body], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   try {

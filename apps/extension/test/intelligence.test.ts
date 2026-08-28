@@ -3,6 +3,7 @@ import { redactSegments } from '@scribetab/shared';
 import { closeDb } from '../utils/db';
 import {
   createDeltaEmitter,
+  markIntelligencePending,
   retryPendingIntelligence,
   runFinalizeIntelligence,
   scheduleFinalizeIntelligence,
@@ -64,6 +65,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   await closeDb();
   await deleteDb();
@@ -397,6 +399,81 @@ describe('scheduleFinalizeIntelligence', () => {
 });
 
 describe('retryPendingIntelligence', () => {
+  it('schedules the initial failure at one minute and progresses through the durable backoff', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-08-28T00:00:00.000Z'));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('nope', { status: 500 })));
+    const llm = settings({ llmProviderId: 'openai', llmApiKey: 'sk-x' });
+    stubChrome({ settings: llm });
+
+    await runFinalizeIntelligence('s1', llm);
+    let row = await getSession('s1');
+    expect(row?.intelligenceRetryCount).toBe(1);
+    expect(row?.intelligenceNextRetryAt).toBe(Date.now() + 60_000);
+
+    vi.setSystemTime(row!.intelligenceNextRetryAt!);
+    await retryPendingIntelligence();
+    row = await getSession('s1');
+    expect(row?.intelligenceRetryCount).toBe(2);
+    expect(row?.intelligenceNextRetryAt).toBe(Date.now() + 5 * 60_000);
+
+    vi.setSystemTime(row!.intelligenceNextRetryAt!);
+    await retryPendingIntelligence();
+    row = await getSession('s1');
+    expect(row?.intelligenceRetryCount).toBe(3);
+    expect(row?.intelligenceNextRetryAt).toBe(Date.now() + 25 * 60_000);
+
+    vi.setSystemTime(row!.intelligenceNextRetryAt!);
+    await retryPendingIntelligence();
+    row = await getSession('s1');
+    expect(row?.intelligenceRetryCount).toBe(4);
+    expect(row?.intelligenceNextRetryAt).toBe(Date.now() + 60 * 60_000);
+
+    vi.setSystemTime(row!.intelligenceNextRetryAt!);
+    await retryPendingIntelligence();
+    row = await getSession('s1');
+    expect(row?.intelligenceRetryCount).toBe(5);
+    expect(row?.intelligenceNextRetryAt).toBe(Date.now() + 60 * 60_000);
+    vi.useRealTimers();
+  });
+
+  it('skips a pending session whose next retry timestamp is in the future', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-08-28T00:00:00.000Z'));
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    stubChrome({ settings: settings({ llmProviderId: 'openai', llmApiKey: 'sk-x' }) });
+    await updateSession('s1', {
+      intelligence: 'pending',
+      intelligenceRetryCount: 2,
+      intelligenceNextRetryAt: Date.now() + 60_000,
+    });
+    await retryPendingIntelligence();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await getSession('s1'))?.intelligenceRetryCount).toBe(2);
+    vi.useRealTimers();
+  });
+
+  it('clears retry metadata after success and manual regeneration starts at one', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-08-28T00:00:00.000Z'));
+    const llm = settings({ llmProviderId: 'openai', llmApiKey: 'sk-x' });
+    await updateSession('s1', {
+      intelligence: 'pending',
+      intelligenceRetryCount: 4,
+      intelligenceNextRetryAt: Date.now() + 60_000,
+    });
+    stubChat('Recovered.', '- none');
+    await markIntelligencePending('s1', llm);
+    expect((await getSession('s1'))?.intelligenceRetryCount).toBeNull();
+    await runFinalizeIntelligence('s1', llm);
+    let row = await getSession('s1');
+    expect(row?.intelligence).toBeNull();
+    expect(row?.intelligenceRetryCount).toBeNull();
+    expect(row?.intelligenceNextRetryAt).toBeNull();
+    vi.useRealTimers();
+  });
+
   it('regenerates summaries for pending sessions on boot', async () => {
     stubChat('Recovered.', '- none');
     stubChrome({

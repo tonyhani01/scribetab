@@ -1,5 +1,5 @@
 import { render } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { ConsentBanner } from '@/components/ConsentBanner';
 import type { Ack, CaptureState } from '@/utils/messages';
 import { assembleRecording } from '@/utils/assemble';
@@ -8,6 +8,8 @@ import { listSessions } from '@/utils/sessionStore';
 import { monthlySpend, type MonthlySpend } from '@/utils/costMeter';
 import { formatUsd } from '@scribetab/shared';
 import { humanError } from '@/utils/userError';
+import { getSettings } from '@/utils/settings';
+import { formatElapsedMs } from '@/utils/elapsed';
 import '@/assets/theme.css';
 
 function MicIcon() {
@@ -38,6 +40,10 @@ function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [capturable, setCapturable] = useState(true);
   const [spend, setSpend] = useState<MonthlySpend | null>(null);
+  const [audioStartedAtMs, setAudioStartedAtMs] = useState<number | undefined>(undefined);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [providerConfigured, setProviderConfigured] = useState<boolean | null>(null);
+  const audioStartedAtRef = useRef<number | undefined>(undefined);
 
   const refreshSpend = () => {
     void listSessions()
@@ -50,12 +56,18 @@ function App() {
       setCapturable(isCapturableUrl(tab?.url));
     });
     refreshSpend();
-    chrome.storage.local.get(['captureState', 'chunkCount', 'transcribedCount', 'transcriptionConfigured', 'sessionCaptionsOnly', 'lastError', 'captureNotice']).then((v) => {
+    void getSettings().then((settings) => setProviderConfigured(settings.providerId !== ''));
+    chrome.storage.local.get(['captureState', 'chunkCount', 'transcribedCount', 'transcriptionConfigured', 'sessionCaptionsOnly', 'lastError', 'captureNotice', 'audioStartedAtMs']).then((v) => {
       setState((v.captureState as CaptureState) ?? 'idle');
       setChunks((v.chunkCount as number) ?? 0);
       setTranscribed((v.transcribedCount as number) ?? 0);
       setTranscriptionOn(Boolean(v.transcriptionConfigured));
       setSessionCaptionsOnly(Boolean(v.sessionCaptionsOnly));
+      const started = typeof v.audioStartedAtMs === 'number' && Number.isFinite(v.audioStartedAtMs)
+        ? v.audioStartedAtMs
+        : undefined;
+      audioStartedAtRef.current = started;
+      setAudioStartedAtMs(started);
       if (typeof v.lastError === 'string' && v.lastError) setError(v.lastError);
       if (typeof v.captureNotice === 'string' && v.captureNotice) setNotice(v.captureNotice);
     });
@@ -69,6 +81,13 @@ function App() {
       if (c.transcribedCount) setTranscribed((c.transcribedCount.newValue as number) ?? 0);
       if (c.transcriptionConfigured) setTranscriptionOn(Boolean(c.transcriptionConfigured.newValue));
       if (c.sessionCaptionsOnly) setSessionCaptionsOnly(Boolean(c.sessionCaptionsOnly.newValue));
+      if (c.audioStartedAtMs) {
+        const started = typeof c.audioStartedAtMs.newValue === 'number' && Number.isFinite(c.audioStartedAtMs.newValue)
+          ? c.audioStartedAtMs.newValue
+          : undefined;
+        audioStartedAtRef.current = started;
+        setAudioStartedAtMs(started);
+      }
       if (c.lastError?.newValue) setError(String(c.lastError.newValue));
       if (c.captureNotice) {
         const n = c.captureNotice.newValue;
@@ -78,6 +97,24 @@ function App() {
     chrome.storage.onChanged.addListener(onChange);
     return () => chrome.storage.onChanged.removeListener(onChange);
   }, []);
+
+  useEffect(() => {
+    audioStartedAtRef.current = audioStartedAtMs;
+  }, [audioStartedAtMs]);
+
+  useEffect(() => {
+    if (state !== 'recording') {
+      setElapsedMs(0);
+      return;
+    }
+    const tick = () => {
+      const started = audioStartedAtRef.current;
+      setElapsedMs(typeof started === 'number' && Number.isFinite(started) ? Math.max(0, Date.now() - started) : 0);
+    };
+    tick();
+    const interval = window.setInterval(tick, 1000);
+    return () => window.clearInterval(interval);
+  }, [state]);
 
   const send = async (type: 'START_CAPTURE' | 'STOP_CAPTURE') => {
     setError(null);
@@ -119,6 +156,7 @@ function App() {
   const recording = state === 'recording' || state === 'starting' || state === 'stopping';
   const stopping = state === 'recording' || state === 'stopping';
   const showTranscribed = recording && transcriptionOn && !sessionCaptionsOnly;
+  const showOnboarding = providerConfigured === false && !(recording && sessionCaptionsOnly);
   return (
     <main data-testid="popup-root" style={{ width: 340, display: 'flex', flexDirection: 'column' }}>
       <header class="st-header">
@@ -164,6 +202,11 @@ function App() {
             Record
           </button>
         )}
+        {state === 'recording' && (
+          <div data-testid="elapsed-time" class="st-elapsed" aria-live="polite">
+            {formatElapsedMs(elapsedMs)}
+          </div>
+        )}
         <span class="st-status">
           {stopping
             ? 'Recording this tab'
@@ -185,6 +228,19 @@ function App() {
       )}
 
       <div class="st-body" style={{ paddingTop: 0 }}>
+        {showOnboarding && (
+          <div data-testid="popup-onboarding" class="st-banner st-banner--warn" role="status">
+            <p style={{ margin: '0 0 8px' }}>No transcription provider yet — set one up to get live transcripts.</p>
+            <button
+              type="button"
+              class="st-chip"
+              data-testid="popup-open-options"
+              onClick={() => void chrome.runtime.openOptionsPage()}
+            >
+              Set up provider
+            </button>
+          </div>
+        )}
         <ConsentBanner recording={recording} />
         <div class="st-row">
           <span>{showTranscribed ? 'Transcribed' : 'Saved chunks'}</span>

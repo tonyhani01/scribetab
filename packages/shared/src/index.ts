@@ -13,3 +13,5 @@ export * from './llm/index.js';
 export * from './redact.js';
 export * from './costs.js';
 export * from './summarize.js';
+export * from './speakers.js';
+export * from './retention.js';

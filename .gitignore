@@ -7,3 +7,8 @@ dist/
 playwright-report/
 test-results/
 blob-report/
+
+# Local audit artifacts and session handoffs (not part of the release)
+.hermes-handoff.md
+audit-shots/
+docs/audit-*.html

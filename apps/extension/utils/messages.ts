@@ -40,13 +40,22 @@ export type ToBackground =
     }
   | { target: 'background'; type: 'SYNC_ALL' }
   | { target: 'background'; type: 'REGENERATE_SUMMARY'; sessionId: string }
-  | { target: 'background'; type: 'EXPORT_ACTIONS'; sessionId: string; itemIds: string[] };
+  | { target: 'background'; type: 'EXPORT_ACTIONS'; sessionId: string; itemIds: string[] }
+  | { target: 'background'; type: 'ADD_HIGHLIGHT'; sessionId: string; label?: string }
+  | { target: 'background'; type: 'RENAME_SPEAKER'; sessionId: string; from: string; to: string }
+  | { target: 'background'; type: 'RENAME_SESSION'; sessionId: string; title: string };
 
 /** Broadcast to the Meet captions content script when tab capture starts/stops. */
 export type ToMeetCaptions = {
   target: 'meet-captions';
   type: 'CAPTURE_ACTIVE';
   active: boolean;
+};
+
+/** Consent reminder injected into the meeting tab while capture is active. */
+export type ToMeetConsent = {
+  target: 'meet-consent';
+  type: 'SHOW_CONSENT' | 'HIDE_CONSENT';
 };
 
 /** Messages handled by the offscreen document (from the service worker only). */
@@ -95,6 +104,11 @@ export type ToSidePanel =
       phase: 'summary' | 'actions';
       /** Accumulated text so far for this phase (not the increment). */
       text: string;
+    }
+  | {
+      target: 'sidepanel';
+      type: 'HIGHLIGHT_ADDED';
+      sessionId: string;
     };
 
 export interface Ack {

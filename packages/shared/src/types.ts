@@ -6,6 +6,8 @@ export interface MeetingSession {
   platform: 'meet' | 'teams' | 'zoom' | 'youtube' | 'other';
   tabUrl?: string;
   status: 'recording' | 'complete' | 'failed';
+  /** Manual speaker renames, original → display name. Extension-side convention. */
+  speakerNames?: Record<string, string>;
 }
 
 export interface TranscriptSegment {
@@ -16,6 +18,15 @@ export interface TranscriptSegment {
   text: string;
   speaker?: string;          // from caption fusion (Phase 6)
   source: 'audio' | 'captions';
+}
+
+/** A moment the user flagged mid-call (hotkey or side-panel button). */
+export interface HighlightMoment {
+  id: string;                // crypto.randomUUID()
+  sessionId: string;
+  startMs: number;           // session-relative
+  label?: string;            // optional short note typed later (≤ 200 chars)
+  createdAt: string;         // ISO 8601 wall clock
 }
 
 export interface TranscribeRequest {
