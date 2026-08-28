@@ -78,6 +78,7 @@ import { persistLastTranscriptionError } from '@/utils/transcriptionError';
 import { GENERIC_USER_ERROR, humanError } from '@/utils/userError';
 import { deleteChunksForSession, sessionHasChunks } from '@/utils/chunkStore';
 import { retentionCutoffMs, sessionsPastRetention } from '@scribetab/shared';
+import { PerSessionMutationQueue } from '@/utils/sessionMutationQueue';
 
 let creatingOffscreen: Promise<void> | null = null;
 let bootReady: Promise<void> = Promise.resolve();
@@ -88,6 +89,7 @@ let lastFusionMs = 0;
 let fusionTimer: ReturnType<typeof setTimeout> | null = null;
 let fusionQueuedSession: string | null = null;
 let segmentCountChain: Promise<void> = Promise.resolve();
+const segmentMutationQueue = new PerSessionMutationQueue();
 
 async function offscreenContexts(): Promise<chrome.runtime.ExtensionContext[]> {
   return chrome.runtime.getContexts({
@@ -175,23 +177,25 @@ async function applyFusion(sessionId: string, force = false): Promise<void> {
   }
 
   lastFusionMs = Date.now();
-  const segs = await getSegments(sessionId);
-  if (segs.length === 0) return;
-  const fused = fuseWithCaptions(segs, sessionId);
-  const session = await getSession(sessionId);
-  const named = applyStoredSpeakerNames(fused, session?.speakerNames);
-  const changed = named.filter((s, i) => s.speaker !== segs[i]?.speaker);
-  if (changed.length === 0) return;
-  const settings = await getSettings();
-  const stored = settings.redactAtRest
-    ? redactSegments(named, { extraTerms: settings.redactTerms })
-    : named;
-  await putSegments(stored);
-  notifySidePanel({
-    target: 'sidepanel',
-    type: 'SEGMENTS_UPDATED',
-    sessionId,
-    segments: stored,
+  await segmentMutationQueue.run(sessionId, async () => {
+    const segs = await getSegments(sessionId);
+    if (segs.length === 0) return;
+    const fused = fuseWithCaptions(segs, sessionId);
+    const session = await getSession(sessionId);
+    const named = applyStoredSpeakerNames(fused, session?.speakerNames);
+    const changed = named.filter((s, i) => s.speaker !== segs[i]?.speaker);
+    if (changed.length === 0) return;
+    const settings = await getSettings();
+    const stored = settings.redactAtRest
+      ? redactSegments(named, { extraTerms: settings.redactTerms })
+      : named;
+    await putSegments(stored);
+    notifySidePanel({
+      target: 'sidepanel',
+      type: 'SEGMENTS_UPDATED',
+      sessionId,
+      segments: stored,
+    });
   });
 }
 
@@ -205,20 +209,22 @@ async function applyCaptionEvent(
   if (!cue) return;
 
   if (captionsOnly) {
-    let segment: TranscriptSegment = captionCueToSegment(sessionId, cue, crypto.randomUUID());
-    const session = await getSession(sessionId);
-    segment = applyStoredSpeakerNames([segment], session?.speakerNames)[0]!;
-    const settings = await getSettings();
-    if (settings.redactAtRest) {
-      segment = redactSegment(segment, { extraTerms: settings.redactTerms });
-    }
-    await putSegments([segment]);
-    await syncSegmentCount(sessionId);
-    notifySidePanel({
-      target: 'sidepanel',
-      type: 'SEGMENTS_ADDED',
-      sessionId,
-      segments: [segment],
+    await segmentMutationQueue.run(sessionId, async () => {
+      let segment: TranscriptSegment = captionCueToSegment(sessionId, cue, crypto.randomUUID());
+      const session = await getSession(sessionId);
+      segment = applyStoredSpeakerNames([segment], session?.speakerNames)[0]!;
+      const settings = await getSettings();
+      if (settings.redactAtRest) {
+        segment = redactSegment(segment, { extraTerms: settings.redactTerms });
+      }
+      await putSegments([segment]);
+      await syncSegmentCount(sessionId);
+      notifySidePanel({
+        target: 'sidepanel',
+        type: 'SEGMENTS_ADDED',
+        sessionId,
+        segments: [segment],
+      });
     });
   } else {
     await applyFusion(sessionId);
@@ -764,34 +770,36 @@ export default defineBackground(() => {
           break;
         }
         case 'RENAME_SPEAKER': {
-          const session = await getSession(msg.sessionId);
-          if (!session) {
-            sendResponse({ ok: false, error: 'Session not found' });
-            break;
-          }
-          const from = msg.from.trim();
-          const to = msg.to.trim();
-          if (!from || !to) {
-            sendResponse({ ok: false, error: 'Speaker name cannot be empty' });
-            break;
-          }
-          // Rewrite stored segments so search, exports, and the LLM see the new name.
-          const segs = await getSegments(msg.sessionId);
-          const renamedState = renameStoredSpeaker(segs, session.speakerNames, from, to);
-          const renamed = renamedState.segments;
-          if (renamed.some((s, i) => s.speaker !== segs[i]?.speaker)) {
-            await putSegments(renamed);
-            notifySidePanel({
-              target: 'sidepanel',
-              type: 'SEGMENTS_UPDATED',
-              sessionId: msg.sessionId,
-              segments: renamed,
-            });
-          }
-          // Caption cues keep the raw Meet label; new persisted segments receive
-          // the alias map before they are broadcast or indexed.
-          await updateSession(msg.sessionId, { speakerNames: renamedState.speakerNames });
-          sendResponse({ ok: true });
+          const result = await segmentMutationQueue.run(msg.sessionId, async () => {
+            const session = await getSession(msg.sessionId);
+            if (!session) return { ok: false, error: 'Session not found' } satisfies Ack;
+            const from = msg.from.trim();
+            const to = msg.to.trim();
+            if (!from || !to) {
+              return { ok: false, error: 'Speaker name cannot be empty' } satisfies Ack;
+            }
+            // Rewrite stored segments so search, exports, and the LLM see the new name.
+            // The read and alias-map update are in the same session queue as fusion
+            // and captions-only writes, so an older in-flight write cannot restore
+            // the pre-rename speaker after this transaction completes.
+            const segs = await getSegments(msg.sessionId);
+            const renamedState = renameStoredSpeaker(segs, session.speakerNames, from, to);
+            const renamed = renamedState.segments;
+            if (renamed.some((s, i) => s.speaker !== segs[i]?.speaker)) {
+              await putSegments(renamed);
+              notifySidePanel({
+                target: 'sidepanel',
+                type: 'SEGMENTS_UPDATED',
+                sessionId: msg.sessionId,
+                segments: renamed,
+              });
+            }
+            // Caption cues keep the raw Meet label; new persisted segments receive
+            // the alias map before they are broadcast or indexed.
+            await updateSession(msg.sessionId, { speakerNames: renamedState.speakerNames });
+            return { ok: true } satisfies Ack;
+          });
+          sendResponse(result);
           break;
         }
         case 'RENAME_SESSION': {

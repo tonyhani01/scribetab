@@ -23,12 +23,14 @@ import { loadOpenSessionData } from '@/utils/openSessionData';
 import { canApplySessionRead, type SessionReadToken } from '@/utils/sessionReadGuard';
 import { mergeSegments } from '@/utils/segmentMerge';
 import { snippetAround, type SearchDoc } from '@/utils/search';
+import { LatestReloadCoordinator } from '@/utils/latestReload';
 import { SegmentList } from './SegmentList';
 import { SummaryView } from './SummaryView';
 
 // The cache intentionally lives outside the component so switching tabs or
 // remounting the panel does not reread completed transcripts.
 const searchCache = createIncrementalSearchCache(getSegments);
+const reloadCoordinator = new LatestReloadCoordinator();
 
 function durationLabel(session: StoredSession): string {
   if (session.status === 'recording') return 'recording';
@@ -72,8 +74,11 @@ export function LibraryView() {
   openIdRef.current = openId;
 
   const reload = async () => {
+    const generation = reloadCoordinator.begin();
     const list = await listSessions();
+    if (!reloadCoordinator.isCurrent(generation)) return undefined;
     const docs = await searchCache.sync(list);
+    if (!reloadCoordinator.isCurrent(generation)) return undefined;
     setSessions(list);
     setIndex(searchCache.createIndex());
     return docs;
