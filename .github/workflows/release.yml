@@ -1,0 +1,44 @@
+name: Release
+on:
+  push:
+    tags: ['v*.*.*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Check tag matches package version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(node -p "require('./apps/extension/package.json').version")
+          if [ "$TAG" != "$PKG" ]; then
+            echo "Tag v$TAG does not match extension version $PKG" >&2
+            exit 1
+          fi
+      - run: pnpm -r typecheck
+      - run: pnpm -r test
+      - run: pnpm build
+      - run: pnpm --filter @scribetab/extension zip
+      - name: Submit to Chrome Web Store
+        if: ${{ vars.CHROME_PUBLISH_ENABLED == 'true' }}
+        env:
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+        run: |
+          ZIP=$(ls apps/extension/.output/scribetab-*-chrome.zip)
+          pnpm --filter @scribetab/extension exec wxt submit --chrome-zip "../../$ZIP"
+      - name: Create GitHub release with zip
+        uses: softprops/action-gh-release@v2
+        with:
+          files: apps/extension/.output/scribetab-*-chrome.zip
+          generate_release_notes: true
