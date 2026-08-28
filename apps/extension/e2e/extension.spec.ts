@@ -137,6 +137,8 @@ test('side panel shows the empty live state', async () => {
     await page.goto(`chrome-extension://${extensionId}/sidepanel.html`);
     await expect(page.getByTestId('sidepanel-root')).toBeVisible();
     await expect(page.getByTestId('live-empty')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Start recording' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Highlight' })).toBeDisabled();
   } finally {
     await context.close();
     await fs.rm(userDataDir, { recursive: true, force: true });

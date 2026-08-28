@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MeetingSession } from '@scribetab/shared';
-import { extrasFromSession, exportFilename, sessionSlug } from '../utils/exportDownload';
+import { exportBody, extrasFromSession, exportFilename, sessionSlug } from '../utils/exportDownload';
 
 const session: MeetingSession = {
   id: 's',
@@ -35,6 +35,39 @@ describe('extrasFromSession', () => {
       summaryMarkdown: '## Summary',
       summary,
     });
+  });
+
+  it('merges separately supplied highlights into session export extras', () => {
+    expect(
+      extrasFromSession(
+        {
+          ...session,
+          summaryMarkdown: '## Summary',
+          highlights: [{ startMs: 900, label: 'ship it' }],
+        },
+        { highlights: [{ startMs: 100, text: 'decision context' }] },
+      ),
+    ).toEqual({
+      summaryMarkdown: '## Summary',
+      highlights: [
+        { startMs: 900, label: 'ship it' },
+        { startMs: 100, text: 'decision context' },
+      ],
+    });
+  });
+});
+
+describe('exportBody', () => {
+  it('preserves session extras and adds highlight extras for markdown', () => {
+    const body = exportBody(
+      { ...session, summaryMarkdown: '## Summary' } as typeof session & { summaryMarkdown: string },
+      [],
+      'md',
+      { highlights: [{ startMs: 250, text: 'nearby transcript' }] },
+    );
+    expect(body).toContain('## Summary');
+    expect(body).toContain('00:00:00');
+    expect(body).toContain('nearby transcript');
   });
 });
 
