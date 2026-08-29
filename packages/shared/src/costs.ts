@@ -9,10 +9,19 @@
  * $0.15 / $0.60 per 1M input/output tokens.
  *
  * Rates are keyed by (provider, model). Unknown models return undefined so
- * the UI can show "n/a" instead of a wrong-by-16x guess. OpenRouter and
- * Google Gemini STT are left unlisted: OpenRouter pricing units mix per-second
- * and per-minute across whisper-class ids, and Gemini 3.5 Transcribe is
- * public preview.
+ * the UI can show "n/a" instead of a wrong-by-16x guess.
+ *
+ * ElevenLabs scribe_v2: $0.22/hr list (https://elevenlabs.io/pricing/api) =
+ * $0.003666667/min base rate. Keyterm surcharges are excluded because
+ * ScribeTab never sends keyterms.
+ * OpenRouter openai/whisper-large-v3: $0.000008/s = $0.00048/min (OpenRouter
+ * model listing, 2026-08-29). openai/whisper-large-v3-turbo is left unknown
+ * rather than guessed: OpenRouter routes it to several backends with
+ * different per-second rates.
+ * Google gemini-3.5-transcribe is left n/a: Gemini bills per audio-input
+ * token plus output tokens, so a flat per-minute number would misrepresent
+ * the meter's "list price × minutes" semantics; the ~$0.005/min figure is a
+ * blended approximation, not a list price.
  */
 
 const STT_DEFAULT_MODEL: Readonly<Record<string, string>> = Object.freeze({
@@ -20,6 +29,8 @@ const STT_DEFAULT_MODEL: Readonly<Record<string, string>> = Object.freeze({
   groq: 'whisper-large-v3-turbo',
   deepgram: 'nova-2',
   mistral: 'voxtral-mini-latest',
+  elevenlabs: 'scribe_v2',
+  openrouter: 'openai/whisper-large-v3',
 });
 
 const STT_USD_PER_MINUTE: Readonly<Record<string, number>> = Object.freeze({
@@ -27,6 +38,8 @@ const STT_USD_PER_MINUTE: Readonly<Record<string, number>> = Object.freeze({
   'groq:whisper-large-v3-turbo': 0.00067,
   'deepgram:nova-2': 0.0043,
   'mistral:voxtral-mini-latest': 0.006,
+  'elevenlabs:scribe_v2': 0.22 / 60,
+  'openrouter:openai/whisper-large-v3': 0.00048,
 });
 
 const LLM_DEFAULT_MODEL: Readonly<Record<string, string>> = Object.freeze({

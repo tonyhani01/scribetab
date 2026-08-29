@@ -11,6 +11,7 @@ import { humanError } from '@/utils/userError';
 import { getSettings } from '@/utils/settings';
 import { formatElapsedMs } from '@/utils/elapsed';
 import '@/assets/theme.css';
+import { openSettingsWindow } from '@/utils/settingsWindow';
 
 function MicIcon() {
   return (
@@ -171,7 +172,7 @@ function App() {
           type="button"
           class="st-chip"
           aria-label="Settings"
-          onClick={() => void chrome.runtime.openOptionsPage()}
+          onClick={() => void openSettingsWindow()}
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="3" />
@@ -235,7 +236,7 @@ function App() {
               type="button"
               class="st-chip"
               data-testid="popup-open-options"
-              onClick={() => void chrome.runtime.openOptionsPage()}
+              onClick={() => void openSettingsWindow()}
             >
               Set up provider
             </button>

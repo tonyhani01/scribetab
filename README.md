@@ -66,6 +66,7 @@ and are sent only to the origin you grant.
 | STT | openai / groq / mistral | OpenAI-compatible `audio/transcriptions` |
 | STT | openrouter | OpenAI-compatible `audio/transcriptions`; default `openai/whisper-large-v3` |
 | STT | google | Gemini 3.5 Transcribe (`gemini-3.5-transcribe`, public preview) via Interactions API |
+| STT | elevenlabs | Scribe v2 (`scribe_v2`) via `POST /v1/speech-to-text`, diarized word timestamps |
 | STT | deepgram | `POST /v1/listen` |
 | STT | custom | Set base URL, e.g. `http://localhost:8080/v1` |
 | LLM | openai | Summaries on finalize |

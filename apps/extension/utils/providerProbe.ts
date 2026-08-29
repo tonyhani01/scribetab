@@ -74,6 +74,11 @@ export function sttProbeRequest(
     if (apiKey) headers['x-goog-api-key'] = apiKey;
     return { url: join(endpoint, '/models?pageSize=1'), headers };
   }
+  if (providerId === 'elevenlabs') {
+    // GET /v1/user is a cheap authenticated read; no audio is sent.
+    if (apiKey) headers['xi-api-key'] = apiKey;
+    return { url: join(endpoint, '/user'), headers };
+  }
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
   // OpenRouter GET /models is public (200 for any key); /key is authenticated.
   if (providerId === 'openrouter') {

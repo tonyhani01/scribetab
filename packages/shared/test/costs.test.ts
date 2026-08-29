@@ -22,8 +22,21 @@ describe('sttCostUsd', () => {
   it('is undefined for unknown providers or models (never a wrong guess)', () => {
     expect(sttCostUsd('nope', 120_000)).toBeUndefined();
     expect(sttCostUsd('openai', 60_000, 'gpt-4o-transcribe')).toBeUndefined();
-    expect(sttCostUsd('openrouter', 60_000, 'openai/whisper-large-v3')).toBeUndefined();
+    // Turbo pricing varies by OpenRouter backend; Gemini bills per token, not per minute.
+    expect(sttCostUsd('openrouter', 60_000, 'openai/whisper-large-v3-turbo')).toBeUndefined();
     expect(sttCostUsd('google', 60_000, 'gemini-3.5-transcribe')).toBeUndefined();
+    expect(sttCostUsd('google', 60_000)).toBeUndefined();
+  });
+
+  it('bills ElevenLabs scribe_v2 at $0.22/hour (no keyterm surcharge)', () => {
+    expect(sttCostUsd('elevenlabs', 3_600_000)).toBe(0.22);
+    expect(sttCostUsd('elevenlabs', 60_000, 'scribe_v2')).toBe(0.003667);
+    expect(sttCostUsd('elevenlabs', 60_000, 'scribe_v1')).toBeUndefined();
+  });
+
+  it('bills OpenRouter whisper-large-v3 at $0.000008/second', () => {
+    expect(sttCostUsd('openrouter', 60_000)).toBe(0.00048);
+    expect(sttCostUsd('openrouter', 60_000, 'openai/whisper-large-v3')).toBe(0.00048);
   });
 
   it('is zero for non-positive duration even with an unknown model', () => {

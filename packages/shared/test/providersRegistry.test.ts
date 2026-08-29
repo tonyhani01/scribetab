@@ -10,7 +10,7 @@ import {
 describe('provider registry', () => {
   it('exposes the registered provider ids', () => {
     expect([...TRANSCRIPTION_PROVIDER_IDS].sort()).toEqual(
-      ['custom', 'deepgram', 'google', 'groq', 'mistral', 'openai', 'openrouter'],
+      ['custom', 'deepgram', 'elevenlabs', 'google', 'groq', 'mistral', 'openai', 'openrouter'],
     );
   });
 
@@ -25,6 +25,8 @@ describe('provider registry', () => {
   it('guards provider ids from the registry list', () => {
     expect(isTranscriptionProviderId('openrouter')).toBe(true);
     expect(isTranscriptionProviderId('google')).toBe(true);
+    expect(isTranscriptionProviderId('elevenlabs')).toBe(true);
+    expect(getTranscriptionProvider('elevenlabs').id).toBe('elevenlabs');
     expect(isTranscriptionProviderId('')).toBe(false);
     expect(isTranscriptionProviderId('nope')).toBe(false);
   });
@@ -45,6 +47,7 @@ describe('transcriptionEndpoint', () => {
     expect(transcriptionEndpoint('openrouter')).toBe('https://openrouter.ai/api/v1');
     expect(transcriptionEndpoint('google')).toBe(GOOGLE_API_BASE);
     expect(GOOGLE_API_BASE).toBe('https://generativelanguage.googleapis.com/v1beta');
+    expect(transcriptionEndpoint('elevenlabs')).toBe('https://api.elevenlabs.io/v1');
   });
 
   it('ignores a stale baseUrl for cloud providers so keys cannot leak', () => {
@@ -56,6 +59,9 @@ describe('transcriptionEndpoint', () => {
     );
     expect(transcriptionEndpoint('google', 'http://evil.example/v1')).toBe(
       'https://generativelanguage.googleapis.com/v1beta',
+    );
+    expect(transcriptionEndpoint('elevenlabs', 'http://evil.example/v1')).toBe(
+      'https://api.elevenlabs.io/v1',
     );
   });
 

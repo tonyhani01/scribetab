@@ -42,7 +42,7 @@ export interface TranscribeResult {
 }
 
 export interface TranscriptionProvider {
-  readonly id: string;       // 'openai' | 'groq' | 'deepgram' | 'mistral' | 'openrouter' | 'google' | 'custom'
+  readonly id: string;       // 'openai' | 'groq' | 'deepgram' | 'mistral' | 'openrouter' | 'google' | 'elevenlabs' | 'custom'
   transcribe(req: TranscribeRequest, cfg: ProviderConfig): Promise<TranscribeResult>;
 }
 

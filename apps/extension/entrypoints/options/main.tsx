@@ -8,8 +8,10 @@ import {
   isLlmProviderId,
   isTranscriptionProviderId,
   llmEndpoint,
+  isCuratedSttModel,
   originPattern,
   retentionLabel,
+  sttModelCatalog,
   transcriptionEndpoint,
 } from '@scribetab/shared';
 import {
@@ -35,19 +37,13 @@ import { formatUsd } from '@scribetab/shared';
 import { wipeAllData } from '@/utils/wipe';
 import '@/assets/theme.css';
 
-const MODEL_PLACEHOLDERS: Record<string, string> = {
-  openai: 'whisper-1',
-  groq: 'whisper-large-v3-turbo',
-  deepgram: 'nova-2',
-  mistral: 'voxtral-mini-latest',
-  openrouter: 'openai/whisper-large-v3',
-  google: 'gemini-3.5-transcribe',
-  custom: 'whisper-1',
-};
+/** Sentinel option value for the advanced free-text model path. */
+const CUSTOM_MODEL_OPTION = '__custom__';
 
 const STT_PROVIDER_LABELS: Record<string, string> = {
   openrouter: 'OpenRouter',
   google: 'Google Gemini',
+  elevenlabs: 'ElevenLabs Scribe',
   custom: 'custom (OpenAI-compatible / local server)',
 };
 
@@ -70,6 +66,8 @@ function App() {
   const [probing, setProbing] = useState<'stt' | 'llm' | null>(null);
   const [spend, setSpend] = useState<MonthlySpend | null>(null);
   const [wiping, setWiping] = useState(false);
+  // Advanced model entry stays open once chosen, even while the field is blank.
+  const [customModelOpen, setCustomModelOpen] = useState(false);
 
   useEffect(() => {
     void getSettings().then(setS);
@@ -94,7 +92,9 @@ function App() {
   const languageLabel =
     s.providerId === 'google'
       ? 'Language hint (blank = auto, e.g. en-US, sv-SE, ar-EG)'
-      : 'Language hint (blank = auto, e.g. en, ar)';
+      : s.providerId === 'elevenlabs'
+        ? 'Language hint (blank = auto-detect, e.g. en, ar — region tags like ar-EG are reduced to ar)'
+        : 'Language hint (blank = auto, e.g. en, ar)';
 
   const save = async () => {
     setStatus(null);
@@ -284,6 +284,7 @@ function App() {
           value={s.providerId}
           onChange={(e) => {
             const v = (e.currentTarget as HTMLSelectElement).value;
+            setCustomModelOpen(false);
             setS((prev) => withSttProvider(prev, isTranscriptionProviderId(v) ? v : ''));
           }}
         >
@@ -320,14 +321,52 @@ function App() {
             />
             {sttKeyMissing && <p style={err}>{sttKeyLabel}</p>}
 
-            <label style={row} for="model">Model (blank = default)</label>
-            <input
-              id="model"
-              class="st-input"
-              placeholder={MODEL_PLACEHOLDERS[s.providerId] ?? ''}
-              value={s.model}
-              onInput={(e) => setS((prev) => withSttField(prev, 'model', (e.currentTarget as HTMLInputElement).value))}
-            />
+            {(() => {
+              const catalog = sttModelCatalog(s.providerId);
+              const curated = isCuratedSttModel(s.providerId, s.model);
+              const showCustom = catalog.allowCustom && (customModelOpen || !curated);
+              const defaultId = catalog.choices[0]?.id ?? '';
+              const selectValue = showCustom ? CUSTOM_MODEL_OPTION : s.model.trim() || defaultId;
+              return (
+                <>
+                  <label style={row} for="model">Model</label>
+                  <select
+                    id="model"
+                    data-testid="stt-model"
+                    class="st-select"
+                    value={selectValue}
+                    onChange={(e) => {
+                      const v = (e.currentTarget as HTMLSelectElement).value;
+                      if (v === CUSTOM_MODEL_OPTION) {
+                        setCustomModelOpen(true);
+                        return;
+                      }
+                      setCustomModelOpen(false);
+                      setS((prev) => withSttField(prev, 'model', v));
+                    }}
+                  >
+                    {catalog.choices.map((c) => (
+                      <option value={c.id}>{c.label}</option>
+                    ))}
+                    {catalog.allowCustom && <option value={CUSTOM_MODEL_OPTION}>Custom model id…</option>}
+                  </select>
+                  {showCustom && (
+                    <input
+                      id="modelCustom"
+                      data-testid="stt-model-custom"
+                      class="st-input"
+                      style={{ marginTop: 6 }}
+                      placeholder={defaultId}
+                      value={s.model}
+                      onInput={(e) =>
+                        setS((prev) => withSttField(prev, 'model', (e.currentTarget as HTMLInputElement).value))
+                      }
+                    />
+                  )}
+                  {catalog.hint && <p style={{ ...hint, margin: '4px 0 0' }}>{catalog.hint}</p>}
+                </>
+              );
+            })()}
 
             <label style={row} for="language">{languageLabel}</label>
             <input

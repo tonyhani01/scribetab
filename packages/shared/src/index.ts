@@ -15,3 +15,4 @@ export * from './costs.js';
 export * from './summarize.js';
 export * from './speakers.js';
 export * from './retention.js';
+export * from './sttModels.js';

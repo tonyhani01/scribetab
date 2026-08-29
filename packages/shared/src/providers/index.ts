@@ -1,6 +1,7 @@
 import type { TranscriptionProvider } from '../types.js';
 import { customProvider } from './custom.js';
 import { deepgramProvider } from './deepgram.js';
+import { ELEVENLABS_API_BASE, elevenlabsProvider } from './elevenlabs.js';
 import { GOOGLE_API_BASE, googleProvider } from './google.js';
 import { groqProvider } from './groq.js';
 import { mistralProvider } from './mistral.js';
@@ -14,8 +15,18 @@ export const TRANSCRIPTION_PROVIDER_IDS: readonly [
   'mistral',
   'openrouter',
   'google',
+  'elevenlabs',
   'custom',
-] = Object.freeze(['openai', 'groq', 'deepgram', 'mistral', 'openrouter', 'google', 'custom']);
+] = Object.freeze([
+  'openai',
+  'groq',
+  'deepgram',
+  'mistral',
+  'openrouter',
+  'google',
+  'elevenlabs',
+  'custom',
+]);
 
 export type TranscriptionProviderId = (typeof TRANSCRIPTION_PROVIDER_IDS)[number];
 
@@ -30,6 +41,7 @@ const providers: Record<TranscriptionProviderId, TranscriptionProvider> = {
   mistral: mistralProvider,
   openrouter: openrouterProvider,
   google: googleProvider,
+  elevenlabs: elevenlabsProvider,
   custom: customProvider,
 };
 
@@ -46,6 +58,7 @@ const defaultBaseUrls: Record<TranscriptionProviderId, string | undefined> = {
   mistral: 'https://api.mistral.ai/v1',
   openrouter: 'https://openrouter.ai/api/v1',
   google: GOOGLE_API_BASE,
+  elevenlabs: ELEVENLABS_API_BASE,
   custom: undefined,
 };
 
@@ -61,9 +74,11 @@ export function transcriptionEndpoint(providerId: string, baseUrl?: string): str
 }
 
 export {
+  ELEVENLABS_API_BASE,
   GOOGLE_API_BASE,
   customProvider,
   deepgramProvider,
+  elevenlabsProvider,
   googleProvider,
   groqProvider,
   mistralProvider,
@@ -71,3 +86,4 @@ export {
   openrouterProvider,
 };
 export { openAiCompatible } from './openaiCompatible.js';
+export { ELEVENLABS_DEFAULT_MODEL, elevenLabsLanguageCode } from './elevenlabs.js';

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { isCuratedSttModel, sttModelCatalog } from '@scribetab/shared';
 import { sttProbeRequest } from '../utils/providerProbe';
 import {
   DEFAULT_SETTINGS,
@@ -98,5 +99,41 @@ describe('per-provider LLM credentials', () => {
     expect(s.llmModel).toBe('');
     expect(s.llmApiKeys.openai).toBe('sk-llm');
     expect(s.llmModels.openai).toBe('gpt-4o-mini');
+  });
+});
+
+describe('provider-specific model choices', () => {
+  it("restores each provider's saved model choice when switching back", () => {
+    let s = withSttProvider(DEFAULT_SETTINGS, 'openrouter');
+    s = withSttField(s, 'model', 'openai/whisper-large-v3-turbo');
+    s = withSttProvider(s, 'elevenlabs');
+    expect(s.model).toBe('');
+    s = withSttField(s, 'model', 'scribe_v2');
+    s = withSttProvider(s, 'google');
+    s = withSttField(s, 'model', 'gemini-3.5-transcribe');
+
+    s = withSttProvider(s, 'openrouter');
+    expect(s.model).toBe('openai/whisper-large-v3-turbo');
+    s = withSttProvider(s, 'elevenlabs');
+    expect(s.model).toBe('scribe_v2');
+    expect(s.models).toEqual({
+      openrouter: 'openai/whisper-large-v3-turbo',
+      elevenlabs: 'scribe_v2',
+      google: 'gemini-3.5-transcribe',
+    });
+  });
+
+  it('keeps a previously saved free-text model and routes it to the custom path', () => {
+    const s = normalizeSettings({ providerId: 'openrouter', models: { openrouter: 'google/chirp-3' } });
+    expect(s.model).toBe('google/chirp-3');
+    expect(isCuratedSttModel('openrouter', s.model)).toBe(false);
+    expect(sttModelCatalog('openrouter').allowCustom).toBe(true);
+  });
+
+  it('accepts elevenlabs as a stored provider id', () => {
+    const s = normalizeSettings({ providerId: 'elevenlabs', apiKey: 'xi', model: 'scribe_v2' });
+    expect(s.providerId).toBe('elevenlabs');
+    expect(s.apiKeys.elevenlabs).toBe('xi');
+    expect(s.models.elevenlabs).toBe('scribe_v2');
   });
 });

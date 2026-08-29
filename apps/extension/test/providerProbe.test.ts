@@ -55,6 +55,14 @@ describe('probe request URLs', () => {
     expect(req.headers['x-goog-api-key']).toBe('g-key');
     expect(req.headers.Authorization).toBeUndefined();
   });
+
+  it('probes ElevenLabs /v1/user with xi-api-key on the pinned host', () => {
+    const req = sttProbeRequest('elevenlabs', 'xi-key', 'http://evil.example/v1');
+    expect(req.url).toBe('https://api.elevenlabs.io/v1/user');
+    expect(req.url).not.toMatch(/xi-key/);
+    expect(req.headers['xi-api-key']).toBe('xi-key');
+    expect(req.headers.Authorization).toBeUndefined();
+  });
 });
 
 describe('probeTranscription', () => {
@@ -143,6 +151,27 @@ describe('probeTranscription', () => {
     });
     expect(res.ok).toBe(false);
     expect(res.message).toMatch(/404/);
+  });
+
+  it('requests only the ElevenLabs origin and sends no audio', async () => {
+    const fetchImpl = vi.fn(async () => new Response('{}', { status: 200 }));
+    const origins: string[] = [];
+    const res = await probeTranscription({
+      providerId: 'elevenlabs',
+      apiKey: 'xi-key',
+      baseUrl: '',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      ensureOrigin: async (o) => {
+        origins.push(o);
+        return true;
+      },
+    });
+    expect(res.ok).toBe(true);
+    expect(origins).toEqual(['https://api.elevenlabs.io/*']);
+    const [url, init] = fetchImpl.mock.calls[0]! as unknown as [string, RequestInit];
+    expect(url).toBe('https://api.elevenlabs.io/v1/user');
+    expect(init.method).toBe('GET');
+    expect(init.body).toBeUndefined();
   });
 
   it('stops when host permission is declined', async () => {

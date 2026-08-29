@@ -9,6 +9,7 @@ import { addPending, clearPending, resolveBelow, resolvePending, type PendingChu
 import { canApplySessionRead, type SessionReadToken } from '@/utils/sessionReadGuard';
 import { mergeSegments } from '@/utils/segmentMerge';
 import { SegmentList } from './SegmentList';
+import { openSettingsWindow } from '@/utils/settingsWindow';
 
 export function LiveView() {
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
@@ -210,13 +211,13 @@ export function LiveView() {
       {!configured && issue === 'missing-permission' && (
         <p data-testid="live-permission" class="st-banner st-banner--warn">
           Host permission for the transcription provider is missing — recording audio only.{' '}
-          <a href="#" onClick={(e) => { e.preventDefault(); void chrome.runtime.openOptionsPage(); }}>Open settings</a>
+          <a href="#" onClick={(e) => { e.preventDefault(); void openSettingsWindow(); }}>Open settings</a>
         </p>
       )}
       {!configured && issue !== 'missing-permission' && (
         <p data-testid="live-unconfigured" class="st-banner st-banner--warn">
           No transcription provider configured — recording audio only.{' '}
-          <a href="#" onClick={(e) => { e.preventDefault(); void chrome.runtime.openOptionsPage(); }}>Open settings</a>
+          <a href="#" onClick={(e) => { e.preventDefault(); void openSettingsWindow(); }}>Open settings</a>
         </p>
       )}
       {lastTranscriptionError && (
