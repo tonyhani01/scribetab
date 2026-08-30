@@ -56,12 +56,19 @@ describe('probe request URLs', () => {
     expect(req.headers.Authorization).toBeUndefined();
   });
 
-  it('probes ElevenLabs /v1/user with xi-api-key on the pinned host', () => {
+  it('probes ElevenLabs with a file-less POST /v1/speech-to-text on the pinned host', () => {
+    // GET /v1/user needs the user_read permission, which scoped STT-only keys
+    // lack; probing the real endpoint (auth precedes validation) avoids false
+    // "key rejected" results. No file -> 422 for a good key, 401 for a bad one.
     const req = sttProbeRequest('elevenlabs', 'xi-key', 'http://evil.example/v1');
-    expect(req.url).toBe('https://api.elevenlabs.io/v1/user');
+    expect(req.url).toBe('https://api.elevenlabs.io/v1/speech-to-text');
     expect(req.url).not.toMatch(/xi-key/);
     expect(req.headers['xi-api-key']).toBe('xi-key');
     expect(req.headers.Authorization).toBeUndefined();
+    expect(req.method).toBe('POST');
+    expect(req.body).toBeInstanceOf(FormData);
+    expect((req.body as FormData).get('model_id')).toBe('scribe_v2');
+    expect((req.body as FormData).has('file')).toBe(false);
   });
 });
 
@@ -154,7 +161,7 @@ describe('probeTranscription', () => {
   });
 
   it('requests only the ElevenLabs origin and sends no audio', async () => {
-    const fetchImpl = vi.fn(async () => new Response('{}', { status: 200 }));
+    const fetchImpl = vi.fn(async () => new Response('{}', { status: 422 }));
     const origins: string[] = [];
     const res = await probeTranscription({
       providerId: 'elevenlabs',
@@ -167,11 +174,36 @@ describe('probeTranscription', () => {
       },
     });
     expect(res.ok).toBe(true);
+    expect(res.message).toBe('Connected.');
     expect(origins).toEqual(['https://api.elevenlabs.io/*']);
     const [url, init] = fetchImpl.mock.calls[0]! as unknown as [string, RequestInit];
-    expect(url).toBe('https://api.elevenlabs.io/v1/user');
-    expect(init.method).toBe('GET');
-    expect(init.body).toBeUndefined();
+    expect(url).toBe('https://api.elevenlabs.io/v1/speech-to-text');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeInstanceOf(FormData);
+    expect((init.body as FormData).has('file')).toBe(false);
+  });
+
+  it('still reports a rejected ElevenLabs key on 401', async () => {
+    const fetchImpl = vi.fn(async () => new Response('nope', { status: 401 }));
+    const res = await probeTranscription({
+      providerId: 'elevenlabs',
+      apiKey: 'xi-bad',
+      baseUrl: '',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.message).toMatch(/rejected/i);
+  });
+
+  it('does not treat 422 as connected for other cloud providers', async () => {
+    const fetchImpl = vi.fn(async () => new Response('nope', { status: 422 }));
+    const res = await probeTranscription({
+      providerId: 'openai',
+      apiKey: 'sk-test',
+      baseUrl: '',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(res.ok).toBe(false);
   });
 
   it('stops when host permission is declined', async () => {
