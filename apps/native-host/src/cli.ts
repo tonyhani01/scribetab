@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_EXTENSION_ID, HOST_NAME, STORE_EXTENSION_ID } from './constants.js';
 import {
+  CONFIG_KEYS,
   configPathHelp,
   getConfigValue,
   isConfigKey,
@@ -47,8 +48,7 @@ Meetings are written to ~/ScribeTab/meetings/<date>-<slug>/.
 Host config (Obsidian / Notion, all off by default):
 ${configPathHelp()}
 
-Keys: obsidianEnabled, obsidianVaultPath, notionEnabled,
-      notion.token, notion.parentPageId
+Keys: ${CONFIG_KEYS.join(', ')}
 
 Set notion.token from stdin (recommended, avoids argv exposure):
 
@@ -56,6 +56,14 @@ Set notion.token from stdin (recommended, avoids argv exposure):
 
 obsidianVaultPath must be an absolute path. Config writes are atomic
 (temp file + rename, mode 0600) but not locked against concurrent writers.
+
+automations is a JSON array of routing rules. Rules only redirect what an
+already-enabled integration writes — they never enable a disabled one:
+
+  scribetab-host config set automations '[{"titleContains":"Acme","destination":"obsidian","subfolder":"Clients/Acme"}]'
+
+An Obsidian subfolder is relative to <vault>/ScribeTab/ and is created if
+missing. See apps/native-host/README.md for the full schema.
 `;
 
 export function parseExtensionId(args: string[]): string | undefined {
@@ -161,7 +169,7 @@ export async function runConfigCli(
       return;
     }
     if (!isConfigKey(key)) {
-      throw new Error(`Unknown config key ${JSON.stringify(key)}. Valid: obsidianEnabled, obsidianVaultPath, notionEnabled, notion.token, notion.parentPageId`);
+      throw new Error(`Unknown config key ${JSON.stringify(key)}. Valid: ${CONFIG_KEYS.join(', ')}`);
     }
     io.stdout.write(`${getConfigValue(cfg, key)}\n`);
     return;
@@ -169,18 +177,14 @@ export async function runConfigCli(
   if (sub === 'set') {
     const key = args[1];
     if (!key || !isConfigKey(key)) {
-      throw new Error(
-        'Usage: scribetab-host config set <key> <value>\nKeys: obsidianEnabled, obsidianVaultPath, notionEnabled, notion.token, notion.parentPageId',
-      );
+      throw new Error(`Usage: scribetab-host config set <key> <value>\nKeys: ${CONFIG_KEYS.join(', ')}`);
     }
     if (args.length > 3) {
       throw new Error('config set takes a single value argument; quote it if it contains spaces');
     }
     let value = args[2];
     if (value === undefined) {
-      throw new Error(
-        'Usage: scribetab-host config set <key> <value>\nKeys: obsidianEnabled, obsidianVaultPath, notionEnabled, notion.token, notion.parentPageId',
-      );
+      throw new Error(`Usage: scribetab-host config set <key> <value>\nKeys: ${CONFIG_KEYS.join(', ')}`);
     }
     if (key === 'notion.token' && value === '-') {
       const stdin = io.stdin ?? process.stdin;
