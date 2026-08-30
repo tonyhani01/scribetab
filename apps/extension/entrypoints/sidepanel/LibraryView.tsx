@@ -24,7 +24,15 @@ import { canApplySessionRead, type SessionReadToken } from '@/utils/sessionReadG
 import { mergeSegments } from '@/utils/segmentMerge';
 import { snippetAround, type SearchDoc } from '@/utils/search';
 import { LatestReloadCoordinator } from '@/utils/latestReload';
-import { SegmentList } from './SegmentList';
+import {
+  PLAYBACK_RATES,
+  SEEK_STEP_MS,
+  assembleSessionAudio,
+  playbackKeyAction,
+  playingSegmentIndex,
+  revokeSessionAudio,
+  type SessionAudioSource,
+} from '@/utils/playback';
 import { SummaryView } from './SummaryView';
 
 // The cache intentionally lives outside the component so switching tabs or
@@ -67,7 +75,15 @@ export function LibraryView() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [llmOrigin, setLlmOrigin] = useState<string | null>(null);
   const [summaryLive, setSummaryLive] = useState(EMPTY_SUMMARY_LIVE);
+  const [audioSource, setAudioSource] = useState<(SessionAudioSource & { sessionId: string }) | null>(null);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [audioDuration, setAudioDuration] = useState(0);
+  const [playbackRate, setPlaybackRate] = useState<number>(1);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [audioRevision, setAudioRevision] = useState(0);
   const [, setTick] = useState(0);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const openIdRef = useRef<string | null>(null);
   const openReadVersionRef = useRef(0);
   const openHighlightVersionRef = useRef(0);
@@ -149,7 +165,12 @@ export function LibraryView() {
       void reload();
     };
     const onStorage = (c: Record<string, chrome.storage.StorageChange>, area: string) => {
-      if (area === 'local' && c.captureState && c.captureState.newValue === 'idle') void reload();
+      if (area !== 'local') return;
+      if (c.captureState?.newValue === 'idle') {
+        setAudioRevision((revision) => revision + 1);
+        void reload();
+      }
+      if (c.quotaWarning) setAudioRevision((revision) => revision + 1);
     };
     chrome.runtime.onMessage.addListener(onMessage);
     chrome.storage.onChanged.addListener(onStorage);
@@ -185,6 +206,83 @@ export function LibraryView() {
   const hits = query.trim() && index ? index.search(query.trim()) : [];
   const open = sessions.find((s) => s.id === openId) ?? null;
   const generating = Boolean(open && open.intelligence === 'pending' && !open.intelligenceError);
+  const playbackSessionId = open?.id ?? null;
+
+  useEffect(() => {
+    setAudioSource(null);
+    setPlaybackError(null);
+    setCurrentTime(0);
+    setAudioDuration(0);
+    setPlaybackRate(1);
+    setIsPlaying(false);
+    if (!playbackSessionId) return;
+
+    let cancelled = false;
+    let ownedUrl: string | null = null;
+    void assembleSessionAudio(playbackSessionId)
+      .then((source) => {
+        ownedUrl = source?.url ?? null;
+        if (cancelled) {
+          if (ownedUrl) revokeSessionAudio(ownedUrl);
+          ownedUrl = null;
+          return;
+        }
+        if (!source) return;
+        setAudioSource({ ...source, sessionId: playbackSessionId });
+      })
+      .catch((e) => {
+        if (!cancelled) setPlaybackError(humanError(e));
+      });
+
+    return () => {
+      cancelled = true;
+      if (ownedUrl) revokeSessionAudio(ownedUrl);
+    };
+  }, [playbackSessionId, audioRevision]);
+
+  const seekTo = (seconds: number) => {
+    const audio = audioRef.current;
+    if (!audio || !Number.isFinite(seconds)) return;
+    const knownDuration = Number.isFinite(audio.duration) && audio.duration > 0
+      ? audio.duration
+      : audioDuration;
+    const next = Math.min(knownDuration > 0 ? knownDuration : Number.POSITIVE_INFINITY, Math.max(0, seconds));
+    audio.currentTime = next;
+    setCurrentTime(next);
+  };
+
+  const togglePlayback = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (!audio.paused) {
+      audio.pause();
+      return;
+    }
+    setPlaybackError(null);
+    void audio.play().catch((e) => {
+      setIsPlaying(false);
+      setPlaybackError(humanError(e));
+    });
+  };
+
+  useEffect(() => {
+    if (!playbackSessionId || audioSource?.sessionId !== playbackSessionId) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const action = playbackKeyAction(event.key, event.target as HTMLElement | null);
+      if (!action) return;
+      event.preventDefault();
+      if (action === 'toggle') {
+        togglePlayback();
+        return;
+      }
+      const audio = audioRef.current;
+      if (!audio) return;
+      const delta = action === 'seek-back' ? -SEEK_STEP_MS : SEEK_STEP_MS;
+      seekTo(audio.currentTime + delta / 1000);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [playbackSessionId, audioSource, audioDuration]);
 
   useEffect(() => {
     if (!openId || !generating) return;
@@ -434,6 +532,8 @@ export function LibraryView() {
 
   if (open) {
     const speakers = distinctSpeakers(openSegments);
+    const hasAudio = audioSource?.sessionId === open.id;
+    const activeSegment = hasAudio ? playingSegmentIndex(openSegments, currentTime * 1000) : -1;
     return (
       <section>
         <button class="st-chip" onClick={() => { openIdRef.current = null; openReadVersionRef.current += 1; openHighlightVersionRef.current += 1; setOpenId(null); }} style={{ marginBottom: 8 }}>← Library</button>
@@ -445,6 +545,78 @@ export function LibraryView() {
           {dateLabel(open.startedAt)} · {durationLabel(open)} · {open.platform} · {open.status}
           {open.costUsd !== undefined && <> · {formatUsd(open.costUsd)} est.</>}
         </p>
+        {hasAudio && (
+          <section
+            class="st-detail-card"
+            aria-label="Audio playback"
+            style={{ marginBottom: 12 }}
+          >
+            <audio
+              key={audioSource.url}
+              ref={audioRef}
+              preload="metadata"
+              style={{ display: 'none' }}
+              onLoadedMetadata={(event) => {
+                const duration = event.currentTarget.duration;
+                if (Number.isFinite(duration) && duration > 0) setAudioDuration(duration);
+                event.currentTarget.playbackRate = playbackRate;
+              }}
+              onDurationChange={(event) => {
+                const duration = event.currentTarget.duration;
+                if (Number.isFinite(duration) && duration > 0) setAudioDuration(duration);
+              }}
+              onTimeUpdate={(event) => {
+                const time = event.currentTarget.currentTime;
+                if (Number.isFinite(time)) setCurrentTime(time);
+              }}
+              onPlay={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
+              onEnded={() => setIsPlaying(false)}
+              onError={() => {
+                setIsPlaying(false);
+                setPlaybackError('Recording audio could not be played.');
+              }}
+            >
+              <source src={audioSource.url} type={audioSource.mimeType} />
+            </audio>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                class="st-chip"
+                title="Play or pause (Escape)"
+                onClick={togglePlayback}
+              >
+                {isPlaying ? 'Pause' : 'Play'}
+              </button>
+              <label class="st-hint" style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                Speed
+                <select
+                  class="st-select"
+                  aria-label="Playback speed"
+                  value={playbackRate}
+                  style={{ width: 'auto', padding: '5px 8px' }}
+                  onChange={(event) => {
+                    const rate = Number(event.currentTarget.value);
+                    if (!PLAYBACK_RATES.includes(rate as (typeof PLAYBACK_RATES)[number])) return;
+                    setPlaybackRate(rate);
+                    if (audioRef.current) audioRef.current.playbackRate = rate;
+                  }}
+                >
+                  {PLAYBACK_RATES.map((rate) => (
+                    <option key={rate} value={rate}>{rate}×</option>
+                  ))}
+                </select>
+              </label>
+              <span
+                aria-label="Playback time"
+                style={{ marginLeft: 'auto', color: 'var(--st-muted)', fontSize: 12, fontVariantNumeric: 'tabular-nums' }}
+              >
+                {formatElapsed(currentTime * 1000)} / {formatElapsed(audioDuration * 1000)}
+              </span>
+            </div>
+          </section>
+        )}
+        {playbackError && <p class="st-banner st-banner--error">{playbackError}</p>}
         {generating && (
           <p class="st-hint st-gen">
             <span class="st-gen-dot" />
@@ -507,7 +679,46 @@ export function LibraryView() {
           <button data-testid="delete-session" class="st-chip st-chip--danger" disabled={busy} onClick={() => void deleteOpen()}>Delete</button>
         </div>
         {actionError && <p data-testid="library-error" class="st-banner st-banner--error">{actionError}</p>}
-        <SegmentList segments={openSegments} empty="No transcript segments for this meeting." />
+        {openSegments.length === 0 ? (
+          <p class="st-empty">No transcript segments for this meeting.</p>
+        ) : (
+          <ol class="st-segments">
+            {openSegments.map((segment, index) => (
+              <li
+                key={segment.id}
+                class={index === activeSegment ? 'st-segment--playing' : undefined}
+                style={index === activeSegment ? { background: 'var(--st-tint)' } : undefined}
+              >
+                {hasAudio ? (
+                  <button
+                    type="button"
+                    class="st-time"
+                    aria-label={`Seek to ${formatElapsed(segment.startMs)}`}
+                    onClick={() => seekTo(segment.startMs / 1000)}
+                    style={{
+                      border: 0,
+                      background: 'transparent',
+                      padding: '2px 0 0',
+                      fontFamily: 'inherit',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {formatElapsed(segment.startMs)}
+                  </button>
+                ) : (
+                  <span class="st-time">{formatElapsed(segment.startMs)}</span>
+                )}
+                <span
+                  class="st-text"
+                  style={segment.text === '[transcription failed]' ? { color: 'var(--st-danger)' } : undefined}
+                >
+                  {segment.speaker && <strong>{segment.speaker}: </strong>}
+                  {segment.text}
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
       </section>
     );
   }
