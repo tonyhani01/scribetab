@@ -7,6 +7,7 @@ import {
   buildStructuredSummaryMessages,
   buildReduceMessages,
   clipTranscript,
+  formatChapterStamp,
   MAP_OVERLAP_MS,
   mapWindows,
   parseStructuredSummary,
@@ -16,6 +17,7 @@ import {
   summarizeMeetingLong,
   summaryToMarkdown,
   transcriptPlain,
+  transcriptWithTimestamps,
 } from '../src/summarize';
 
 const segments: TranscriptSegment[] = [
@@ -355,5 +357,174 @@ describe('parseStructuredSummary', () => {
     );
     expect(s.narrative).toBe('n');
     expect(s.actionItems[0]).toEqual({ id: 'fixed-id', text: 't', due: 'Fri' });
+  });
+});
+
+describe('chapters', () => {
+  const withChapters = JSON.stringify({
+    narrative: 'Kickoff.',
+    actionItems: [],
+    decisions: [],
+    usefulInfo: [],
+    chapters: [
+      { title: ' Roadmap ', startMs: 200_000 },
+      { title: 'Budget', startMs: 1000 },
+    ],
+  });
+
+  it('parses chapters and sorts them chronologically', () => {
+    const s = parseStructuredSummary(withChapters, P);
+    expect(s.chapters).toEqual([
+      { title: 'Budget', startMs: 1000 },
+      { title: 'Roadmap', startMs: 200_000 },
+    ]);
+    expect(s.degraded).toBeUndefined();
+  });
+  it('defaults to an empty list when the reply has no chapters', () => {
+    expect(parseStructuredSummary('{"narrative":"ok"}', P).chapters).toEqual([]);
+  });
+  it('accepts chapters alone without degrading', () => {
+    const s = parseStructuredSummary('{"chapters":[{"title":"Intro","startMs":0}]}', P);
+    expect(s.degraded).toBeUndefined();
+    expect(s.chapters).toEqual([{ title: 'Intro', startMs: 0 }]);
+  });
+  it('drops malformed entries and non-array values', () => {
+    const s = parseStructuredSummary(
+      JSON.stringify({
+        narrative: 'ok',
+        chapters: [
+          { title: 'keep', startMs: 5000 },
+          { title: 'no start', startMs: 'soon' },
+          { title: '  ', startMs: 1000 },
+          { startMs: 1000 },
+          { title: 'negative clamps to zero', startMs: -4000 },
+          'chapter',
+          null,
+        ],
+      }),
+      P,
+    );
+    expect(s.chapters).toEqual([
+      { title: 'negative clamps to zero', startMs: 0 },
+      { title: 'keep', startMs: 5000 },
+    ]);
+  });
+  it('coerces colon stamps and numeric strings to milliseconds', () => {
+    const s = parseStructuredSummary(
+      JSON.stringify({
+        narrative: 'ok',
+        chapters: [
+          { title: 'colon', startMs: '3:20' },
+          { title: 'hours', startMs: '1:02:03' },
+          { title: 'string ms', startMs: '90000' },
+        ],
+      }),
+      P,
+    );
+    expect(s.chapters).toEqual([
+      { title: 'string ms', startMs: 90_000 },
+      { title: 'colon', startMs: 200_000 },
+      { title: 'hours', startMs: 3_723_000 },
+    ]);
+  });
+  it('is empty on the degraded fallback', () => {
+    expect(parseStructuredSummary('not json at all', P).chapters).toEqual([]);
+  });
+});
+
+describe('formatChapterStamp', () => {
+  it('renders mm:ss with zero-padded minutes', () => {
+    expect(formatChapterStamp(0)).toBe('00:00');
+    expect(formatChapterStamp(200_000)).toBe('03:20');
+  });
+  it('keeps rolling past 59 minutes instead of adding hours', () => {
+    expect(formatChapterStamp(3_723_000)).toBe('62:03');
+  });
+  it('clamps negative and non-finite input to 00:00', () => {
+    expect(formatChapterStamp(-5000)).toBe('00:00');
+    expect(formatChapterStamp(Number.NaN)).toBe('00:00');
+  });
+});
+
+describe('transcriptWithTimestamps', () => {
+  it('prefixes each line with the segment stamp', () => {
+    expect(
+      transcriptWithTimestamps([
+        { speaker: 'Ada', text: 'first', startMs: 0 },
+        { speaker: 'Bo', text: 'second', startMs: 200_000 },
+      ]),
+    ).toBe('[00:00] Ada: first\n[03:20] Bo: second');
+  });
+  it('falls back to plain lines when no timestamps are available', () => {
+    expect(transcriptWithTimestamps([{ speaker: 'Ada', text: 'first' }])).toBe('Ada: first');
+  });
+  it('skips blank text like transcriptPlain does', () => {
+    expect(transcriptWithTimestamps([{ speaker: 'Ada', text: '  ', startMs: 0 }])).toBe('');
+  });
+});
+
+describe('summaryToMarkdown chapters', () => {
+  it('renders a Chapters section with mm:ss stamps', () => {
+    const md = summaryToMarkdown({
+      ...base,
+      chapters: [
+        { title: 'Kickoff', startMs: 0 },
+        { title: 'Budget', startMs: 200_000 },
+      ],
+    });
+    expect(md).toContain('## Chapters\n\n- 00:00 Kickoff\n- 03:20 Budget');
+  });
+  it('omits the section when chapters are missing or empty', () => {
+    expect(summaryToMarkdown(base)).not.toContain('## Chapters');
+    expect(summaryToMarkdown({ ...base, chapters: [] })).not.toContain('## Chapters');
+  });
+});
+
+describe('chapter prompts', () => {
+  it('asks the model for chapters keyed to transcript stamps', () => {
+    const msgs = buildStructuredSummaryMessages('hello world');
+    expect(msgs[0]!.content).toContain('"chapters"');
+    expect(msgs[0]!.content).toContain('startMs');
+  });
+  it('sends stamped lines so timestamps are not invented', async () => {
+    const calls: ChatMessage[][] = [];
+    const reply = JSON.stringify({ narrative: 'ok', actionItems: [], decisions: [], usefulInfo: [] });
+    await summarizeMeeting(
+      async (m) => {
+        calls.push(m);
+        return reply;
+      },
+      [
+        { speaker: 'Ada', text: 'Kickoff.', startMs: 0 },
+        { speaker: 'Bo', text: 'Budget talk.', startMs: 200_000 },
+      ],
+      { generatedAt: 'T' },
+    );
+    expect(calls[0]![1]!.content).toContain('[00:00] Ada: Kickoff.');
+    expect(calls[0]![1]!.content).toContain('[03:20] Bo: Budget talk.');
+  });
+  it('keeps stamps in map windows and chapters in the reduce contract', async () => {
+    const calls: ChatMessage[][] = [];
+    const reply = JSON.stringify({
+      narrative: 'ok',
+      actionItems: [],
+      decisions: [],
+      usefulInfo: [],
+      chapters: [],
+    });
+    await summarizeMeetingLong(
+      async (m) => {
+        calls.push(m);
+        return reply;
+      },
+      [
+        { startMs: 0, endMs: 20 * 60 * 1000, speaker: 'A', text: 'first' },
+        { startMs: 20 * 60 * 1000, endMs: 40 * 60 * 1000, speaker: 'B', text: 'second' },
+      ],
+      { generatedAt: 'T' },
+    );
+    expect(calls[0]![1]!.content).toContain('[00:00] A: first');
+    expect(calls.at(-1)![0]!.content).toContain('"chapters"');
+    expect(calls.at(-1)![1]!.content).toContain('<window_summaries>');
   });
 });

@@ -75,12 +75,20 @@ export interface ActionItem {
   due?: string;             // verbatim phrase, never an inferred date
 }
 
+/** A named section of the meeting, anchored to a transcript timestamp. */
+export interface SummaryChapter {
+  title: string;
+  startMs: number;           // session-relative
+}
+
 export interface SessionSummary {
   version: 1;
   narrative: string;        // markdown paragraphs
   actionItems: ActionItem[];
   decisions: string[];
   usefulInfo: string[];
+  /** Optional: absent on summaries generated before chapters existed. */
+  chapters?: SummaryChapter[];
   generatedAt: string;      // ISO 8601
   model?: string;
   degraded?: true;          // set when JSON extraction failed (raw text fallback)

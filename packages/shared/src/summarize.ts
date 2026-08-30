@@ -1,4 +1,11 @@
-import type { ActionItem, ChatMessage, SessionSummary, TranscriptSegment } from './types.js';
+import { splitMs } from './export/timestamps.js';
+import type {
+  ActionItem,
+  ChatMessage,
+  SessionSummary,
+  SummaryChapter,
+  TranscriptSegment,
+} from './types.js';
 
 /** Head+tail budget for the transcript sent to the LLM. */
 export const SUMMARY_TRANSCRIPT_CHAR_LIMIT = 24_000;
@@ -19,6 +26,33 @@ export function transcriptPlain(segments: Pick<TranscriptSegment, 'speaker' | 't
     .join('\n');
 }
 
+/** `mm:ss` from session-relative ms; minutes keep rolling past 59. */
+export function formatChapterStamp(ms: number): string {
+  const { h, m, s } = splitMs(Number.isFinite(ms) ? ms : 0);
+  return `${String(h * 60 + m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+/**
+ * Like `transcriptPlain`, but each line is prefixed with its `[mm:ss]` stamp so
+ * the model can anchor chapters to real times instead of inventing them. Lines
+ * without a usable `startMs` are emitted unstamped (e.g. hand-built fixtures).
+ */
+export function transcriptWithTimestamps(
+  segments: (Pick<TranscriptSegment, 'speaker' | 'text'> & { startMs?: number })[],
+): string {
+  return segments
+    .map((s) => {
+      const text = s.text.trim();
+      if (!text) return '';
+      const line = s.speaker ? `${s.speaker}: ${text}` : text;
+      return typeof s.startMs === 'number' && Number.isFinite(s.startMs)
+        ? `[${formatChapterStamp(s.startMs)}] ${line}`
+        : line;
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
 export function clipTranscript(transcript: string, limit = SUMMARY_TRANSCRIPT_CHAR_LIMIT): string {
   if (transcript.length <= limit) return transcript;
   const keep = Math.max(0, Math.floor((limit - ELISION.length) / 2));
@@ -34,11 +68,20 @@ export const DEFAULT_SUMMARY_GUIDANCE =
   'Extract concrete action items, naming an owner only when one was actually said and quoting due dates verbatim. ' +
   'List decisions that were explicitly made, and capture useful details worth keeping (links, numbers, names).';
 
+/** Chapters half of the contract — the timestamps only exist in the stamped transcript. */
+const CHAPTERS_CONTRACT =
+  'Each transcript line may start with a [mm:ss] stamp of when it was said. ' +
+  'In "chapters", give 3–8 short titles marking where the topic changed, each with "startMs" = that line\'s ' +
+  'stamp expressed in milliseconds from the start of the meeting ([01:30] → 90000). ' +
+  'Never invent a time that is not on a transcript line; use [] when there are no stamps. ';
+
 const JSON_CONTRACT =
   'You analyze meeting transcripts. Reply with only a JSON object — no prose, no code fences — matching exactly: ' +
   '{"narrative": string (markdown paragraphs), ' +
   '"actionItems": [{"text": string, "owner"?: string, "due"?: string}], ' +
-  '"decisions": string[], "usefulInfo": string[]}. ' +
+  '"decisions": string[], "usefulInfo": string[], ' +
+  '"chapters": [{"title": string, "startMs": number}]}. ' +
+  CHAPTERS_CONTRACT +
   'Use empty arrays when a category has nothing. Never invent owners or dates. ' +
   DATA_FRAMING;
 
@@ -50,7 +93,7 @@ export function buildStructuredSummaryMessages(transcript: string, guidance?: st
   ];
 }
 
-const SUMMARY_KEYS = ['narrative', 'actionItems', 'decisions', 'usefulInfo'] as const;
+const SUMMARY_KEYS = ['narrative', 'actionItems', 'decisions', 'usefulInfo', 'chapters'] as const;
 
 function matchingBrace(text: string, start: number): number {
   let depth = 0;
@@ -151,6 +194,7 @@ function degradedFallback(
     actionItems: [],
     decisions: [],
     usefulInfo: [],
+    chapters: [],
     degraded: true,
   };
 }
@@ -162,6 +206,42 @@ function oneLine(s: string): string {
 function stringArray(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
   return v.filter((x): x is string => typeof x === 'string' && oneLine(x).length > 0).map(oneLine);
+}
+
+/** `'mm:ss'` or `'hh:mm:ss'` → ms, or undefined when the string is not a stamp. */
+function stampTextToMs(text: string): number | undefined {
+  const parts = text.split(':');
+  if (parts.length < 2 || parts.length > 3) return undefined;
+  if (!parts.every((p) => /^\d+$/.test(p.trim()))) return undefined;
+  const nums = parts.map((p) => Number(p.trim()));
+  const [h, m, s] = nums.length === 3 ? nums : [0, ...nums];
+  return ((h! * 60 + m!) * 60 + s!) * 1000;
+}
+
+/** Tolerant: accepts ms numbers, numeric strings, and `mm:ss`/`hh:mm:ss` stamps. */
+function chapterStartMs(v: unknown): number | undefined {
+  if (typeof v === 'number') return Number.isFinite(v) ? Math.max(0, Math.floor(v)) : undefined;
+  if (typeof v !== 'string') return undefined;
+  const text = v.trim();
+  if (!text) return undefined;
+  const ms = /^\d+(\.\d+)?$/.test(text) ? Number(text) : stampTextToMs(text);
+  return ms === undefined ? undefined : Math.max(0, Math.floor(ms));
+}
+
+/** Missing, malformed and non-array input all yield `[]` — never a throw. */
+function toChapters(v: unknown): SummaryChapter[] {
+  if (!Array.isArray(v)) return [];
+  const out: SummaryChapter[] = [];
+  for (const raw of v) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const rec = raw as Record<string, unknown>;
+    const title = typeof rec.title === 'string' ? oneLine(rec.title) : '';
+    if (!title) continue;
+    const startMs = chapterStartMs(rec.startMs ?? rec.start ?? rec.time);
+    if (startMs === undefined) continue;
+    out.push({ title, startMs });
+  }
+  return out.sort((a, b) => a.startMs - b.startMs);
 }
 
 function toActionItems(v: unknown, newId: () => string): ActionItem[] {
@@ -196,10 +276,17 @@ export function parseStructuredSummary(
   const actionItems = toActionItems(rec.actionItems, newId);
   const decisions = stringArray(rec.decisions);
   const usefulInfo = stringArray(rec.usefulInfo);
-  if (!narrative && actionItems.length === 0 && decisions.length === 0 && usefulInfo.length === 0) {
+  const chapters = toChapters(rec.chapters);
+  if (
+    !narrative &&
+    actionItems.length === 0 &&
+    decisions.length === 0 &&
+    usefulInfo.length === 0 &&
+    chapters.length === 0
+  ) {
     return degradedFallback(raw, common);
   }
-  return { ...common, narrative, actionItems, decisions, usefulInfo };
+  return { ...common, narrative, actionItems, decisions, usefulInfo, chapters };
 }
 
 export function parseSummary(raw: string): string {
@@ -220,6 +307,15 @@ export function actionItemLine(item: ActionItem): string {
 
 export function summaryToMarkdown(s: SessionSummary): string {
   const parts: string[] = ['## Summary', '', s.narrative.trim() || '(no summary)', ''];
+  const chapters = toChapters(s.chapters);
+  if (chapters.length) {
+    parts.push(
+      '## Chapters',
+      '',
+      chapters.map((c) => `- ${formatChapterStamp(c.startMs)} ${c.title}`).join('\n'),
+      '',
+    );
+  }
   const items = s.actionItems.map((i) => `- [ ] ${actionItemLine(i)}`);
   parts.push('## Action items', '', items.length ? items.join('\n') : '- [ ] None identified');
   if (s.decisions.length) {
@@ -233,10 +329,10 @@ export function summaryToMarkdown(s: SessionSummary): string {
 
 export async function summarizeMeeting(
   complete: (messages: ChatMessage[]) => Promise<string>,
-  segments: Pick<TranscriptSegment, 'speaker' | 'text'>[],
+  segments: (Pick<TranscriptSegment, 'speaker' | 'text'> & { startMs?: number })[],
   opts: { guidance?: string; model?: string; generatedAt?: string; newId?: () => string } = {},
 ): Promise<SessionSummary | undefined> {
-  const transcript = transcriptPlain(segments);
+  const transcript = transcriptWithTimestamps(segments);
   if (!transcript) return undefined;
   const raw = await complete(buildStructuredSummaryMessages(transcript, opts.guidance));
   return parseStructuredSummary(raw, {
@@ -259,8 +355,11 @@ const REDUCE_JSON_CONTRACT =
   'You analyze meeting summaries. Reply with only a JSON object — no prose, no code fences — matching exactly: ' +
   '{"narrative": string (markdown paragraphs), ' +
   '"actionItems": [{"text": string, "owner"?: string, "due"?: string}], ' +
-  '"decisions": string[], "usefulInfo": string[]}. ' +
-  'Merge duplicates across the window summaries. Use empty arrays when a category has nothing. ' +
+  '"decisions": string[], "usefulInfo": string[], ' +
+  '"chapters": [{"title": string, "startMs": number}]}. ' +
+  'Merge duplicates across the window summaries. Keep each chapter\'s original "startMs" — ' +
+  'they are milliseconds from the start of the whole meeting — drop near-duplicates, and order chapters chronologically. ' +
+  'Use empty arrays when a category has nothing. ' +
   'Never invent owners or dates. ' +
   DATA_FRAMING;
 
@@ -281,16 +380,16 @@ export function mapWindows(
   const first = segs[0]!.startMs;
   const last = Math.max(first, segs[segs.length - 1]!.endMs);
   if (last - first <= windowMs) {
-    return [{ fromMs: first, toMs: last, transcript: transcriptPlain(segs) }];
+    return [{ fromMs: first, toMs: last, transcript: transcriptWithTimestamps(segs) }];
   }
   const out: MapWindow[] = [];
   for (let from = first; from < last; from += windowMs) {
     const to = Math.min(last, from + windowMs + overlapMs);
     const inWindow = segs.filter((s) => s.startMs < to && s.endMs > from);
     if (inWindow.length === 0) continue;
-    out.push({ fromMs: from, toMs: to, transcript: transcriptPlain(inWindow) });
+    out.push({ fromMs: from, toMs: to, transcript: transcriptWithTimestamps(inWindow) });
   }
-  return out.length > 0 ? out : [{ fromMs: first, toMs: last, transcript: transcriptPlain(segs) }];
+  return out.length > 0 ? out : [{ fromMs: first, toMs: last, transcript: transcriptWithTimestamps(segs) }];
 }
 
 /** Size of each map window for long meetings (20 minutes). */
