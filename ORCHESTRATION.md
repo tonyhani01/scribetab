@@ -5,8 +5,8 @@ Costs/speed: /tmp/st-orch/costs.tsv
 
 | Task | Status | Verdict |
 |---|---|---|
-| A1 playback | pending | |
-| A4 pause/resume | pending | |
+| A1 playback | dispatched (retry 2) | |
+| A4 pause/resume | partial — retry queued | |
 | A2 archive | pending | |
 | A3 notifications | pending | |
 | B1 templates+context | pending | |
@@ -16,10 +16,10 @@ Costs/speed: /tmp/st-orch/costs.tsv
 | C2 typed tags | pending | |
 | C3 import | pending | |
 | C4 vocabulary | pending | |
-| D1 chapters+talktime | pending | |
+| D1 chapters+talktime | dispatched | |
 | D2 zoom/teams captions | pending | |
 | D3 ics calendar | pending | |
-| D4 automations | pending | |
+| D4 automations | done | pass (106 host tests) | |
 | E1 export options | pending | |
 | E2 labels | pending | |
 | E3 notes | pending | |
