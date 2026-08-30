@@ -50,6 +50,13 @@ export interface ProviderConfig {
   apiKey: string;
   baseUrl?: string;          // set for 'custom' → localhost servers = local models
   model?: string;
+  /**
+   * Custom-vocabulary terms the user wants recognised (Whisper-style `prompt`
+   * field, Deepgram `keyterm` params). Settings-derived, so it travels with the
+   * config rather than the per-chunk audio request. Providers without hint
+   * support ignore it — the ingest-side replacement dictionary still applies.
+   */
+  vocabHints?: string[];
 }
 
 export interface ChatMessage {

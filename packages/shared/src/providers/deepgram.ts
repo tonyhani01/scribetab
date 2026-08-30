@@ -1,3 +1,4 @@
+import { MAX_KEYTERMS } from '../vocab.js';
 import type {
   ProviderConfig,
   TranscribeRequest,
@@ -25,6 +26,10 @@ export const deepgramProvider: TranscriptionProvider = {
       utterances: 'true',
     });
     if (req.language) params.set('language', req.language);
+    // Deepgram's vocabulary hook: one keyterm param per term, order preserved.
+    for (const term of (cfg.vocabHints ?? []).map((t) => t.trim()).filter(Boolean).slice(0, MAX_KEYTERMS)) {
+      params.append('keyterm', term);
+    }
 
     const res = await fetch(`${base}/v1/listen?${params}`, {
       method: 'POST',

@@ -11,6 +11,7 @@ export * from './export/index.js';
 export * from './fusion.js';
 export * from './llm/index.js';
 export * from './redact.js';
+export * from './vocab.js';
 export * from './costs.js';
 export * from './summarize.js';
 export * from './speakers.js';
