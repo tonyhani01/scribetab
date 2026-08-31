@@ -14,6 +14,7 @@ export * from './redact.js';
 export * from './vocab.js';
 export * from './costs.js';
 export * from './summarize.js';
+export * from './chat.js';
 export * from './speakers.js';
 export * from './talkTime.js';
 export * from './retention.js';
