@@ -1,6 +1,17 @@
 import type { CaptureState } from './messages';
 import { platformFromUrl } from './platform';
 
+/** Shift the wall-clock origin so session-relative time excludes a completed pause. */
+export function captureOriginAfterResume(
+  audioStartedAtMs: number | undefined,
+  capturePausedAtMs: number | undefined,
+  resumedAtMs: number,
+): number | undefined {
+  if (audioStartedAtMs === undefined) return undefined;
+  const pausedAtMs = capturePausedAtMs ?? resumedAtMs;
+  return audioStartedAtMs + Math.max(0, resumedAtMs - pausedAtMs);
+}
+
 /** REC? is meet/teams/zoom only — YouTube stays capturable via the popup. */
 export function isBadgeInviteUrl(url: string | undefined): boolean {
   const p = platformFromUrl(url);
@@ -13,6 +24,13 @@ export function badgeText(opts: {
   captureState?: CaptureState;
   capturedTabId?: number | null;
 }): string {
+  if (
+    opts.tabId != null &&
+    opts.capturedTabId === opts.tabId &&
+    opts.captureState === 'paused'
+  ) {
+    return '⏸';
+  }
   if (
     opts.tabId != null &&
     opts.capturedTabId === opts.tabId &&

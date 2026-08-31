@@ -159,7 +159,9 @@ export function LiveView() {
     endRef.current?.scrollIntoView({ block: 'end' });
   }, [segments.length, pending.length]);
 
-  const sendCapture = async (type: 'START_CAPTURE' | 'STOP_CAPTURE') => {
+  const sendCapture = async (
+    type: 'START_CAPTURE' | 'PAUSE_CAPTURE' | 'RESUME_CAPTURE' | 'STOP_CAPTURE',
+  ) => {
     if (commandBusy || state === 'starting' || state === 'stopping') return;
     setCaptureError(null);
     setCommandBusy(true);
@@ -205,7 +207,7 @@ export function LiveView() {
         </span>
       </header>
 
-      <ConsentBanner recording={state === 'recording' || state === 'starting' || state === 'stopping'} />
+      <ConsentBanner recording={state === 'recording' || state === 'paused' || state === 'starting' || state === 'stopping'} />
       {captureError && <p data-testid="live-capture-error" class="st-banner st-banner--error">{captureError}</p>}
       {notice && <p class="st-banner st-banner--warn">{notice}</p>}
       {!configured && issue === 'missing-permission' && (
@@ -225,15 +227,27 @@ export function LiveView() {
       )}
 
       <div class="st-capture-controls">
-        {state === 'recording' || state === 'stopping' ? (
-          <button
-            type="button"
-            class="st-btn st-btn--danger"
-            disabled={captureBusy}
-            onClick={() => void sendCapture('STOP_CAPTURE')}
-          >
-            {state === 'stopping' ? 'Stopping…' : 'Stop recording'}
-          </button>
+        {state === 'recording' || state === 'paused' || state === 'stopping' ? (
+          <>
+            {state !== 'stopping' && (
+              <button
+                type="button"
+                class="st-btn st-btn--quiet"
+                disabled={captureBusy}
+                onClick={() => void sendCapture(state === 'paused' ? 'RESUME_CAPTURE' : 'PAUSE_CAPTURE')}
+              >
+                {state === 'paused' ? 'Resume recording' : 'Pause recording'}
+              </button>
+            )}
+            <button
+              type="button"
+              class="st-btn st-btn--danger"
+              disabled={captureBusy}
+              onClick={() => void sendCapture('STOP_CAPTURE')}
+            >
+              {state === 'stopping' ? 'Stopping…' : 'Stop recording'}
+            </button>
+          </>
         ) : (
           <button
             type="button"
@@ -267,6 +281,7 @@ export function LiveView() {
             : 'Listening…'}
         </p>
       )}
+      {state === 'paused' && <p class="st-hint st-livestatus">Paused</p>}
       {state === 'stopping' && transcribedCount < chunkCount && (
         <p class="st-hint st-livestatus">Finishing transcription… {transcribedCount} / {chunkCount}</p>
       )}
@@ -275,7 +290,7 @@ export function LiveView() {
       <footer style={{ marginTop: 16, borderTop: '1px solid var(--st-border)', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' }}>
         <button
           class="st-btn st-btn--quiet"
-          disabled={syncing || state === 'recording' || state === 'starting' || state === 'stopping'}
+          disabled={syncing || state === 'recording' || state === 'paused' || state === 'starting' || state === 'stopping'}
           onClick={() => {
             setSyncing(true);
             void chrome.runtime

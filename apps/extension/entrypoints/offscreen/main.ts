@@ -37,6 +37,7 @@ let opusFallback = false;
 let queue: TranscriptionQueue | null = null;
 let segmentCount = 0;
 let captureSessionId = '';
+let pcmPaused = false;
 
 function notifyBackground(
   msg:
@@ -255,9 +256,10 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
     opusFallback = false;
     finalizePromise = null;
     finalized = false;
+    pcmPaused = false;
 
     node.port.onmessage = (e: MessageEvent<Float32Array>) => {
-      if (finalized) return;
+      if (finalized || pcmPaused) return;
       const done = chunker.push(e.data);
       if (done) enqueueChunk(done, sampleRate);
     };
@@ -344,6 +346,21 @@ chrome.runtime.onMessage.addListener((raw: unknown, _s, sendResponse) => {
             ? { ok: false, error: writeError.message }
             : { ok: true }) satisfies Ack,
         );
+        break;
+      case 'OFFSCREEN_PAUSE': {
+        if (!engine || finalized) throw new Error('No capture is active');
+        if (!pcmPaused) {
+          const rest = engine.chunker.flush();
+          if (rest && rest.length > 0) enqueueChunk(rest, engine.sampleRate);
+          pcmPaused = true;
+        }
+        sendResponse({ ok: true } satisfies Ack);
+        break;
+      }
+      case 'OFFSCREEN_RESUME':
+        if (!engine || finalized) throw new Error('No capture is active');
+        pcmPaused = false;
+        sendResponse({ ok: true } satisfies Ack);
         break;
     }
   })().catch((e) => sendResponse({ ok: false, error: String(e) } satisfies Ack));

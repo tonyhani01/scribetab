@@ -28,6 +28,7 @@ import {
   scheduleFinalizeIntelligence,
 } from '@/utils/intelligence';
 import {
+  captureOriginAfterResume,
   refreshActionBadge,
   refreshActiveTabBadge,
   surfaceCommandError,
@@ -42,6 +43,7 @@ import {
 } from '@/utils/commands';
 import type {
   Ack,
+  CaptureState,
   ToBackground,
   ToMeetCaptions,
   ToMeetConsent,
@@ -49,6 +51,11 @@ import type {
   ToSidePanel,
   TranscriptionIssue,
   TranscriptionSettingsPayload,
+} from '@/utils/messages';
+import {
+  captureStateAfterToggle,
+  isCapturingState,
+  isLiveCaptureState,
 } from '@/utils/messages';
 import { exportSelectedActionItems } from '@/utils/actionExport';
 import { putHighlight } from '@/utils/highlightStore';
@@ -275,8 +282,8 @@ async function handleCaptionEvent(
   if (!session) return { ok: true };
   const { audioStartedAtMs } = await chrome.storage.local.get('audioStartedAtMs');
   const origin =
-    session.audioStartedAtMs ??
-    (typeof audioStartedAtMs === 'number' ? audioStartedAtMs : undefined);
+    (typeof audioStartedAtMs === 'number' ? audioStartedAtMs : undefined) ??
+    session.audioStartedAtMs;
   if (origin == null || !Number.isFinite(origin)) {
     captionBuffer.push(msg);
     return { ok: true };
@@ -297,7 +304,10 @@ async function handleAudioStarted(
     return { ok: true };
   }
   await updateSession(msg.sessionId, { audioStartedAtMs: msg.startedAtMs }).catch(() => {});
-  await chrome.storage.local.set({ audioStartedAtMs: msg.startedAtMs });
+  await chrome.storage.local.set({
+    audioStartedAtMs: msg.startedAtMs,
+    capturePausedAtMs: null,
+  });
   const buffered = captionBuffer.splice(0);
   const captionsOnly = Boolean(sessionCaptionsOnly);
   for (const ev of buffered) {
@@ -387,6 +397,7 @@ async function setIdle(extra: Record<string, unknown> = {}): Promise<void> {
   await chrome.storage.local.set({
     captureState: 'idle',
     capturedTabId: null,
+    capturePausedAtMs: null,
     sessionVocabReplacements: [],
     ...extra,
   });
@@ -498,7 +509,7 @@ async function handleStart(): Promise<Ack> {
   let startedTabId: number | null = null;
   try {
     const { captureState } = await chrome.storage.local.get('captureState');
-    if (captureState === 'recording' || captureState === 'starting') {
+    if (isLiveCaptureState(captureState)) {
       return { ok: false, error: 'Already recording' };
     }
 
@@ -513,6 +524,8 @@ async function handleStart(): Promise<Ack> {
       lastError: null,
       lastTranscriptionError: null,
       captureNotice: null,
+      audioStartedAtMs: null,
+      capturePausedAtMs: null,
       chunkCount: 0,
       transcribedCount: 0,
       segmentCount: 0,
@@ -633,8 +646,13 @@ async function handleStart(): Promise<Ack> {
 async function handleStop(): Promise<Ack> {
   if (opInFlight) return { ok: false, error: 'Operation in progress' };
   opInFlight = true;
+  let previousCaptureState: CaptureState = 'recording';
   try {
-    const { currentSessionId } = await chrome.storage.local.get('currentSessionId');
+    const { currentSessionId, captureState } = await chrome.storage.local.get([
+      'currentSessionId',
+      'captureState',
+    ]);
+    if (isCapturingState(captureState)) previousCaptureState = captureState;
     const sessionId = typeof currentSessionId === 'string' ? currentSessionId : undefined;
     await chrome.storage.local.set({ captureState: 'stopping' });
     const res = await stopOffscreen(sessionId);
@@ -662,7 +680,90 @@ async function handleStop(): Promise<Ack> {
       await setIdle({ sessionCaptionsOnly: false });
       return { ok: true };
     }
-    await chrome.storage.local.set({ captureState: 'recording', lastError: humanError(e) });
+    await chrome.storage.local.set({ captureState: previousCaptureState, lastError: humanError(e) });
+    return { ok: false, error: humanError(e) };
+  } finally {
+    opInFlight = false;
+  }
+}
+
+async function handlePauseToggle(wantPaused: boolean): Promise<Ack> {
+  if (opInFlight) return { ok: false, error: 'Operation in progress' };
+  opInFlight = true;
+  let offscreenToggled = false;
+  try {
+    const {
+      captureState,
+      capturedTabId,
+      currentSessionId,
+      audioStartedAtMs,
+      capturePausedAtMs,
+    } = await chrome.storage.local.get([
+      'captureState',
+      'capturedTabId',
+      'currentSessionId',
+      'audioStartedAtMs',
+      'capturePausedAtMs',
+    ]);
+    const nextState = captureStateAfterToggle(captureState, wantPaused);
+    if (!nextState) {
+      return {
+        ok: false,
+        error: wantPaused ? 'Capture is not recording' : 'Capture is not paused',
+      };
+    }
+    const res = await sendToOffscreen({
+      target: 'offscreen',
+      type: wantPaused ? 'OFFSCREEN_PAUSE' : 'OFFSCREEN_RESUME',
+    });
+    if (!res?.ok) {
+      return {
+        ok: false,
+        error: humanError(res?.error ?? (wantPaused ? 'Pause failed' : 'Resume failed')),
+      };
+    }
+    offscreenToggled = true;
+    const toggledAtMs = Date.now();
+    if (wantPaused) {
+      await chrome.storage.local.set({
+        captureState: nextState,
+        capturePausedAtMs: toggledAtMs,
+        lastError: null,
+      });
+    } else {
+      const currentOrigin =
+        typeof audioStartedAtMs === 'number' && Number.isFinite(audioStartedAtMs)
+          ? audioStartedAtMs
+          : undefined;
+      const pauseStartedAtMs =
+        typeof capturePausedAtMs === 'number' && Number.isFinite(capturePausedAtMs)
+          ? capturePausedAtMs
+          : undefined;
+      const adjustedOrigin = captureOriginAfterResume(
+        currentOrigin,
+        pauseStartedAtMs,
+        toggledAtMs,
+      );
+      await chrome.storage.local.set({
+        captureState: nextState,
+        capturePausedAtMs: null,
+        ...(adjustedOrigin === undefined ? {} : { audioStartedAtMs: adjustedOrigin }),
+        lastError: null,
+      });
+      if (typeof currentSessionId === 'string' && adjustedOrigin !== undefined) {
+        await updateSession(currentSessionId, { audioStartedAtMs: adjustedOrigin }).catch(() => {});
+      }
+    }
+    if (typeof capturedTabId === 'number') void refreshActionBadge(capturedTabId);
+    void refreshActiveTabBadge();
+    return { ok: true };
+  } catch (e) {
+    if (offscreenToggled) {
+      await sendToOffscreen({
+        target: 'offscreen',
+        type: wantPaused ? 'OFFSCREEN_RESUME' : 'OFFSCREEN_PAUSE',
+      }).catch(() => {});
+    }
     return { ok: false, error: humanError(e) };
   } finally {
     opInFlight = false;
@@ -675,7 +776,7 @@ async function finalizeIfCaptured(tabId: number): Promise<void> {
     'captureState',
     'currentSessionId',
   ]);
-  if (captureState !== 'recording' || tabId !== capturedTabId) return;
+  if (!isCapturingState(captureState) || tabId !== capturedTabId) return;
   const sessionId = typeof currentSessionId === 'string' ? currentSessionId : undefined;
   const res = await stopOffscreen(sessionId).catch(() => null);
   await completeSession(sessionId, statusFromOffscreenAck(res));
@@ -699,18 +800,19 @@ export default defineBackground(() => {
       'currentSessionId',
     ]);
     const offscreenAlive = (await offscreenContexts()).length > 0;
-    if (bootShouldIdle(captureState, offscreenAlive)) {
+    const bootCaptureState = isCapturingState(captureState) ? 'recording' : captureState;
+    if (bootShouldIdle(bootCaptureState, offscreenAlive)) {
       await setIdle();
     }
-    const exceptId = bootExceptId(captureState, currentSessionId, offscreenAlive);
+    const exceptId = bootExceptId(bootCaptureState, currentSessionId, offscreenAlive);
     const retainAudio = (await getSettings()).retainAudio;
     await failStaleRecordings(exceptId, retainAudio);
     void retryPendingIntelligence();
     void sweepRetainedAudio().catch(() => {});
     if (
       typeof currentSessionId === 'string' &&
-      acceptsCaptionEvents(captureState) &&
-      !bootShouldIdle(captureState, offscreenAlive)
+      acceptsCaptionEvents(bootCaptureState) &&
+      !bootShouldIdle(bootCaptureState, offscreenAlive)
     ) {
       await rehydrateCaptionTimeline(currentSessionId).catch(() => {});
     }
@@ -728,6 +830,12 @@ export default defineBackground(() => {
           break;
         case 'STOP_CAPTURE':
           sendResponse(await handleStop());
+          break;
+        case 'PAUSE_CAPTURE':
+          sendResponse(await handlePauseToggle(true));
+          break;
+        case 'RESUME_CAPTURE':
+          sendResponse(await handlePauseToggle(false));
           break;
         case 'CHUNK_SAVED': {
           // Offscreen cannot use chrome.storage — the SW owns all state.
@@ -875,7 +983,7 @@ export default defineBackground(() => {
         }
         case 'SYNC_ALL': {
           const { captureState } = await chrome.storage.local.get('captureState');
-          if (captureState === 'recording' || captureState === 'starting' || captureState === 'stopping') {
+          if (isLiveCaptureState(captureState)) {
             sendResponse({ ok: false, error: 'Busy recording' });
             break;
           }

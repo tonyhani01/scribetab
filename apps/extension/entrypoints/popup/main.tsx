@@ -2,6 +2,7 @@ import { render } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { ConsentBanner } from '@/components/ConsentBanner';
 import type { Ack, CaptureState } from '@/utils/messages';
+import { isLiveCaptureState } from '@/utils/messages';
 import { assembleRecording } from '@/utils/assemble';
 import { isCapturableUrl } from '@/utils/platform';
 import { listSessions } from '@/utils/sessionStore';
@@ -48,6 +49,7 @@ function App() {
   const [audioStartedAtMs, setAudioStartedAtMs] = useState<number | undefined>(undefined);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [providerConfigured, setProviderConfigured] = useState<boolean | null>(null);
+  const [commandBusy, setCommandBusy] = useState(false);
   const audioStartedAtRef = useRef<number | undefined>(undefined);
 
   const refreshSpend = () => {
@@ -108,6 +110,7 @@ function App() {
   }, [audioStartedAtMs]);
 
   useEffect(() => {
+    if (state === 'paused') return;
     if (state !== 'recording') {
       setElapsedMs(0);
       return;
@@ -121,13 +124,19 @@ function App() {
     return () => window.clearInterval(interval);
   }, [state]);
 
-  const send = async (type: 'START_CAPTURE' | 'STOP_CAPTURE') => {
+  const send = async (
+    type: 'START_CAPTURE' | 'PAUSE_CAPTURE' | 'RESUME_CAPTURE' | 'STOP_CAPTURE',
+  ) => {
+    if (commandBusy) return;
     setError(null);
+    setCommandBusy(true);
     try {
       const res = (await chrome.runtime.sendMessage({ target: 'background', type })) as Ack;
       if (!res?.ok) setError(res?.error ?? humanError('Unknown error'));
     } catch (e) {
       setError(humanError(e));
+    } finally {
+      setCommandBusy(false);
     }
   };
 
@@ -157,9 +166,9 @@ function App() {
     }
   };
 
-  const busy = state === 'starting' || state === 'stopping';
-  const recording = state === 'recording' || state === 'starting' || state === 'stopping';
-  const stopping = state === 'recording' || state === 'stopping';
+  const busy = commandBusy || state === 'starting' || state === 'stopping';
+  const recording = isLiveCaptureState(state);
+  const stopping = state === 'recording' || state === 'paused' || state === 'stopping';
   const showTranscribed = recording && transcriptionOn && !sessionCaptionsOnly;
   const showOnboarding = providerConfigured === false && !(recording && sessionCaptionsOnly);
   return (
@@ -187,15 +196,27 @@ function App() {
 
       <div class="st-hero">
         {stopping ? (
-          <button
-            type="button"
-            class="st-record st-record--recording"
-            disabled={busy}
-            onClick={() => send('STOP_CAPTURE')}
-          >
-            <StopIcon />
-            Stop
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {state !== 'stopping' && (
+              <button
+                type="button"
+                class="st-btn st-btn--quiet"
+                disabled={busy}
+                onClick={() => send(state === 'paused' ? 'RESUME_CAPTURE' : 'PAUSE_CAPTURE')}
+              >
+                {state === 'paused' ? 'Resume' : 'Pause'}
+              </button>
+            )}
+            <button
+              type="button"
+              class="st-record st-record--recording"
+              disabled={busy}
+              onClick={() => send('STOP_CAPTURE')}
+            >
+              <StopIcon />
+              Stop
+            </button>
+          </div>
         ) : (
           <button
             type="button"
@@ -207,13 +228,15 @@ function App() {
             Record
           </button>
         )}
-        {state === 'recording' && (
+        {(state === 'recording' || state === 'paused') && (
           <div data-testid="elapsed-time" class="st-elapsed" aria-live="polite">
-            {formatElapsedMs(elapsedMs)}
+            {state === 'paused' ? 'Paused' : formatElapsedMs(elapsedMs)}
           </div>
         )}
         <span class="st-status">
-          {stopping
+          {state === 'paused'
+            ? 'Recording paused'
+            : stopping
             ? 'Recording this tab'
             : state === 'starting'
               ? 'Starting…'
