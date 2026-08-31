@@ -19,7 +19,7 @@ import type { ToSidePanel } from './messages';
 import { getSegments, putSegments } from './segmentStore';
 import { getSession, listSessions, updateSession, type StoredSession } from './sessionStore';
 import { humanError } from './userError';
-import { getSettings, type Settings } from './settings';
+import { getSettings, summaryGuidance, type Settings } from './settings';
 
 const SUMMARY_DELTA_MIN_MS = 150;
 
@@ -112,7 +112,11 @@ export async function retryPendingIntelligence(): Promise<void> {
  * structured LLM summary, and a session cost total (transcribed STT minutes
  * + LLM tokens). Failures here must not fail capture finalize.
  */
-export async function runFinalizeIntelligence(sessionId: string, settings: Settings): Promise<void> {
+export async function runFinalizeIntelligence(
+  sessionId: string,
+  settings: Settings,
+  templateId?: string,
+): Promise<void> {
   const extraTerms = settings.redactTerms;
   let segments = await getSegments(sessionId);
 
@@ -171,8 +175,9 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
         // Long meetings use map-reduce so nothing is silently dropped by the
         // 24k-char clip; short ones keep the single-pass call.
         summary = await summarizeMeetingLong(complete, forLlm, {
-          guidance: settings.summaryPrompt,
+          guidance: summaryGuidance(settings, templateId),
           model: settings.llmModel.trim() || undefined,
+          personalContext: settings.personalContext,
         });
         intelligence = null;
       } catch (e) {

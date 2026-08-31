@@ -1,7 +1,6 @@
 import { render } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import {
-  DEFAULT_SUMMARY_GUIDANCE,
   LLM_PROVIDER_IDS,
   RETENTION_CHOICES,
   TRANSCRIPTION_PROVIDER_IDS,
@@ -16,11 +15,18 @@ import {
 } from '@scribetab/shared';
 import {
   DEFAULT_SETTINGS,
+  DEFAULT_TEMPLATE_LABEL,
   THEME_CHOICES,
+  findSummaryTemplate,
   getSettings,
   saveSettings,
+  summaryGuidance,
+  summaryTemplateChoices,
+  withActiveTemplateId,
+  withDefaultSummaryGuidance,
   withLlmField,
   withLlmProvider,
+  withSummaryGuidance,
   withSttField,
   withSttProvider,
   type Settings,
@@ -62,10 +68,8 @@ const THEME_LABELS: Record<ThemeChoice, string> = {
 };
 
 const row = { display: 'block', margin: '12px 0 4px', fontWeight: 600, fontSize: 12.5, color: 'var(--st-muted)' } as const;
-const input = {} as const;
 const hint = { color: 'var(--st-muted)', fontSize: 12.5, lineHeight: 1.45 } as const;
 const err = { color: 'var(--st-danger)', fontSize: 12, margin: '4px 0 0' } as const;
-const section = {} as const;
 
 function App() {
   const [s, setS] = useState<Settings>(DEFAULT_SETTINGS);
@@ -87,6 +91,11 @@ function App() {
 
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) =>
     setS((prev) => ({ ...prev, [key]: value }));
+  const setPersonalContext = (key: keyof Settings['personalContext'], value: string) =>
+    setS((prev) => ({
+      ...prev,
+      personalContext: { ...prev.personalContext, [key]: value },
+    }));
 
   const sttUrlError = s.providerId === 'custom' ? validateHttpUrl(s.baseUrl) : null;
   const llmUrlError = s.llmProviderId === 'custom' ? validateHttpUrl(s.llmBaseUrl) : null;
@@ -146,7 +155,7 @@ function App() {
         llmBaseUrl: s.llmBaseUrl.trim(),
         redactTerms: s.redactTerms.map((t) => t.trim()).filter(Boolean),
         vocabTerms: s.vocabTerms.map((t) => t.trim()).filter(Boolean),
-        summaryPrompt: s.summaryPrompt.trim(),
+        summaryPrompt: '',
       });
       setStatus({
         kind: 'ok',
@@ -513,24 +522,6 @@ function App() {
               }
             />
 
-            <label style={row} for="summaryPrompt">Summary guidance</label>
-            <textarea
-              id="summaryPrompt"
-              data-testid="summary-prompt"
-              rows={5}
-              maxLength={4000}
-              style={{ ...input, minHeight: 80, fontFamily: 'inherit' }}
-              placeholder={DEFAULT_SUMMARY_GUIDANCE}
-              value={s.summaryPrompt}
-              onInput={(e) => set('summaryPrompt', (e.currentTarget as HTMLTextAreaElement).value)}
-            />
-            <p style={{ fontSize: 11, color: '#666', margin: '2px 0 8px' }}>
-              Customize what the summary focuses on. Output format and transcript handling are set by ScribeTab; guidance that contradicts them will produce a lower-quality summary.
-              <button type="button" data-testid="summary-prompt-reset" style={{ marginLeft: 8 }} onClick={() => set('summaryPrompt', '')}>
-                Reset to default
-              </button>
-            </p>
-
             <div style={{ marginTop: 8 }}>
               <button type="button" class="st-btn st-btn--quiet" disabled={probing !== null} onClick={() => void testLlm()}>
                 {probing === 'llm' ? 'Testing…' : 'Test LLM connection'}
@@ -543,13 +534,126 @@ function App() {
             </div>
           </>
         )}
+
+        <fieldset
+          class="st-card"
+          style={{ margin: '16px 0 0', padding: '8px 14px 14px', maxWidth: 460 }}
+        >
+          <legend style={{ padding: '0 6px', fontSize: 12.5, fontWeight: 700 }}>
+            Summary template
+          </legend>
+          <label style={{ ...row, marginTop: 4 }} for="summaryTemplate">Template</label>
+          <select
+            id="summaryTemplate"
+            data-testid="summary-template"
+            class="st-select"
+            value={s.activeTemplateId}
+            onChange={(e) => {
+              const templateId = (e.currentTarget as HTMLSelectElement).value;
+              setS((prev) => withActiveTemplateId(prev, templateId));
+            }}
+          >
+            <option value="">{DEFAULT_TEMPLATE_LABEL}</option>
+            {summaryTemplateChoices(s).map((template) => (
+              <option key={template.id} value={template.id}>{template.name}</option>
+            ))}
+          </select>
+
+          <label style={row} for="summaryGuidance">Guidance</label>
+          <textarea
+            id="summaryGuidance"
+            data-testid="summary-guidance"
+            class="st-textarea"
+            rows={6}
+            maxLength={4000}
+            style={{ minHeight: 104 }}
+            value={findSummaryTemplate(s)?.guidance ?? summaryGuidance(s)}
+            onInput={(e) => {
+              const guidance = (e.currentTarget as HTMLTextAreaElement).value;
+              setS((prev) =>
+                withSummaryGuidance(prev, prev.activeTemplateId, guidance),
+              );
+            }}
+          />
+          <p class="st-hint" style={{ margin: '5px 0 0' }}>
+            Editing a built-in makes a personal copy. The output format and untrusted-transcript safeguards stay fixed.
+          </p>
+          <button
+            type="button"
+            data-testid="summary-guidance-reset"
+            class="st-chip"
+            style={{ marginTop: 8 }}
+            onClick={() => setS((prev) => withDefaultSummaryGuidance(prev))}
+          >
+            Reset to default
+          </button>
+        </fieldset>
+
+        <fieldset
+          class="st-card"
+          style={{ margin: '12px 0 0', padding: '8px 14px 14px', maxWidth: 460 }}
+        >
+          <legend style={{ padding: '0 6px', fontSize: 12.5, fontWeight: 700 }}>
+            Personal context
+          </legend>
+          <p class="st-hint" style={{ margin: '4px 0 0' }}>
+            Optional details help summaries use the right perspective and language. They are sent only with summary requests to your configured LLM.
+          </p>
+          <label style={row} for="personalName">Name</label>
+          <input
+            id="personalName"
+            data-testid="personal-context-name"
+            class="st-input"
+            maxLength={200}
+            value={s.personalContext.name}
+            onInput={(e) =>
+              setPersonalContext('name', (e.currentTarget as HTMLInputElement).value)
+            }
+          />
+          <label style={row} for="personalRole">Role</label>
+          <input
+            id="personalRole"
+            data-testid="personal-context-role"
+            class="st-input"
+            maxLength={200}
+            placeholder="Engineering lead"
+            value={s.personalContext.role}
+            onInput={(e) =>
+              setPersonalContext('role', (e.currentTarget as HTMLInputElement).value)
+            }
+          />
+          <label style={row} for="personalTeam">Team</label>
+          <input
+            id="personalTeam"
+            data-testid="personal-context-team"
+            class="st-input"
+            maxLength={200}
+            placeholder="Platform"
+            value={s.personalContext.team}
+            onInput={(e) =>
+              setPersonalContext('team', (e.currentTarget as HTMLInputElement).value)
+            }
+          />
+          <label style={row} for="outputLanguage">Output language</label>
+          <input
+            id="outputLanguage"
+            data-testid="personal-context-language"
+            class="st-input"
+            maxLength={200}
+            placeholder="English"
+            value={s.personalContext.outputLanguage}
+            onInput={(e) =>
+              setPersonalContext('outputLanguage', (e.currentTarget as HTMLInputElement).value)
+            }
+          />
+        </fieldset>
       </section>
 
       <section class="st-section">
         <h2>Redaction</h2>
         <p style={hint}>
-          Text-only. Emails, phone numbers, Luhn-checked cards, SSNs, and custom terms
-          are stripped before LLM calls, and before storage when enabled below.
+          Transcript text only. Emails, phone numbers, Luhn-checked cards, SSNs, and custom terms
+          are stripped from transcripts before LLM calls, and before storage when enabled below.
           Raw audio sent to STT cannot be pre-redacted; retained WAV files are unredacted.
         </p>
         <label style={{ ...row, fontWeight: 400 }}>

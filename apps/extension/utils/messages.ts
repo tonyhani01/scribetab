@@ -76,7 +76,12 @@ export type ToBackground =
       endMs?: number;      // wall-clock last mutation time for the block
     }
   | { target: 'background'; type: 'SYNC_ALL' }
-  | { target: 'background'; type: 'REGENERATE_SUMMARY'; sessionId: string }
+  | {
+      target: 'background';
+      type: 'REGENERATE_SUMMARY';
+      sessionId: string;
+      templateId?: string;
+    }
   | { target: 'background'; type: 'EXPORT_ACTIONS'; sessionId: string; itemIds: string[] }
   | { target: 'background'; type: 'ADD_HIGHLIGHT'; sessionId: string; label?: string }
   | { target: 'background'; type: 'RENAME_SPEAKER'; sessionId: string; from: string; to: string }

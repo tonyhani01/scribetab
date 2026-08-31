@@ -1,15 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { ExportActionsAck, TranscriptExportOptions, TranscriptSegment } from '@scribetab/shared';
+import type { ExportActionsAck, SummaryTemplate, TranscriptExportOptions, TranscriptSegment } from '@scribetab/shared';
 import { DEFAULT_TRANSCRIPT_EXPORT_OPTIONS, distinctSpeakers, formatClock, formatUsd, highlightsWithContext, llmEndpoint, originPattern } from '@scribetab/shared';
 import type MiniSearch from 'minisearch';
-import type { ToSidePanel, Ack } from '@/utils/messages';
+import type { Ack, ToBackground, ToSidePanel } from '@/utils/messages';
 import { isHostForbiddenError, isHostMissingError } from '@/utils/nativeSync';
 import { clipboardWriter, copyMarkdownExport, downloadExport, type ExportFormat } from '@/utils/exportDownload';
 import { getHighlightsForSession } from '@/utils/highlightStore';
 import { getSegments } from '@/utils/segmentStore';
 import { deleteSession, getSession, listSessions, type StoredSession } from '@/utils/sessionStore';
 import { canDeleteSession } from '@/utils/librarySession';
-import { getSettings } from '@/utils/settings';
+import {
+  DEFAULT_TEMPLATE_LABEL,
+  SETTINGS_STORAGE_KEY,
+  getSettings,
+  normalizeSettings,
+  summaryTemplateChoices,
+  type Settings,
+} from '@/utils/settings';
 import { nextSelection } from '@/utils/actionExport';
 import { applyStoredSpeakerNames, speakerMergeTarget } from '@/utils/speakerRename';
 import { humanError } from '@/utils/userError';
@@ -82,6 +89,8 @@ export function LibraryView() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [llmOrigin, setLlmOrigin] = useState<string | null>(null);
+  const [summaryTemplates, setSummaryTemplates] = useState<SummaryTemplate[]>([]);
+  const [regenerateTemplateId, setRegenerateTemplateId] = useState('');
   const [summaryLive, setSummaryLive] = useState(EMPTY_SUMMARY_LIVE);
   const [audioSource, setAudioSource] = useState<(SessionAudioSource & { sessionId: string }) | null>(null);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
@@ -126,7 +135,9 @@ export function LibraryView() {
 
   useEffect(() => {
     void reload();
-    void getSettings().then((s) => {
+    const applySettings = (s: Settings) => {
+      setSummaryTemplates(summaryTemplateChoices(s));
+      setRegenerateTemplateId(s.activeTemplateId);
       if (s.llmProviderId === '') {
         setLlmOrigin(null);
         return;
@@ -143,7 +154,8 @@ export function LibraryView() {
       } catch {
         setLlmOrigin(null);
       }
-    });
+    };
+    void getSettings().then(applySettings);
 
     const onMessage = (raw: unknown) => {
       const msg = raw as ToSidePanel;
@@ -183,6 +195,12 @@ export function LibraryView() {
         void reload();
       }
       if (c.quotaWarning) setAudioRevision((revision) => revision + 1);
+      const settingsChange = c[SETTINGS_STORAGE_KEY];
+      if (settingsChange) {
+        applySettings(
+          normalizeSettings(settingsChange.newValue as Partial<Settings> | undefined),
+        );
+      }
     };
     chrome.runtime.onMessage.addListener(onMessage);
     chrome.storage.onChanged.addListener(onStorage);
@@ -460,7 +478,8 @@ export function LibraryView() {
         target: 'background',
         type: 'REGENERATE_SUMMARY',
         sessionId: open.id,
-      } satisfies { target: 'background'; type: 'REGENERATE_SUMMARY'; sessionId: string })) as Ack;
+        templateId: regenerateTemplateId,
+      } satisfies ToBackground)) as Ack;
       if (!res?.ok) setActionError(res?.error ?? humanError('Unknown error'));
       await refreshOpen(open.id);
     } catch (e) {
@@ -513,7 +532,8 @@ export function LibraryView() {
         target: 'background',
         type: 'REGENERATE_SUMMARY',
         sessionId: open.id,
-      })) as Ack;
+        templateId: regenerateTemplateId,
+      } satisfies ToBackground)) as Ack;
       if (!res?.ok) setActionError(res?.error ?? humanError('Unknown error'));
       await refreshOpen(open.id);
     } catch (e) {
@@ -746,6 +766,20 @@ export function LibraryView() {
           ))}
           <button class="st-chip" disabled={busy} onClick={() => void exportOne('notebooklm')}>Export for NotebookLM</button>
           <button data-testid="copy-transcript" class="st-chip" disabled={busy} onClick={() => void copyTranscript()}>Copy transcript</button>
+          <select
+            data-testid="regenerate-template"
+            class="st-select"
+            aria-label="Summary template for regeneration"
+            value={regenerateTemplateId}
+            disabled={busy}
+            style={{ width: 'auto', maxWidth: 180, padding: '5px 8px' }}
+            onChange={(event) => setRegenerateTemplateId(event.currentTarget.value)}
+          >
+            <option value="">{DEFAULT_TEMPLATE_LABEL}</option>
+            {summaryTemplates.map((template) => (
+              <option key={template.id} value={template.id}>{template.name}</option>
+            ))}
+          </select>
           <button class="st-chip" disabled={busy} onClick={() => void regenerateSummary()}>Regenerate summary</button>
           <button data-testid="delete-session" class="st-chip st-chip--danger" disabled={busy} onClick={() => void deleteOpen()}>Delete</button>
         </div>

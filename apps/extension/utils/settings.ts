@@ -177,15 +177,15 @@ function asTemplateId(v: unknown, templates: readonly SummaryTemplate[]): string
   return allSummaryTemplates(templates).some((t) => t.id === id) ? id : '';
 }
 
-/** Guidance currently in force for `templateId` (falls back to `activeTemplateId`). */
+/** Guidance currently in force (`undefined` falls back to `activeTemplateId`; `''` means default). */
 export function summaryGuidance(s: Settings, templateId?: string): string {
-  const id = typeof templateId === 'string' && templateId.trim() ? templateId : s.activeTemplateId;
+  const id = templateId === undefined ? s.activeTemplateId : templateId;
   return resolveSummaryGuidance(allSummaryTemplates(s.summaryTemplates), id);
 }
 
-/** Template currently in force for a run, or undefined for the default guidance. */
+/** Template currently in force (`undefined` uses the active id), or undefined for default guidance. */
 export function findSummaryTemplate(s: Settings, templateId?: string): SummaryTemplate | undefined {
-  const id = typeof templateId === 'string' && templateId.trim() ? templateId : s.activeTemplateId;
+  const id = templateId === undefined ? s.activeTemplateId : templateId;
   if (!id) return undefined;
   return allSummaryTemplates(s.summaryTemplates).find((t) => t.id === id);
 }
@@ -245,15 +245,9 @@ export function withActiveTemplateId(s: Settings, templateId: string): Settings 
   return { ...s, activeTemplateId: asTemplateId(templateId, s.summaryTemplates) };
 }
 
-/** Drop the selected template's text and go back to the default guidance. */
+/** Keep personal templates intact and select the default ScribeTab guidance. */
 export function withDefaultSummaryGuidance(s: Settings): Settings {
-  const id = s.activeTemplateId;
-  if (!id || isBuiltinTemplateId(id)) return { ...s, activeTemplateId: '' };
-  return {
-    ...s,
-    summaryTemplates: s.summaryTemplates.map((t) => (t.id === id ? { ...t, guidance: '' } : t)),
-    activeTemplateId: '',
-  };
+  return { ...s, activeTemplateId: '' };
 }
 
 export { BUILTIN_TEMPLATES } from '@scribetab/shared';
@@ -267,6 +261,22 @@ export function normalizeSettings(raw: Partial<Settings> | undefined): Settings 
   const llmModels = asStringMap(src.llmModels);
   const providerId = asProviderId(src.providerId);
   const llmProviderId = asLlmProviderId(src.llmProviderId);
+  const summaryTemplates = asSummaryTemplates(src.summaryTemplates);
+  const legacyGuidance = typeof src.summaryPrompt === 'string' ? src.summaryPrompt.trim() : '';
+
+  if (
+    legacyGuidance &&
+    !summaryTemplates.some((template) => template.id === LEGACY_CUSTOM_TEMPLATE_ID)
+  ) {
+    if (summaryTemplates.length >= MAX_SUMMARY_TEMPLATES) summaryTemplates.pop();
+    summaryTemplates.push({
+      id: LEGACY_CUSTOM_TEMPLATE_ID,
+      name: LEGACY_CUSTOM_TEMPLATE_NAME,
+      guidance: legacyGuidance,
+    });
+  }
+  const requestedTemplateId = asTemplateId(src.activeTemplateId, summaryTemplates);
+  const activeTemplateId = requestedTemplateId || (legacyGuidance ? LEGACY_CUSTOM_TEMPLATE_ID : '');
 
   if (providerId && typeof src.apiKey === 'string' && src.apiKey && apiKeys[providerId] === undefined) {
     apiKeys[providerId] = src.apiKey;
@@ -290,6 +300,10 @@ export function normalizeSettings(raw: Partial<Settings> | undefined): Settings 
     models,
     llmApiKeys,
     llmModels,
+    summaryPrompt: '',
+    summaryTemplates,
+    activeTemplateId,
+    personalContext: asPersonalContext(src.personalContext),
     theme: asTheme(src.theme),
     apiKey: providerId ? (apiKeys[providerId] ?? '') : '',
     model: providerId ? (models[providerId] ?? '') : '',
@@ -300,7 +314,6 @@ export function normalizeSettings(raw: Partial<Settings> | undefined): Settings 
   merged.vocabTerms = Array.isArray(merged.vocabTerms)
     ? merged.vocabTerms.filter((term): term is string => typeof term === 'string')
     : [];
-  if (typeof merged.summaryPrompt !== 'string') merged.summaryPrompt = '';
   if (!isRetentionDays(merged.retentionDays)) merged.retentionDays = 'forever';
   return merged;
 }
