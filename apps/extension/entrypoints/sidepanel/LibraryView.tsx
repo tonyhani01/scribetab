@@ -2,7 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ExportActionsAck, SummaryTemplate, TranscriptExportOptions, TranscriptSegment } from '@scribetab/shared';
 import { DEFAULT_TRANSCRIPT_EXPORT_OPTIONS, distinctSpeakers, formatClock, formatUsd, highlightsWithContext, llmEndpoint, originPattern } from '@scribetab/shared';
 import type MiniSearch from 'minisearch';
-import type { Ack, ImportTranscriptAck, ToBackground, ToSidePanel } from '@/utils/messages';
+import type {
+  Ack,
+  ImportTranscriptAck,
+  LibraryAskAck,
+  LibraryAskSource,
+  ToBackground,
+  ToSidePanel,
+} from '@/utils/messages';
 import { isHostForbiddenError, isHostMissingError } from '@/utils/nativeSync';
 import { clipboardWriter, copyMarkdownExport, downloadExport, type ExportFormat } from '@/utils/exportDownload';
 import { getHighlightsForSession } from '@/utils/highlightStore';
@@ -115,6 +122,11 @@ export function LibraryView() {
   });
   const [copied, setCopied] = useState(false);
   const [detailPane, setDetailPane] = useState<'transcript' | 'ask'>('transcript');
+  const [askQuery, setAskQuery] = useState('');
+  const [askPending, setAskPending] = useState(false);
+  const [askAnswer, setAskAnswer] = useState<string | null>(null);
+  const [askSources, setAskSources] = useState<LibraryAskSource[]>([]);
+  const [askError, setAskError] = useState<string | null>(null);
   const [, setTick] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -222,6 +234,35 @@ export function LibraryView() {
       chrome.storage.onChanged.removeListener(onStorage);
     };
   }, []);
+
+  const askLibrary = async () => {
+    const q = askQuery.trim();
+    if (!q || askPending) return;
+    setAskError(null);
+    setAskAnswer(null);
+    setAskSources([]);
+    setAskPending(true);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        target: 'background',
+        type: 'LIBRARY_ASK',
+        question: q,
+      } satisfies ToBackground)) as LibraryAskAck;
+      if (res?.ok && typeof res.answer === 'string') {
+        setAskAnswer(res.answer);
+        setAskSources(res.sources ?? []);
+        setAskQuery('');
+      } else if (res?.error === 'needs-permission') {
+        setAskError('Grant the LLM provider host permission (see the summary section) to ask across meetings.');
+      } else {
+        setAskError(res?.error ?? humanError('Ask failed'));
+      }
+    } catch (e) {
+      setAskError(humanError(e));
+    } finally {
+      setAskPending(false);
+    }
+  };
 
   const openSession = async (id: string) => {
     openIdRef.current = id;
@@ -989,6 +1030,67 @@ export function LibraryView() {
           }}
         />
       </div>
+      <section class="st-detail-card" aria-label="Ask your meetings" style={{ marginBottom: 10 }}>
+        <h2>Ask your meetings</h2>
+        <form
+          style={{ display: 'flex', gap: 6 }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            void askLibrary();
+          }}
+        >
+          <input
+            data-testid="library-ask-input"
+            type="text"
+            class="st-input"
+            style={{ flex: 1, maxWidth: 'none' }}
+            placeholder="Ask across all meetings…"
+            value={askQuery}
+            disabled={askPending}
+            onInput={(e) => setAskQuery((e.currentTarget as HTMLInputElement).value)}
+          />
+          <button type="submit" class="st-btn" disabled={askPending || !askQuery.trim()}>
+            Ask
+          </button>
+        </form>
+        {askPending && (
+          <p class="st-hint st-gen" aria-live="polite" style={{ margin: '8px 0 0' }}>
+            <span class="st-gen-dot" />
+            <span>Searching your meetings…</span>
+          </p>
+        )}
+        {askError && (
+          <p data-testid="library-ask-error" class="st-banner st-banner--error" style={{ marginTop: 8 }}>
+            {askError}
+          </p>
+        )}
+        {askAnswer !== null && (
+          <div style={{ marginTop: 8 }}>
+            <p
+              data-testid="library-ask-answer"
+              style={{ whiteSpace: 'pre-wrap', fontSize: 13, margin: 0, background: 'var(--st-tint)', borderRadius: 6, padding: '6px 8px' }}
+            >
+              {askAnswer}
+            </p>
+            {askSources.length > 0 && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
+                <span class="st-hint">Sources</span>
+                {askSources.map((source) => (
+                  <button
+                    key={source.sessionId}
+                    type="button"
+                    class="st-chip"
+                    data-testid="library-ask-source"
+                    onClick={() => void openSession(source.sessionId)}
+                  >
+                    {source.title}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </section>
       <input
         type="search"
         placeholder="Search transcripts…"

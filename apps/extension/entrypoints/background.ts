@@ -28,6 +28,7 @@ import {
   runFinalizeIntelligence,
   scheduleFinalizeIntelligence,
 } from '@/utils/intelligence';
+import { answerLibraryQuestion } from '@/utils/libraryAsk';
 import {
   captureOriginAfterResume,
   refreshActionBadge,
@@ -929,6 +930,11 @@ export default defineBackground(() => {
           sendResponse(
             await answerTranscriptQuestion(msg.sessionId, msg.question, msg.history, settings),
           );
+          break;
+        }
+        case 'LIBRARY_ASK': {
+          const settings = await getSettings();
+          sendResponse(await answerLibraryQuestion(msg.question, settings));
           break;
         }
         case 'EXPORT_ACTIONS': {

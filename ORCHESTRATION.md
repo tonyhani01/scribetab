@@ -10,8 +10,8 @@ Costs/speed: /tmp/st-orch/costs.tsv
 | A2 archive | done | pass | |
 | A3 notifications | done | pass (305 ext tests, typecheck) | |
 | B1 templates+context | done | pass (44 tests, typecheck) | |
-| B2 chat | shared builder committed; wiring pending | |
-| B3 library ask | pending | |
+| B2 chat | done | pass (313 ext tests, typecheck) |
+| B3 library ask | done | pass (330 ext tests, typecheck) — pi glm-5.3-flash $0.054 |
 | C1 edit segments | done | pass | |
 | C2 typed tags | pending | |
 | C3 import | done | pass | |
