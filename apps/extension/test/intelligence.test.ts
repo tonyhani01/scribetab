@@ -110,6 +110,21 @@ function stubChat(narrative: string, actionLine = '') {
 }
 
 describe('runFinalizeIntelligence', () => {
+  it('notifies with the stored title after a summary succeeds', async () => {
+    const create = vi.fn().mockResolvedValue('notification-id');
+    (chrome as typeof chrome & { notifications: { create: typeof create } }).notifications = { create };
+    stubChat('Ship on Friday.', '- Ada ships');
+
+    await runFinalizeIntelligence(
+      's1',
+      settings({ llmProviderId: 'openai', llmApiKey: 'sk-x', notifyOnReady: true }),
+    );
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Summary ready: Standup',
+    }));
+  });
+
   it('stores summary, action items, and STT+LLM cost when an LLM is configured', async () => {
     const fetchMock = stubChat('Ship on Friday.', '- Ada ships');
     await runFinalizeIntelligence(

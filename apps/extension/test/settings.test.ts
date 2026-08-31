@@ -15,6 +15,27 @@ import {
 } from '../utils/settings';
 
 describe('normalizeSettings', () => {
+  it('defaults and guards ready-notification and Meet-chat booleans', () => {
+    expect(normalizeSettings(undefined)).toMatchObject({
+      notifyOnReady: true,
+      saveMeetChat: false,
+    });
+    expect(normalizeSettings({
+      notifyOnReady: false,
+      saveMeetChat: true,
+    })).toMatchObject({
+      notifyOnReady: false,
+      saveMeetChat: true,
+    });
+    expect(normalizeSettings({
+      notifyOnReady: 'yes' as unknown as boolean,
+      saveMeetChat: 1 as unknown as boolean,
+    })).toMatchObject({
+      notifyOnReady: true,
+      saveMeetChat: false,
+    });
+  });
+
   it('defaults custom vocabulary and filters corrupted stored entries', () => {
     expect(DEFAULT_SETTINGS.vocabTerms).toEqual([]);
     expect(normalizeSettings(undefined).vocabTerms).toEqual([]);

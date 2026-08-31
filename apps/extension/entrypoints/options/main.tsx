@@ -270,6 +270,15 @@ function App() {
         </label>
         <label style={{ ...row, fontWeight: 400 }}>
           <input
+            data-testid="save-meet-chat"
+            type="checkbox"
+            checked={s.saveMeetChat}
+            onChange={(e) => set('saveMeetChat', (e.currentTarget as HTMLInputElement).checked)}
+          />{' '}
+          Save Google Meet chat messages in the transcript
+        </label>
+        <label style={{ ...row, fontWeight: 400 }}>
+          <input
             id="consentReminder"
             data-testid="consent-reminder"
             type="checkbox"
@@ -277,6 +286,15 @@ function App() {
             onChange={(e) => set('consentReminder', (e.currentTarget as HTMLInputElement).checked)}
           />{' '}
           Show a consent reminder when recording starts
+        </label>
+        <label style={{ ...row, fontWeight: 400 }}>
+          <input
+            data-testid="notify-on-ready"
+            type="checkbox"
+            checked={s.notifyOnReady}
+            onChange={(e) => set('notifyOnReady', (e.currentTarget as HTMLInputElement).checked)}
+          />{' '}
+          Notify me when transcripts and summaries are ready
         </label>
         <label style={row} for="retentionDays">Audio retention</label>
         <select

@@ -6,7 +6,15 @@ import {
   type CaptionReduceState,
 } from '@/utils/captionReduce';
 import { findCaptionsContainer, parseCaptionNodes } from '@/utils/meetSelectors';
+import {
+  EMPTY_MEET_CHAT_STATE,
+  applyMeetChatSnapshots,
+  findMeetChatContainer,
+  parseMeetChatSnapshots,
+  type MeetChatState,
+} from '@/utils/meetChat';
 import type { Ack, ToMeetCaptions } from '@/utils/messages';
+import { getSettings } from '@/utils/settings';
 
 const STABILIZE_MS = 400;
 const SCAN_MS = 1000;
@@ -23,6 +31,14 @@ export default defineContentScript({
     let scanInterval: number | null = null;
     let scanTimer: number | null = null;
     let capturing = false;
+    let chatState: MeetChatState = EMPTY_MEET_CHAT_STATE;
+    let chatContainer: Element | null = null;
+    let chatContainerObserver: MutationObserver | null = null;
+    let chatDiscovery: MutationObserver | null = null;
+    let chatScanInterval: number | null = null;
+    let chatScanTimer: number | null = null;
+    let chatEnabled = false;
+    let chatSettingsEpoch = 0;
 
     const send = (ev: CaptionEvent) => {
       if (!capturing) return;
@@ -49,6 +65,25 @@ export default defineContentScript({
       }, STABILIZE_MS);
     };
 
+    const handleChatMutations = () => {
+      if (!chatContainer || !capturing || !chatEnabled) return;
+      const applied = applyMeetChatSnapshots(
+        chatState,
+        parseMeetChatSnapshots(chatContainer),
+      );
+      chatState = applied.state;
+      // Meet does not expose a stable sent-at value here; cues use observation time.
+      const now = Date.now();
+      applied.events.forEach((event, index) => {
+        send({
+          speaker: `${event.author} (chat)`,
+          text: event.text,
+          timestampMs: now + index,
+          endMs: now + index + 1,
+        });
+      });
+    };
+
     const handleMutations = () => {
       if (!container || !capturing) return;
       const now = Date.now();
@@ -65,6 +100,12 @@ export default defineContentScript({
       container = null;
     };
 
+    const detachChat = () => {
+      chatContainerObserver?.disconnect();
+      chatContainerObserver = null;
+      chatContainer = null;
+    };
+
     const disarmDiscovery = () => {
       boot?.disconnect();
       boot = null;
@@ -75,6 +116,86 @@ export default defineContentScript({
       if (scanTimer != null) {
         window.clearTimeout(scanTimer);
         scanTimer = null;
+      }
+    };
+
+    const disarmChatDiscovery = () => {
+      chatDiscovery?.disconnect();
+      chatDiscovery = null;
+      if (chatScanTimer != null) {
+        window.clearTimeout(chatScanTimer);
+        chatScanTimer = null;
+      }
+    };
+
+    const requestChatScan = () => {
+      if (!capturing || !chatEnabled || chatScanTimer != null) return;
+      chatScanTimer = window.setTimeout(() => {
+        chatScanTimer = null;
+        scanChat();
+      }, 100);
+    };
+
+    const armChatDiscovery = () => {
+      if (!capturing || !chatEnabled) return;
+      if (!chatDiscovery) {
+        chatDiscovery = new MutationObserver(requestChatScan);
+        chatDiscovery.observe(document.documentElement, { childList: true, subtree: true });
+      }
+      if (chatScanInterval == null) {
+        chatScanInterval = window.setInterval(scanChat, SCAN_MS);
+      }
+    };
+
+    function scanChat() {
+      if (!capturing || !chatEnabled) return;
+      const found = findMeetChatContainer(document);
+      if (!found) {
+        detachChat();
+        armChatDiscovery();
+        return;
+      }
+      if (found === chatContainer) {
+        handleChatMutations();
+        return;
+      }
+      detachChat();
+      chatContainer = found;
+      disarmChatDiscovery();
+      chatContainerObserver = new MutationObserver(handleChatMutations);
+      chatContainerObserver.observe(chatContainer, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+      });
+      handleChatMutations();
+    }
+
+    const stopChatObserving = () => {
+      disarmChatDiscovery();
+      if (chatScanInterval != null) {
+        window.clearInterval(chatScanInterval);
+        chatScanInterval = null;
+      }
+      detachChat();
+      chatState = EMPTY_MEET_CHAT_STATE;
+      chatEnabled = false;
+    };
+
+    const refreshChatSetting = async () => {
+      const epoch = ++chatSettingsEpoch;
+      try {
+        const settings = await getSettings();
+        if (!capturing || epoch !== chatSettingsEpoch) return;
+        if (!settings.saveMeetChat) {
+          stopChatObserving();
+          return;
+        }
+        chatEnabled = true;
+        armChatDiscovery();
+        scanChat();
+      } catch {
+        // Storage unavailable or an unsupported Meet DOM: chat capture stays off.
       }
     };
 
@@ -142,13 +263,19 @@ export default defineContentScript({
 
     const setCapturing = (active: boolean) => {
       if (active === capturing) {
-        if (active) scan();
+        if (active) {
+          scan();
+          void refreshChatSetting();
+        }
         return;
       }
       if (active) {
         capturing = true;
         startObserving();
+        void refreshChatSetting();
       } else {
+        chatSettingsEpoch++;
+        stopChatObserving();
         stopObserving(); // flush while capturing is still true so last cues send
         capturing = false;
       }

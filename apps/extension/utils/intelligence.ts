@@ -20,6 +20,7 @@ import { getSegments, putSegments } from './segmentStore';
 import { getSession, listSessions, updateSession, type StoredSession } from './sessionStore';
 import { humanError } from './userError';
 import { getSettings, summaryGuidance, type Settings } from './settings';
+import { notifyReady } from './notify';
 
 const SUMMARY_DELTA_MIN_MS = 150;
 
@@ -196,6 +197,9 @@ export async function runFinalizeIntelligence(
     ...retry,
     ...(summary ? { summary, summaryMarkdown: summaryToMarkdown(summary) } : {}),
   });
+  if (summary) {
+    notifyReady('summary', existing?.title ?? 'Untitled meeting', settings.notifyOnReady);
+  }
 }
 
 export function createDeltaEmitter(

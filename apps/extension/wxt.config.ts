@@ -42,6 +42,7 @@ export default defineConfig({
       'sidePanel',
       'nativeMessaging',
       'tabs',
+      'notifications',
     ],
     commands: {
       'start-capture': {

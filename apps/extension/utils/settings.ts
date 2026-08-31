@@ -42,7 +42,9 @@ export interface Settings {
   redactAtRest: boolean;
   redactTerms: string[];
   captionsOnly: boolean; // Meet captions → TranscriptSegment, zero STT provider calls
+  saveMeetChat: boolean; // append observed Google Meet chat lines to the caption pipeline
   consentReminder: boolean; // banner when a recording starts; default on
+  notifyOnReady: boolean; // desktop notification after transcript/summary completion
   /**
    * Legacy single guidance string, superseded by `summaryTemplates`.
    * Kept so an older stored blob can be migrated (see `normalizeSettings`);
@@ -82,7 +84,9 @@ export const DEFAULT_SETTINGS: Settings = {
   redactAtRest: false,
   redactTerms: [],
   captionsOnly: false,
+  saveMeetChat: false,
   consentReminder: true,
+  notifyOnReady: true,
   summaryPrompt: '',
   summaryTemplates: [],
   activeTemplateId: '',
@@ -305,6 +309,12 @@ export function normalizeSettings(raw: Partial<Settings> | undefined): Settings 
     activeTemplateId,
     personalContext: asPersonalContext(src.personalContext),
     theme: asTheme(src.theme),
+    saveMeetChat: typeof src.saveMeetChat === 'boolean'
+      ? src.saveMeetChat
+      : DEFAULT_SETTINGS.saveMeetChat,
+    notifyOnReady: typeof src.notifyOnReady === 'boolean'
+      ? src.notifyOnReady
+      : DEFAULT_SETTINGS.notifyOnReady,
     apiKey: providerId ? (apiKeys[providerId] ?? '') : '',
     model: providerId ? (models[providerId] ?? '') : '',
     llmApiKey: llmProviderId ? (llmApiKeys[llmProviderId] ?? '') : '',

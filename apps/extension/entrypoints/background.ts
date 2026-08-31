@@ -95,6 +95,7 @@ import {
   updateSession,
 } from '@/utils/sessionStore';
 import { getSettings, type Settings } from '@/utils/settings';
+import { notifyReady } from '@/utils/notify';
 import { persistLastTranscriptionError } from '@/utils/transcriptionError';
 import { GENERIC_USER_ERROR, humanError } from '@/utils/userError';
 import { deleteChunksForSession, sessionHasChunks } from '@/utils/chunkStore';
@@ -467,6 +468,13 @@ async function completeSession(
     });
   }
   if (flipped && status === 'complete') {
+    const [session, segs] = await Promise.all([
+      getSession(sessionId).catch(() => undefined),
+      getSegments(sessionId).catch(() => []),
+    ]);
+    if (segs.length > 0) {
+      notifyReady('transcript', session?.title ?? 'Untitled meeting', s.notifyOnReady);
+    }
     // Do not await the LLM — STOP ack must return promptly. Pending is durable.
     await scheduleFinalizeIntelligence(sessionId, s);
   }
