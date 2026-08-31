@@ -19,3 +19,4 @@ export * from './speakers.js';
 export * from './talkTime.js';
 export * from './retention.js';
 export * from './sttModels.js';
+export * from './importTranscript.js';

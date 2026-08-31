@@ -82,11 +82,16 @@ import {
   statusFromOffscreenAck,
 } from '@/utils/sessionIdentity';
 import {
+  archiveSession,
   createSession,
+  editSessionSegment,
   failStaleRecordings,
   finalizeSession,
   getSession,
+  importTranscriptSession,
   listSessions,
+  purgeExpiredArchivedSessions,
+  restoreSession,
   updateSession,
 } from '@/utils/sessionStore';
 import { getSettings, type Settings } from '@/utils/settings';
@@ -105,7 +110,7 @@ let lastFusionMs = 0;
 let fusionTimer: ReturnType<typeof setTimeout> | null = null;
 let fusionQueuedSession: string | null = null;
 let segmentCountChain: Promise<void> = Promise.resolve();
-const segmentMutationQueue = new PerSessionMutationQueue();
+const sessionMutationQueue = new PerSessionMutationQueue();
 
 async function offscreenContexts(): Promise<chrome.runtime.ExtensionContext[]> {
   return chrome.runtime.getContexts({
@@ -193,7 +198,7 @@ async function applyFusion(sessionId: string, force = false): Promise<void> {
   }
 
   lastFusionMs = Date.now();
-  await segmentMutationQueue.run(sessionId, async () => {
+  await sessionMutationQueue.run(sessionId, async () => {
     const segs = await getSegments(sessionId);
     if (segs.length === 0) return;
     const fused = fuseWithCaptions(segs, sessionId);
@@ -229,7 +234,7 @@ async function applyCaptionEvent(
   if (!cue) return;
 
   if (captionsOnly) {
-    await segmentMutationQueue.run(sessionId, async () => {
+    await sessionMutationQueue.run(sessionId, async () => {
       const segment: TranscriptSegment = captionCueToSegment(sessionId, cue, crypto.randomUUID());
       const session = await getSession(sessionId);
       const named = applyStoredSpeakerNames([segment], session?.speakerNames)[0]!;
@@ -455,6 +460,12 @@ async function completeSession(
   await clearCaptionTimeline(sessionId).catch(() => {});
   const s = await getSettings();
   const flipped = await finalizeSession(sessionId, { retainAudio: s.retainAudio, status });
+  if (flipped) {
+    await updateSession(sessionId, {
+      providerId: s.providerId || undefined,
+      model: s.model.trim() || undefined,
+    });
+  }
   if (flipped && status === 'complete') {
     // Do not await the LLM — STOP ack must return promptly. Pending is durable.
     await scheduleFinalizeIntelligence(sessionId, s);
@@ -807,6 +818,7 @@ export default defineBackground(() => {
     const exceptId = bootExceptId(bootCaptureState, currentSessionId, offscreenAlive);
     const retainAudio = (await getSettings()).retainAudio;
     await failStaleRecordings(exceptId, retainAudio);
+    await purgeExpiredArchivedSessions().catch(() => 0);
     void retryPendingIntelligence();
     void sweepRetainedAudio().catch(() => {});
     if (
@@ -894,7 +906,7 @@ export default defineBackground(() => {
             break;
           }
           await markIntelligencePending(msg.sessionId, settings);
-          await runFinalizeIntelligence(msg.sessionId, settings);
+          await runFinalizeIntelligence(msg.sessionId, settings, msg.templateId);
           const row = await getSession(msg.sessionId);
           if (row?.intelligence === 'needs-permission') {
             sendResponse({ ok: false, error: 'needs-permission' });
@@ -939,7 +951,7 @@ export default defineBackground(() => {
           break;
         }
         case 'RENAME_SPEAKER': {
-          const result = await segmentMutationQueue.run(msg.sessionId, async () => {
+          const result = await sessionMutationQueue.run(msg.sessionId, async () => {
             const session = await getSession(msg.sessionId);
             if (!session) return { ok: false, error: 'Session not found' } satisfies Ack;
             const from = msg.from.trim();
@@ -972,13 +984,70 @@ export default defineBackground(() => {
           break;
         }
         case 'RENAME_SESSION': {
-          const title = msg.title.trim().slice(0, 200);
-          if (!title) {
-            sendResponse({ ok: false, error: 'Title cannot be empty' });
+          const result = await sessionMutationQueue.run(msg.sessionId, async () => {
+            const title = msg.title.trim().slice(0, 200);
+            if (!title) return { ok: false, error: 'Title cannot be empty' } satisfies Ack;
+            await updateSession(msg.sessionId, { title });
+            return { ok: true } satisfies Ack;
+          });
+          sendResponse(result);
+          break;
+        }
+        case 'ARCHIVE_SESSION': {
+          const result = await sessionMutationQueue.run(msg.sessionId, async () => {
+            const session = await getSession(msg.sessionId);
+            if (!session) return { ok: false, error: 'Session not found' } satisfies Ack;
+            if (session.status === 'recording') {
+              return { ok: false, error: 'Stop the recording before archiving it' } satisfies Ack;
+            }
+            await archiveSession(msg.sessionId);
+            return { ok: true } satisfies Ack;
+          });
+          sendResponse(result);
+          break;
+        }
+        case 'RESTORE_SESSION': {
+          const result = await sessionMutationQueue.run(msg.sessionId, async () => {
+            const session = await getSession(msg.sessionId);
+            if (!session) return { ok: false, error: 'Session not found' } satisfies Ack;
+            await restoreSession(msg.sessionId);
+            return { ok: true } satisfies Ack;
+          });
+          sendResponse(result);
+          break;
+        }
+        case 'EDIT_SEGMENT': {
+          const result = await sessionMutationQueue.run(msg.sessionId, async () => {
+            const text = msg.text.trim();
+            if (!text) {
+              return { ok: false, error: 'Transcript text cannot be empty' } satisfies Ack;
+            }
+            const updated = await editSessionSegment(msg.sessionId, msg.segmentId, text);
+            notifySidePanel({
+              target: 'sidepanel',
+              type: 'SEGMENTS_UPDATED',
+              sessionId: msg.sessionId,
+              segments: [updated],
+            });
+            return { ok: true } satisfies Ack;
+          });
+          sendResponse(result);
+          break;
+        }
+        case 'IMPORT_TRANSCRIPT': {
+          const imported = await importTranscriptSession(msg.name, msg.content);
+          if ('error' in imported) {
+            sendResponse({ ok: false, error: imported.error });
             break;
           }
-          await updateSession(msg.sessionId, { title });
-          sendResponse({ ok: true });
+          const segments = await getSegments(imported.sessionId);
+          notifySidePanel({
+            target: 'sidepanel',
+            type: 'SEGMENTS_UPDATED',
+            sessionId: imported.sessionId,
+            segments,
+          });
+          sendResponse({ ok: true, sessionId: imported.sessionId });
           break;
         }
         case 'SYNC_ALL': {

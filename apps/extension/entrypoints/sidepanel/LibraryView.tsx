@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ExportActionsAck, SummaryTemplate, TranscriptExportOptions, TranscriptSegment } from '@scribetab/shared';
 import { DEFAULT_TRANSCRIPT_EXPORT_OPTIONS, distinctSpeakers, formatClock, formatUsd, highlightsWithContext, llmEndpoint, originPattern } from '@scribetab/shared';
 import type MiniSearch from 'minisearch';
-import type { Ack, ToBackground, ToSidePanel } from '@/utils/messages';
+import type { Ack, ImportTranscriptAck, ToBackground, ToSidePanel } from '@/utils/messages';
 import { isHostForbiddenError, isHostMissingError } from '@/utils/nativeSync';
 import { clipboardWriter, copyMarkdownExport, downloadExport, type ExportFormat } from '@/utils/exportDownload';
 import { getHighlightsForSession } from '@/utils/highlightStore';
@@ -66,6 +66,16 @@ function dateLabel(iso: string): string {
   return d.toLocaleString();
 }
 
+function sessionCardMeta(session: StoredSession): string {
+  const parts = [dateLabel(session.startedAt), durationLabel(session)];
+  const provider = session.providerId?.trim();
+  const model = session.model?.trim();
+  if (provider && model) parts.push(`${provider} / ${model}`);
+  else if (provider || model) parts.push(provider || model || '');
+  if (session.costUsd !== undefined) parts.push(`${formatUsd(session.costUsd)} est.`);
+  return parts.filter(Boolean).join(' · ');
+}
+
 function formatElapsed(ms: number): string {
   const s = Math.floor(ms / 1000);
   const m = Math.floor(s / 60);
@@ -105,6 +115,7 @@ export function LibraryView() {
   const [copied, setCopied] = useState(false);
   const [, setTick] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const openIdRef = useRef<string | null>(null);
   const openReadVersionRef = useRef(0);
   const openHighlightVersionRef = useRef(0);
@@ -114,7 +125,7 @@ export function LibraryView() {
     const generation = reloadCoordinator.begin();
     const list = await listSessions();
     if (!reloadCoordinator.isCurrent(generation)) return undefined;
-    const docs = await searchCache.sync(list);
+    const docs = await searchCache.sync(list.filter((session) => session.archivedAt === undefined));
     if (!reloadCoordinator.isCurrent(generation)) return undefined;
     setSessions(list);
     setIndex(searchCache.createIndex());
@@ -234,7 +245,35 @@ export function LibraryView() {
     if (canApplyHighlights && data.highlightsError) setActionError(humanError(data.highlightsError));
   };
 
+  const importTranscript = async (file: File) => {
+    if (busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      const content = await file.text();
+      const res = (await chrome.runtime.sendMessage({
+        target: 'background',
+        type: 'IMPORT_TRANSCRIPT',
+        name: file.name,
+        content,
+      } satisfies ToBackground)) as ImportTranscriptAck;
+      if (!res?.ok) {
+        setActionError(res?.error ?? humanError('Transcript import failed'));
+        return;
+      }
+      await reload();
+      await openSession(res.sessionId);
+    } catch (e) {
+      setActionError(humanError(e));
+    } finally {
+      if (importInputRef.current) importInputRef.current.value = '';
+      setBusy(false);
+    }
+  };
+
   const hits = query.trim() && index ? index.search(query.trim()) : [];
+  const activeSessions = sessions.filter((session) => session.archivedAt === undefined);
+  const archivedSessions = sessions.filter((session) => session.archivedAt !== undefined);
   const open = sessions.find((s) => s.id === openId) ?? null;
   const generating = Boolean(open && open.intelligence === 'pending' && !open.intelligenceError);
   const playbackSessionId = open?.id ?? null;
@@ -489,22 +528,66 @@ export function LibraryView() {
     }
   };
 
-  const deleteOpen = async () => {
+  const archiveOpen = async () => {
     if (!open) return;
     if (!canDeleteSession(open.status)) {
-      setActionError('Stop the recording before deleting this meeting.');
+      setActionError('Stop the recording before archiving this meeting.');
       return;
     }
-    if (!confirm(`Delete "${open.title}" and its transcript? This cannot be undone.`)) return;
     setBusy(true);
     setActionError(null);
     try {
-      await deleteSession(open.id);
+      const res = (await chrome.runtime.sendMessage({
+        target: 'background',
+        type: 'ARCHIVE_SESSION',
+        sessionId: open.id,
+      } satisfies ToBackground)) as Ack;
+      if (!res?.ok) {
+        setActionError(res?.error ?? humanError('Archive failed'));
+        return;
+      }
       openIdRef.current = null;
       openReadVersionRef.current += 1;
       openHighlightVersionRef.current += 1;
       setOpenId(null);
       setOpenHighlights([]);
+      await reload();
+    } catch (e) {
+      setActionError(humanError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const restoreArchived = async (session: StoredSession) => {
+    if (busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        target: 'background',
+        type: 'RESTORE_SESSION',
+        sessionId: session.id,
+      } satisfies ToBackground)) as Ack;
+      if (!res?.ok) {
+        setActionError(res?.error ?? humanError('Restore failed'));
+        return;
+      }
+      await reload();
+    } catch (e) {
+      setActionError(humanError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteArchived = async (session: StoredSession) => {
+    if (busy) return;
+    if (!confirm(`Delete "${session.title}" and its transcript forever? This cannot be undone.`)) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await deleteSession(session.id);
       await reload();
     } catch (e) {
       setActionError(humanError(e));
@@ -601,6 +684,28 @@ export function LibraryView() {
     }
   };
 
+  const editSegment = async (segment: TranscriptSegment) => {
+    if (!open || busy) return;
+    const typed = window.prompt('Edit transcript segment', segment.text);
+    if (typed === null) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        target: 'background',
+        type: 'EDIT_SEGMENT',
+        sessionId: open.id,
+        segmentId: segment.id,
+        text: typed,
+      } satisfies ToBackground)) as Ack;
+      if (!res?.ok) setActionError(res?.error ?? humanError('Transcript edit failed'));
+    } catch (e) {
+      setActionError(humanError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (open) {
     const hasAudio = audioSource?.sessionId === open.id;
     const activeSegment = hasAudio ? playingSegmentIndex(openSegments, currentTime * 1000) : -1;
@@ -613,6 +718,7 @@ export function LibraryView() {
         </div>
         <p style={{ fontSize: 12, color: 'var(--st-muted)', margin: '0 0 8px' }}>
           {dateLabel(open.startedAt)} · {durationLabel(open)} · {open.platform} · {open.status}
+          {(open.providerId || open.model) && <> · {[open.providerId, open.model].filter(Boolean).join(' / ')}</>}
           {open.costUsd !== undefined && <> · {formatUsd(open.costUsd)} est.</>}
         </p>
         {hasAudio && (
@@ -781,7 +887,7 @@ export function LibraryView() {
             ))}
           </select>
           <button class="st-chip" disabled={busy} onClick={() => void regenerateSummary()}>Regenerate summary</button>
-          <button data-testid="delete-session" class="st-chip st-chip--danger" disabled={busy} onClick={() => void deleteOpen()}>Delete</button>
+          <button class="st-chip" disabled={busy} onClick={() => void archiveOpen()}>Archive</button>
         </div>
         {copied && <p data-testid="copy-notice" class="st-banner st-banner--success">Transcript copied to the clipboard.</p>}
         {actionError && <p data-testid="library-error" class="st-banner st-banner--error">{actionError}</p>}
@@ -816,11 +922,24 @@ export function LibraryView() {
                 )}
                 <span
                   class="st-text"
-                  style={segment.text === '[transcription failed]' ? { color: 'var(--st-danger)' } : undefined}
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    ...(segment.text === '[transcription failed]' ? { color: 'var(--st-danger)' } : {}),
+                  }}
                 >
                   {segment.speaker && <strong>{segment.speaker}: </strong>}
                   {segment.text}
                 </span>
+                <button
+                  type="button"
+                  class="st-icon-btn"
+                  aria-label={`Edit transcript segment at ${formatElapsed(segment.startMs)}`}
+                  disabled={busy}
+                  onClick={() => void editSegment(segment)}
+                >
+                  ✎
+                </button>
               </li>
             ))}
           </ol>
@@ -831,7 +950,29 @@ export function LibraryView() {
 
   return (
     <section>
-      <h1 style={{ fontSize: 15, margin: '0 0 8px' }}>Library</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <h1 style={{ fontSize: 15, margin: 0 }}>Library</h1>
+        <button
+          type="button"
+          class="st-chip"
+          style={{ marginLeft: 'auto' }}
+          disabled={busy}
+          onClick={() => importInputRef.current?.click()}
+        >
+          Import
+        </button>
+        <input
+          ref={importInputRef}
+          type="file"
+          accept=".vtt,.srt,.txt,.json"
+          aria-label="Import transcript file"
+          style={{ display: 'none' }}
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0];
+            if (file) void importTranscript(file);
+          }}
+        />
+      </div>
       <input
         type="search"
         placeholder="Search transcripts…"
@@ -857,22 +998,44 @@ export function LibraryView() {
             ))}
           </ul>
         )
-      ) : sessions.length === 0 ? (
+      ) : activeSessions.length === 0 ? (
         <p data-testid="library-empty" class="st-empty">No meetings yet. Record a tab from the popup — past sessions will show up here.</p>
       ) : (
         <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {sessions.map((s) => (
+          {activeSessions.map((s) => (
             <li key={s.id}>
               <button class="st-session" onClick={() => void openSession(s.id)}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                   <div class="st-title">{s.title}</div>
-                  <div class="st-meta">{dateLabel(s.startedAt)} · {durationLabel(s)}</div>
+                  <div class="st-meta">{sessionCardMeta(s)}</div>
                 </div>
               </button>
             </li>
           ))}
         </ul>
       )}
+      {archivedSessions.length > 0 && (
+        <details style={{ marginTop: 14 }}>
+          <summary style={{ color: 'var(--st-muted)', cursor: 'pointer', fontSize: 13 }}>
+            Archived ({archivedSessions.length})
+          </summary>
+          <ul style={{ listStyle: 'none', padding: 0, margin: '8px 0 0', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {archivedSessions.map((session) => (
+              <li key={session.id} class="st-detail-card" style={{ margin: 0 }}>
+                <div class="st-title" style={{ fontSize: 13.5, fontWeight: 600 }}>{session.title}</div>
+                <div class="st-meta" style={{ color: 'var(--st-muted)', fontSize: 12, marginTop: 2 }}>
+                  {sessionCardMeta(session)}
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                  <button class="st-chip" disabled={busy} onClick={() => void restoreArchived(session)}>Restore</button>
+                  <button data-testid="delete-session" class="st-chip st-chip--danger" disabled={busy} onClick={() => void deleteArchived(session)}>Delete forever</button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {actionError && !open && <p data-testid="library-error" class="st-banner st-banner--error" style={{ marginTop: 10 }}>{actionError}</p>}
     </section>
   );
 }

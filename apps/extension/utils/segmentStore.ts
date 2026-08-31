@@ -19,6 +19,41 @@ export async function putSegments(segments: TranscriptSegment[]): Promise<void> 
   await txDone(tx);
 }
 
+export async function updateSegmentText(
+  sessionId: string,
+  segmentId: string,
+  text: string,
+): Promise<TranscriptSegment> {
+  const trimmed = text.trim();
+  if (!trimmed) throw new Error('Transcript text cannot be empty');
+
+  const db = await openDb();
+  const tx = db.transaction(STORE, 'readwrite');
+  const store = tx.objectStore(STORE);
+  const done = txDone(tx);
+  const updated = await new Promise<TranscriptSegment>((resolve, reject) => {
+    const getReq = store.get(segmentId);
+    getReq.onsuccess = () => {
+      const current = getReq.result as TranscriptSegment | undefined;
+      if (!current || current.sessionId !== sessionId) {
+        reject(new Error(`Segment not found: ${segmentId}`));
+        tx.abort();
+        return;
+      }
+      const next = { ...current, text: trimmed };
+      const putReq = store.put(next);
+      putReq.onsuccess = () => resolve(next);
+      putReq.onerror = () => reject(putReq.error);
+    };
+    getReq.onerror = () => reject(getReq.error);
+  }).catch(async (error) => {
+    await done.catch(() => {});
+    throw error;
+  });
+  await done;
+  return updated;
+}
+
 export async function getSegments(sessionId: string): Promise<TranscriptSegment[]> {
   const db = await openDb();
   const rows = await new Promise<TranscriptSegment[]>((resolve, reject) => {

@@ -85,7 +85,11 @@ export type ToBackground =
   | { target: 'background'; type: 'EXPORT_ACTIONS'; sessionId: string; itemIds: string[] }
   | { target: 'background'; type: 'ADD_HIGHLIGHT'; sessionId: string; label?: string }
   | { target: 'background'; type: 'RENAME_SPEAKER'; sessionId: string; from: string; to: string }
-  | { target: 'background'; type: 'RENAME_SESSION'; sessionId: string; title: string };
+  | { target: 'background'; type: 'RENAME_SESSION'; sessionId: string; title: string }
+  | { target: 'background'; type: 'ARCHIVE_SESSION'; sessionId: string }
+  | { target: 'background'; type: 'RESTORE_SESSION'; sessionId: string }
+  | { target: 'background'; type: 'EDIT_SEGMENT'; sessionId: string; segmentId: string; text: string }
+  | { target: 'background'; type: 'IMPORT_TRANSCRIPT'; name: string; content: string };
 
 /** Broadcast to the Meet captions content script when tab capture starts/stops. */
 export type ToMeetCaptions = {
@@ -164,3 +168,7 @@ export interface Ack {
   hostMissing?: boolean;
   captured?: boolean;
 }
+
+export type ImportTranscriptAck =
+  | { ok: true; sessionId: string }
+  | { ok: false; error: string };

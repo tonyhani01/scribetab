@@ -170,7 +170,7 @@ function App() {
   const recording = isLiveCaptureState(state);
   const stopping = state === 'recording' || state === 'paused' || state === 'stopping';
   const showTranscribed = recording && transcriptionOn && !sessionCaptionsOnly;
-  const showOnboarding = providerConfigured === false && !(recording && sessionCaptionsOnly);
+  const showOnboarding = providerConfigured === false;
   return (
     <main data-testid="popup-root" style={{ width: 340, display: 'flex', flexDirection: 'column' }}>
       <header class="st-header">
@@ -257,15 +257,17 @@ function App() {
 
       <div class="st-body" style={{ paddingTop: 0 }}>
         {showOnboarding && (
-          <div data-testid="popup-onboarding" class="st-banner st-banner--warn" role="status">
-            <p style={{ margin: '0 0 8px' }}>No transcription provider yet — set one up to get live transcripts.</p>
+          <div data-testid="popup-onboarding" class="st-card" role="status">
+            <p style={{ margin: '0 0 8px', fontSize: 12.5 }}>
+              1 Choose provider · 2 Test connection · 3 Record this tab
+            </p>
             <button
               type="button"
               class="st-chip"
               data-testid="popup-open-options"
               onClick={() => void openSettingsWindow()}
             >
-              Set up provider
+              Open settings
             </button>
           </div>
         )}
