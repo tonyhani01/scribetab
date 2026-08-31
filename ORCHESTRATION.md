@@ -27,4 +27,4 @@ Costs/speed: /tmp/st-orch/costs.tsv
 | E5 theme | done | pass (21 tests) | |
 | E6 cost card+onboarding | done | pass | |
 | E7 speaker merge | done | pass (8 tests) | |
-| F1 docs | pending | |
+| F1 docs | done | README + store-listing + PRIVACY updated (orchestrator) |

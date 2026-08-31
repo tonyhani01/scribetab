@@ -38,6 +38,13 @@ The extension never phones home.
   Obsidian vault.
 - **Notion.** If enabled, meeting pages are created via `api.notion.com` using
   a token you provide, stored only in the host's local config file.
+- **Calendar (.ics).** If you add a calendar feed URL, the native host (not the
+  extension) fetches that one URL to name sessions after meetings. Off by
+  default; no calendar data is sent anywhere.
+- **Chat / Ask your meetings.** Asking questions about a transcript — or across
+  your library — sends the relevant transcript text to the LLM origin you
+  configured, and nowhere else. Answers are shown in the panel and never
+  persisted.
 
 ## Consent and redaction
 
