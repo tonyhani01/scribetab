@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { MeetingSession, TranscriptSegment } from '../src/types';
 import { exportJson } from '../src/export/json';
-import { exportMarkdown } from '../src/export/markdown';
+import {
+  DEFAULT_TRANSCRIPT_EXPORT_OPTIONS,
+  exportMarkdown,
+  resolveTranscriptExportOptions,
+} from '../src/export/markdown';
 import { exportNotebookLm } from '../src/export/notebooklm';
 import { exportSrt } from '../src/export/srt';
 import { exportVtt } from '../src/export/vtt';
@@ -31,6 +35,45 @@ const segments: TranscriptSegment[] = [
     startMs: 0,
     endMs: 2_500,
     text: 'Hello team',
+    speaker: 'Ada',
+    source: 'audio',
+  },
+];
+
+const dialogue: TranscriptSegment[] = [
+  {
+    id: 'a1',
+    sessionId: 'sess-1',
+    startMs: 1_000,
+    endMs: 2_000,
+    text: 'Still me.',
+    speaker: 'Ada',
+    source: 'audio',
+  },
+  {
+    id: 'a0',
+    sessionId: 'sess-1',
+    startMs: 0,
+    endMs: 1_000,
+    text: 'First up.',
+    speaker: 'Ada',
+    source: 'audio',
+  },
+  {
+    id: 'b0',
+    sessionId: 'sess-1',
+    startMs: 2_000,
+    endMs: 3_000,
+    text: 'Agreed.',
+    speaker: 'Ben',
+    source: 'audio',
+  },
+  {
+    id: 'a2',
+    sessionId: 'sess-1',
+    startMs: 3_000,
+    endMs: 4_000,
+    text: 'Then ship it.',
     speaker: 'Ada',
     source: 'audio',
   },
@@ -85,6 +128,112 @@ describe('exportMarkdown', () => {
     expect(md).toContain('- **[00:00:02]** Hello team');
     expect(md).toContain('- **[00:01:01]** Decide rollout');
     expect(md).not.toContain('Decide rollout Second line');
+  });
+
+  it('keeps one labelled, stamped line per segment by default', () => {
+    const md = exportMarkdown(session, dialogue);
+    expect(md).toContain('**[00:00:00] Ada:** First up.');
+    expect(md).toContain('**[00:00:01] Ada:** Still me.');
+    expect(md).toContain('**[00:00:03] Ada:** Then ship it.');
+  });
+
+  it('honours explicit options that match the defaults', () => {
+    expect(exportMarkdown(session, dialogue, undefined, DEFAULT_TRANSCRIPT_EXPORT_OPTIONS)).toBe(
+      exportMarkdown(session, dialogue),
+    );
+  });
+
+  it('omits timestamp prefixes when timestamps is false', () => {
+    const md = exportMarkdown(session, dialogue, undefined, { timestamps: false });
+    expect(md).toContain('**Ada:** First up.');
+    expect(md).not.toMatch(/\[00:00:0\d\]/);
+  });
+
+  it('omits speaker prefixes when speakers is false', () => {
+    const md = exportMarkdown(session, dialogue, undefined, { speakers: false });
+    expect(md).toContain('**[00:00:00]** First up.');
+    expect(md).not.toContain('Ada:');
+  });
+
+  it('renders bare paragraphs when both timestamps and speakers are off', () => {
+    const md = exportMarkdown(session, dialogue, undefined, { timestamps: false, speakers: false });
+    expect(md).toContain('\nFirst up.\n');
+    expect(md).not.toContain('**');
+  });
+
+  it('leaves the metadata header alone when timestamps is false', () => {
+    const md = exportMarkdown(session, dialogue, { costUsd: 0.006 }, { timestamps: false });
+    expect(md).toContain('# Weekly standup');
+    expect(md).toContain('- Started: 2026-08-27T10:00:00.000Z');
+    expect(md).toContain('- Estimated cost (USD): $0.0060');
+  });
+
+  it('combines consecutive same-speaker segments under the first timestamp', () => {
+    const md = exportMarkdown(session, dialogue, undefined, { combineSameSpeaker: true });
+    expect(md).toContain('**[00:00:00] Ada:** First up. Still me.');
+    expect(md).toContain('**[00:00:02] Ben:** Agreed.');
+    // A later turn by the same speaker is not consecutive, so it stays separate.
+    expect(md).toContain('**[00:00:03] Ada:** Then ship it.');
+    expect(md).not.toContain('Still me.\n**[00:00:01]');
+  });
+
+  it('groups by speaker even when speaker prefixes are hidden', () => {
+    const md = exportMarkdown(session, dialogue, undefined, {
+      speakers: false,
+      combineSameSpeaker: true,
+    });
+    expect(md).toContain('**[00:00:00]** First up. Still me.');
+    expect(md).toContain('**[00:00:02]** Agreed.');
+  });
+
+  it('combines unlabelled segments only with each other', () => {
+    const anonymous: TranscriptSegment[] = [
+      { id: 'x0', sessionId: 'sess-1', startMs: 0, endMs: 1_000, text: 'One.', source: 'audio' },
+      { id: 'x1', sessionId: 'sess-1', startMs: 1_000, endMs: 2_000, text: 'Two.', source: 'audio' },
+      {
+        id: 'x2',
+        sessionId: 'sess-1',
+        startMs: 2_000,
+        endMs: 3_000,
+        text: 'Three.',
+        speaker: 'Ada',
+        source: 'audio',
+      },
+      {
+        id: 'x3',
+        sessionId: 'sess-1',
+        startMs: 3_000,
+        endMs: 4_000,
+        text: 'Four.',
+        speaker: 'Ada',
+        source: 'audio',
+      },
+    ];
+    const md = exportMarkdown(session, anonymous, undefined, { combineSameSpeaker: true });
+    expect(md).toContain('**[00:00:00]** One. Two.');
+    expect(md).toContain('**[00:00:02] Ada:** Three. Four.');
+  });
+
+  it('does not mutate segments when combining', () => {
+    const before = dialogue.map((s) => ({ ...s }));
+    exportMarkdown(session, dialogue, undefined, { combineSameSpeaker: true });
+    expect(dialogue).toEqual(before);
+  });
+
+  it('falls back to the defaults for absent or corrupted option values', () => {
+    expect(resolveTranscriptExportOptions()).toEqual({
+      timestamps: true,
+      speakers: true,
+      combineSameSpeaker: false,
+    });
+    expect(
+      resolveTranscriptExportOptions({
+        timestamps: 'yes',
+        speakers: 0,
+        combineSameSpeaker: null,
+      } as unknown as Parameters<typeof exportMarkdown>[3]),
+    ).toEqual(DEFAULT_TRANSCRIPT_EXPORT_OPTIONS);
+    expect(exportMarkdown(session, dialogue, undefined, {})).toBe(exportMarkdown(session, dialogue));
   });
 });
 

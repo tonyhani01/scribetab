@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { ExportActionsAck, TranscriptSegment } from '@scribetab/shared';
-import { distinctSpeakers, formatClock, formatUsd, highlightsWithContext, llmEndpoint, originPattern } from '@scribetab/shared';
+import type { ExportActionsAck, TranscriptExportOptions, TranscriptSegment } from '@scribetab/shared';
+import { DEFAULT_TRANSCRIPT_EXPORT_OPTIONS, distinctSpeakers, formatClock, formatUsd, highlightsWithContext, llmEndpoint, originPattern } from '@scribetab/shared';
 import type MiniSearch from 'minisearch';
 import type { ToSidePanel, Ack } from '@/utils/messages';
 import { isHostForbiddenError, isHostMissingError } from '@/utils/nativeSync';
-import { downloadExport, type ExportFormat } from '@/utils/exportDownload';
+import { clipboardWriter, copyMarkdownExport, downloadExport, type ExportFormat } from '@/utils/exportDownload';
 import { getHighlightsForSession } from '@/utils/highlightStore';
 import { getSegments } from '@/utils/segmentStore';
 import { deleteSession, getSession, listSessions, type StoredSession } from '@/utils/sessionStore';
@@ -65,6 +65,13 @@ function formatElapsed(ms: number): string {
   return `${m}:${String(s % 60).padStart(2, '0')}`;
 }
 
+// Markdown export / clipboard transcript options, in checkbox row order.
+const EXPORT_OPTIONS: ReadonlyArray<{ key: keyof TranscriptExportOptions; label: string }> = [
+  { key: 'timestamps', label: 'Timestamps' },
+  { key: 'speakers', label: 'Speakers' },
+  { key: 'combineSameSpeaker', label: 'Combine same speaker' },
+];
+
 export function LibraryView() {
   const [sessions, setSessions] = useState<StoredSession[]>([]);
   const [query, setQuery] = useState('');
@@ -83,6 +90,10 @@ export function LibraryView() {
   const [playbackRate, setPlaybackRate] = useState<number>(1);
   const [isPlaying, setIsPlaying] = useState(false);
   const [audioRevision, setAudioRevision] = useState(0);
+  const [exportOptions, setExportOptions] = useState<Required<TranscriptExportOptions>>({
+    ...DEFAULT_TRANSCRIPT_EXPORT_OPTIONS,
+  });
+  const [copied, setCopied] = useState(false);
   const [, setTick] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const openIdRef = useRef<string | null>(null);
@@ -191,6 +202,7 @@ export function LibraryView() {
     setOpenSegments([]);
     setOpenHighlights([]);
     setSummaryLive(EMPTY_SUMMARY_LIVE);
+    setCopied(false);
     const data = await loadOpenSessionData(id);
     const currentRead = openReadVersionRef.current;
     const currentHighlights = openHighlightVersionRef.current;
@@ -331,8 +343,35 @@ export function LibraryView() {
     if (!open) return;
     setBusy(true);
     setActionError(null);
+    setCopied(false);
     try {
-      await downloadExport(open, openSegments, format, { highlights: highlightExtras });
+      await downloadExport(open, openSegments, format, { highlights: highlightExtras }, exportOptions);
+    } catch (e) {
+      setActionError(humanError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setExportOption = (key: keyof TranscriptExportOptions, on: boolean) => {
+    setCopied(false);
+    setExportOptions((prev) => ({ ...prev, [key]: on }));
+  };
+
+  const copyTranscript = async () => {
+    if (!open) return;
+    // Checked here so the message is specific: a rejected writeText() only
+    // reaches humanError() as the generic failure line.
+    if (!clipboardWriter()) {
+      setActionError('Clipboard is unavailable here — use Export .md instead.');
+      return;
+    }
+    setBusy(true);
+    setActionError(null);
+    setCopied(false);
+    try {
+      await copyMarkdownExport(open, openSegments, exportOptions, { highlights: highlightExtras });
+      setCopied(true);
     } catch (e) {
       setActionError(humanError(e));
     } finally {
@@ -681,14 +720,36 @@ export function LibraryView() {
             </ol>
           </section>
         )}
+        <div
+          class="st-radios"
+          role="group"
+          aria-label="Export options"
+          style={{ margin: '0 0 8px' }}
+        >
+          {EXPORT_OPTIONS.map(({ key, label }) => (
+            <label class="st-check" key={key}>
+              <input
+                data-testid={`export-option-${key}`}
+                type="checkbox"
+                checked={exportOptions[key]}
+                onChange={(event) =>
+                  setExportOption(key, (event.currentTarget as HTMLInputElement).checked)
+                }
+              />{' '}
+              {label}
+            </label>
+          ))}
+        </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
           {(['md', 'json', 'srt', 'vtt'] as const).map((f) => (
             <button class="st-chip" key={f} disabled={busy} onClick={() => void exportOne(f)}>Export .{f}</button>
           ))}
           <button class="st-chip" disabled={busy} onClick={() => void exportOne('notebooklm')}>Export for NotebookLM</button>
+          <button data-testid="copy-transcript" class="st-chip" disabled={busy} onClick={() => void copyTranscript()}>Copy transcript</button>
           <button class="st-chip" disabled={busy} onClick={() => void regenerateSummary()}>Regenerate summary</button>
           <button data-testid="delete-session" class="st-chip st-chip--danger" disabled={busy} onClick={() => void deleteOpen()}>Delete</button>
         </div>
+        {copied && <p data-testid="copy-notice" class="st-banner st-banner--success">Transcript copied to the clipboard.</p>}
         {actionError && <p data-testid="library-error" class="st-banner st-banner--error">{actionError}</p>}
         {openSegments.length === 0 ? (
           <p class="st-empty">No transcript segments for this meeting.</p>

@@ -6,10 +6,25 @@ import {
   exportVtt,
   type ExportExtras,
   type MeetingSession,
+  type TranscriptExportOptions,
   type TranscriptSegment,
 } from '@scribetab/shared';
 
 export type ExportFormat = 'md' | 'json' | 'srt' | 'vtt' | 'notebooklm';
+
+/** The part of `navigator.clipboard` this module needs; stubbable in tests. */
+export interface ClipboardWriter {
+  writeText(text: string): Promise<void>;
+}
+
+/** Clipboard available to this context, or null (insecure context, no user gesture, tests). */
+export function clipboardWriter(): ClipboardWriter | null {
+  const clipboard = (globalThis.navigator as { clipboard?: Partial<ClipboardWriter> } | undefined)
+    ?.clipboard;
+  return typeof clipboard?.writeText === 'function'
+    ? (clipboard as ClipboardWriter)
+    : null;
+}
 
 export function extrasFromSession(
   session: MeetingSession & ExportExtras,
@@ -51,9 +66,12 @@ export function exportBody(
   segments: TranscriptSegment[],
   format: ExportFormat,
   extras?: ExportExtras,
+  transcript?: TranscriptExportOptions,
 ): string {
   const merged = extrasFromSession(session as MeetingSession & ExportExtras, extras);
-  if (format === 'md') return exportMarkdown(session, segments, merged);
+  // Transcript rendering options are markdown-only: caption formats carry their
+  // own timing, and JSON exports keep the raw rows.
+  if (format === 'md') return exportMarkdown(session, segments, merged, transcript);
   if (format === 'json') return exportJson(session, segments, merged);
   if (format === 'srt') return exportSrt(session, segments);
   if (format === 'notebooklm') return exportNotebookLm(session, segments, merged);
@@ -65,8 +83,9 @@ export async function downloadExport(
   segments: TranscriptSegment[],
   format: ExportFormat,
   extras?: ExportExtras,
+  transcript?: TranscriptExportOptions,
 ): Promise<void> {
-  const body = exportBody(session, segments, format, extras);
+  const body = exportBody(session, segments, format, extras, transcript);
   const blob = new Blob([body], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   try {
@@ -77,4 +96,20 @@ export async function downloadExport(
   } finally {
     setTimeout(() => URL.revokeObjectURL(url), 15_000);
   }
+}
+
+/**
+ * Put the markdown export on the clipboard — same body as `Export .md`, same
+ * transcript options, and it never leaves the machine. Pass a clipboard stub in
+ * tests; `clipboardWriter()` covers the runtime (null when unavailable).
+ */
+export async function copyMarkdownExport(
+  session: MeetingSession & ExportExtras,
+  segments: TranscriptSegment[],
+  transcript?: TranscriptExportOptions,
+  extras?: ExportExtras,
+  clipboard: ClipboardWriter | null = clipboardWriter(),
+): Promise<void> {
+  if (!clipboard) throw new Error('Clipboard is not available in this context.');
+  await clipboard.writeText(exportBody(session, segments, 'md', extras, transcript));
 }
