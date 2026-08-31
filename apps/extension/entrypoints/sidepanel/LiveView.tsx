@@ -8,6 +8,7 @@ import { humanError } from '@/utils/userError';
 import { addPending, clearPending, resolveBelow, resolvePending, type PendingChunk } from '@/utils/pendingChunks';
 import { canApplySessionRead, type SessionReadToken } from '@/utils/sessionReadGuard';
 import { mergeSegments } from '@/utils/segmentMerge';
+import { ChatView } from './ChatView';
 import { SegmentList } from './SegmentList';
 import { openSettingsWindow } from '@/utils/settingsWindow';
 
@@ -27,6 +28,7 @@ export function LiveView() {
   const [highlightBusy, setHighlightBusy] = useState(false);
   const [highlightStatus, setHighlightStatus] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingChunk[]>([]);
+  const [pane, setPane] = useState<'transcript' | 'ask'>('transcript');
   const [transcribedCount, setTranscribedCount] = useState(0);
   const [chunkCount, setChunkCount] = useState(0);
   const endRef = useRef<HTMLDivElement>(null);
@@ -269,12 +271,23 @@ export function LiveView() {
       </div>
       {highlightStatus && <p class={highlightStatus === 'Highlight added' ? 'st-status-text' : 'st-status-text st-status-text--error'} aria-live="polite">{highlightStatus}</p>}
 
-      {state === 'idle' && segments.length === 0 && pending.length === 0 ? (
+      {sessionId && (
+        <nav class="st-seg" style={{ margin: '10px 0' }}>
+          {(['transcript', 'ask'] as const).map((p) => (
+            <button key={p} type="button" aria-selected={pane === p} onClick={() => setPane(p)}>
+              {p === 'ask' ? 'Ask' : 'Transcript'}
+            </button>
+          ))}
+        </nav>
+      )}
+      {pane === 'ask' && sessionId ? (
+        <ChatView key={sessionId} sessionId={sessionId} />
+      ) : state === 'idle' && segments.length === 0 && pending.length === 0 ? (
         <p data-testid="live-empty" class="st-empty">No live session. Start recording from the popup or press Alt+Shift+R.</p>
       ) : (
         <SegmentList segments={segments} pending={pending} empty="Segments appear here as chunks are transcribed." />
       )}
-      {state === 'recording' && (
+      {pane !== 'ask' && state === 'recording' && (
         <p class="st-hint st-livestatus">
           {transcribedCount < chunkCount
             ? `Transcribing chunk ${Math.min(transcribedCount + 1, chunkCount)} of ${chunkCount}`

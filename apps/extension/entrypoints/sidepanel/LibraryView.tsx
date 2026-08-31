@@ -41,6 +41,7 @@ import {
   revokeSessionAudio,
   type SessionAudioSource,
 } from '@/utils/playback';
+import { ChatView } from './ChatView';
 import { SummaryView } from './SummaryView';
 
 // The cache intentionally lives outside the component so switching tabs or
@@ -113,6 +114,7 @@ export function LibraryView() {
     ...DEFAULT_TRANSCRIPT_EXPORT_OPTIONS,
   });
   const [copied, setCopied] = useState(false);
+  const [detailPane, setDetailPane] = useState<'transcript' | 'ask'>('transcript');
   const [, setTick] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -232,6 +234,7 @@ export function LibraryView() {
     setOpenHighlights([]);
     setSummaryLive(EMPTY_SUMMARY_LIVE);
     setCopied(false);
+    setDetailPane('transcript');
     const data = await loadOpenSessionData(id);
     const currentRead = openReadVersionRef.current;
     const currentHighlights = openHighlightVersionRef.current;
@@ -846,6 +849,17 @@ export function LibraryView() {
             </ol>
           </section>
         )}
+        <nav class="st-seg" style={{ margin: '0 0 10px' }}>
+          {(['transcript', 'ask'] as const).map((p) => (
+            <button key={p} type="button" aria-selected={detailPane === p} onClick={() => setDetailPane(p)}>
+              {p === 'ask' ? 'Ask' : 'Transcript'}
+            </button>
+          ))}
+        </nav>
+        {detailPane === 'ask' ? (
+          <ChatView key={open.id} sessionId={open.id} />
+        ) : (
+        <>
         <div
           class="st-radios"
           role="group"
@@ -943,6 +957,8 @@ export function LibraryView() {
               </li>
             ))}
           </ol>
+        )}
+        </>
         )}
       </section>
     );

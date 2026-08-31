@@ -89,7 +89,15 @@ export type ToBackground =
   | { target: 'background'; type: 'ARCHIVE_SESSION'; sessionId: string }
   | { target: 'background'; type: 'RESTORE_SESSION'; sessionId: string }
   | { target: 'background'; type: 'EDIT_SEGMENT'; sessionId: string; segmentId: string; text: string }
-  | { target: 'background'; type: 'IMPORT_TRANSCRIPT'; name: string; content: string };
+  | { target: 'background'; type: 'IMPORT_TRANSCRIPT'; name: string; content: string }
+  | {
+      target: 'background';
+      type: 'CHAT_ASK';
+      sessionId: string;
+      question: string;
+      /** Prior Q/A turns from this panel only — in-memory, never persisted. */
+      history: { q: string; a: string }[];
+    };
 
 /** Broadcast to the Meet captions content script when tab capture starts/stops. */
 export type ToMeetCaptions = {
@@ -167,6 +175,13 @@ export interface Ack {
   warning?: string;
   hostMissing?: boolean;
   captured?: boolean;
+}
+
+/** `error: 'needs-permission'` means the LLM origin was never granted. */
+export interface ChatAskAck {
+  ok: boolean;
+  answer?: string;
+  error?: string;
 }
 
 export type ImportTranscriptAck =

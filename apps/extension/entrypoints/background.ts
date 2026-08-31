@@ -21,6 +21,7 @@ import {
   resetCaptionTimeline,
 } from '@/utils/captionSession';
 import {
+  answerTranscriptQuestion,
   llmConfigured,
   markIntelligencePending,
   retryPendingIntelligence,
@@ -921,6 +922,13 @@ export default defineBackground(() => {
             break;
           }
           sendResponse({ ok: true });
+          break;
+        }
+        case 'CHAT_ASK': {
+          const settings = await getSettings();
+          sendResponse(
+            await answerTranscriptQuestion(msg.sessionId, msg.question, msg.history, settings),
+          );
           break;
         }
         case 'EXPORT_ACTIONS': {
