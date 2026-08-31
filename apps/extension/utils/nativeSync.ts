@@ -1,4 +1,4 @@
-import { remuxOggOpusChunks, type HostSyncAck, type HostSyncMessage, type MeetingSession } from '@scribetab/shared';
+import { remuxOggOpusChunks, type GetUpcomingAck, type GetUpcomingMessage, type HostSyncAck, type HostSyncMessage, type MeetingSession, type UpcomingEvent } from '@scribetab/shared';
 import { getChunk, listChunkIndexes } from './chunkStore';
 import { getSegments } from './segmentStore';
 import type { StoredSession } from './sessionStore';
@@ -10,6 +10,9 @@ export const MAX_AUDIO_CHUNK = 8 * 1024 * 1024;
 export const MAX_OGG_SYNC_SLICE = 6 * 1024 * 1024;
 export const ACK_TIMEOUT_MS = 30_000;
 export const INTEGRATION_FOLLOWUP_MS = 70_000;
+/** The host caps its own calendar fetch at 5 s; allow for process startup on top. */
+export const UPCOMING_ACK_TIMEOUT_MS = 10_000;
+export const MAX_UPCOMING_EVENTS = 50;
 
 export type NativeHostStatus = {
   state: 'idle' | 'ok' | 'missing' | 'error';
@@ -247,5 +250,103 @@ async function streamToPort(
         finish(classifyDisconnect(message));
       }
     })();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Upcoming calendar events (read-only, host-mediated; see native-host README)
+// ---------------------------------------------------------------------------
+
+type UpcomingPort = {
+  postMessage: (msg: GetUpcomingMessage) => void;
+  disconnect: () => void;
+  onMessage: { addListener: (fn: (msg: GetUpcomingAck) => void) => void };
+  onDisconnect: { addListener: (fn: () => void) => void };
+};
+
+function normalizeUpcomingEvents(raw: unknown): UpcomingEvent[] {
+  if (!Array.isArray(raw)) return [];
+  const out: UpcomingEvent[] = [];
+  for (const item of raw) {
+    if (out.length >= MAX_UPCOMING_EVENTS) break;
+    if (!item || typeof item !== 'object') continue;
+    const rec = item as Record<string, unknown>;
+    if (typeof rec.title !== 'string' || !Number.isFinite(rec.startMs) || !Number.isFinite(rec.endMs)) {
+      continue;
+    }
+    const startMs = Math.trunc(rec.startMs as number);
+    const endMs = Math.max(startMs, Math.trunc(rec.endMs as number));
+    const title = rec.title.trim().slice(0, 200);
+    if (title) out.push({ title, startMs, endMs });
+  }
+  return out.sort((a, b) => a.startMs - b.startMs);
+}
+
+/**
+ * The event overlapping `nowMs ± skewMs`, preferring the soonest start and then the
+ * longest duration (a booked room block loses to the narrower meeting inside it).
+ */
+export function matchUpcomingEvent<T extends UpcomingEvent>(
+  events: T[],
+  nowMs: number,
+  skewMs: number,
+): T | null {
+  const matches = events
+    .filter((e) => e.startMs <= nowMs + skewMs && e.endMs >= nowMs - skewMs)
+    .sort((a, b) => a.startMs - b.startMs || b.endMs - b.startMs - (a.endMs - a.startMs));
+  return matches[0] ?? null;
+}
+
+/**
+ * Ask the native host for the user's configured calendar. One `get_upcoming` message on
+ * a short-lived connectNative port, resolved on the first ack.
+ *
+ * Best-effort by contract: host disabled, missing, slow, or malformed all yield `[]`,
+ * and this never rejects — callers run it beside capture start.
+ */
+export async function getUpcomingEvents(
+  opts: { ackTimeoutMs?: number } = {},
+): Promise<UpcomingEvent[]> {
+  let port: UpcomingPort;
+  try {
+    const settings = await getSettings();
+    if (!settings.nativeHostEnabled) return [];
+    port = chrome.runtime.connectNative(NATIVE_HOST_NAME) as unknown as UpcomingPort;
+  } catch {
+    return [];
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const settle = (events: UpcomingEvent[]) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      try {
+        port.disconnect();
+      } catch {
+        // already disconnected
+      }
+      resolve(events);
+    };
+
+    port.onMessage.addListener((msg: GetUpcomingAck) => {
+      settle(msg?.ok ? normalizeUpcomingEvents(msg.events) : []);
+    });
+
+    port.onDisconnect.addListener(() => {
+      void chrome.runtime.lastError; // consume "host not found" so it is not reported
+      settle([]);
+    });
+
+    timer = setTimeout(() => settle([]), opts.ackTimeoutMs ?? UPCOMING_ACK_TIMEOUT_MS);
+
+    try {
+      port.postMessage({ type: 'get_upcoming', protocolVersion: 1 });
+    } catch {
+      settle([]);
+    }
   });
 }

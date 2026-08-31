@@ -2,14 +2,16 @@ import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Writable } from 'node:stream';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type {
   ExportActionsAck,
+  GetUpcomingAck,
   HostSyncAck,
   MeetingSession,
   TranscriptSegment,
 } from '@scribetab/shared';
 import { saveConfig } from '../src/config.js';
+import { clearIcsCache } from '../src/ics.js';
 import { saveNotionPageMap } from '../src/notion.js';
 import { NativeSyncHost } from '../src/protocol.js';
 import { withHome } from './helpers.js';
@@ -67,6 +69,85 @@ function capturingStdout() {
 function isExportAck(v: unknown): v is ExportActionsAck {
   return typeof v === 'object' && v !== null && Array.isArray((v as ExportActionsAck).results);
 }
+
+function formatIcsUtc(ms: number): string {
+  return new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+}
+
+describe('NativeSyncHost get_upcoming', () => {
+  beforeEach(() => clearIcsCache());
+  afterEach(() => clearIcsCache());
+
+  it('fetches the configured HTTPS calendar and reuses the five-minute cache', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      const startMs = Math.floor((Date.now() + 60 * 60 * 1000) / 1000) * 1000;
+      const endMs = startMs + 30 * 60 * 1000;
+      const icsUrl = 'https://calendar.example.test/private/feed.ics';
+      await saveConfig(
+        { obsidianEnabled: false, notionEnabled: false, icsUrl },
+        env,
+        'linux',
+      );
+      let fetches = 0;
+      const fetchImpl: typeof fetch = async (input, init) => {
+        fetches += 1;
+        expect(String(input)).toBe(icsUrl);
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
+        return new Response(
+          [
+            'BEGIN:VCALENDAR',
+            'BEGIN:VEVENT',
+            `DTSTART:${formatIcsUtc(startMs)}`,
+            `DTEND:${formatIcsUtc(endMs)}`,
+            'SUMMARY:Calendar title',
+            'END:VEVENT',
+            'END:VCALENDAR',
+          ].join('\r\n'),
+        );
+      };
+      const { stdout, messages } = capturingStdout();
+      const host = new NativeSyncHost(stdout, env, { fetchImpl, platform: 'linux' });
+
+      await host.handle({ type: 'get_upcoming', protocolVersion: 1 });
+      await host.handle({ type: 'get_upcoming', protocolVersion: 1 });
+
+      expect(messages()).toEqual([
+        { ok: true, events: [{ title: 'Calendar title', startMs, endMs }] },
+        { ok: true, events: [{ title: 'Calendar title', startMs, endMs }] },
+      ] satisfies GetUpcomingAck[]);
+      expect(fetches).toBe(1);
+    });
+  });
+
+  it('returns empty best-effort replies for protocol and fetch failures without silencing', async () => {
+    await withHome(async (home) => {
+      const env = linuxEnv(home);
+      await saveConfig(
+        {
+          obsidianEnabled: false,
+          notionEnabled: false,
+          icsUrl: 'https://calendar.example.test/private/feed.ics',
+        },
+        env,
+        'linux',
+      );
+      const fetchImpl: typeof fetch = async () => {
+        throw new Error('calendar unavailable');
+      };
+      const { stdout, messages } = capturingStdout();
+      const host = new NativeSyncHost(stdout, env, { fetchImpl, platform: 'linux' });
+
+      await host.handle({ type: 'get_upcoming', protocolVersion: 2 });
+      await host.handle({ type: 'get_upcoming', protocolVersion: 1 });
+
+      expect(messages()).toEqual([
+        { ok: true, events: [] },
+        { ok: true, events: [] },
+      ] satisfies GetUpcomingAck[]);
+    });
+  });
+});
 
 describe('NativeSyncHost integrations', () => {
   it('acks ok before a Notion failure and records status beside the meeting', async () => {

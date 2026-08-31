@@ -2,11 +2,15 @@ import type {
   ActionItem,
   ExportActionsAck,
   ExportActionsMessage,
+  GetUpcomingAck,
+  GetUpcomingMessage,
   HostMessage,
   HostSyncAck,
+  UpcomingEvent,
 } from '@scribetab/shared';
 import { loadConfig } from './config.js';
 import { writeNativeMessage } from './framing.js';
+import { fetchUpcomingEvents } from './ics.js';
 import { integrationFollowUpError, runPostSyncIntegrations, sanitizeIntegrationError } from './integrations.js';
 import { getMeeting } from './meetings.js';
 import { appendActionItems, createNotionPage, loadNotionPageMap } from './notion.js';
@@ -24,6 +28,8 @@ const MAX_ACK_ID = 80;
 const MAX_EXPORT_ITEMS = 200;
 const MAX_ITEM_TEXT = 4000;
 const MAX_ITEM_META = 200;
+const MAX_UPCOMING_EVENTS = 50;
+const UPCOMING_PROTOCOL_VERSION = 1;
 
 export type NativeSyncHostOpts = {
   fetchImpl?: typeof fetch;
@@ -44,6 +50,11 @@ function sessionIdOf(msg: unknown): string {
 
 function cap(s: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n);
+}
+
+/** Diagnostic lines go to stderr only — stdout is the native messaging channel. */
+function note(message: string): void {
+  process.stderr.write(`[scribetab-host] ${message}\n`);
 }
 
 function chunkPayload(
@@ -157,6 +168,10 @@ export class NativeSyncHost {
         await this.exportActions(msg);
         return;
       }
+      case 'get_upcoming': {
+        await this.upcomingEvents(msg);
+        return;
+      }
       case 'sync_begin': {
         if (msg.protocolVersion !== 1 && msg.protocolVersion !== 2) {
           throw new Error(`Unsupported protocolVersion ${String(msg.protocolVersion)}`);
@@ -223,6 +238,37 @@ export class NativeSyncHost {
       default:
         throw new Error(`Unknown message type: ${String((msg as { type: string }).type)}`);
     }
+  }
+
+  /**
+   * Reply to `get_upcoming`. Deliberately never fails: a missing/unreadable calendar
+   * must look identical to "no meetings", so the extension can fall back silently.
+   * This path must also never silence the host (a later message on the same port is
+   * still valid) and never touches `this.inflight` (a sync may be streaming).
+   */
+  private async upcomingEvents(msg: GetUpcomingMessage): Promise<void> {
+    let events: UpcomingEvent[] = [];
+    const protocolVersion = (msg as { protocolVersion?: unknown }).protocolVersion;
+    try {
+      if (protocolVersion !== UPCOMING_PROTOCOL_VERSION) {
+        note(`ignoring get_upcoming with protocolVersion ${String(protocolVersion)}`);
+      } else {
+        const cfg = await loadConfig(this.env, this.opts.platform);
+        const fetched = await fetchUpcomingEvents({
+          icsUrl: cfg.icsUrl,
+          fetchImpl: this.opts.fetchImpl,
+        });
+        events = fetched
+          .slice(0, MAX_UPCOMING_EVENTS)
+          .map((e) => ({ title: e.title, startMs: e.startMs, endMs: e.endMs }));
+      }
+    } catch (e) {
+      // fetchUpcomingEvents is already best-effort; this only catches config errors.
+      note(`get_upcoming failed: ${e instanceof Error ? e.message : String(e)}`);
+      events = [];
+    }
+    const ack: GetUpcomingAck = { ok: true, events };
+    await writeNativeMessage(this.stdout, ack);
   }
 
   private async exportActions(msg: ExportActionsMessage): Promise<void> {

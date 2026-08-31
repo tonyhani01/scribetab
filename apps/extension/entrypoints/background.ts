@@ -52,8 +52,13 @@ import type {
 } from '@/utils/messages';
 import { exportSelectedActionItems } from '@/utils/actionExport';
 import { putHighlight } from '@/utils/highlightStore';
-import { persistHostStatus, syncSessionToHost } from '@/utils/nativeSync';
-import { isCapturableUrl, platformFromUrl, titleFromTab } from '@/utils/platform';
+import {
+  getUpcomingEvents,
+  matchUpcomingEvent,
+  persistHostStatus,
+  syncSessionToHost,
+} from '@/utils/nativeSync';
+import { isCapturableUrl, isMeetingPlatform, platformFromUrl, titleFromTab } from '@/utils/platform';
 import { checkQuota } from '@/utils/quota';
 import { getSegments, putSegments } from '@/utils/segmentStore';
 import {
@@ -457,6 +462,34 @@ async function completeSession(
   }
 }
 
+/** A calendar event overlapping this window around "now" may name the session. */
+const CALENDAR_TITLE_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * Best-effort session naming from the user's calendar: if a meeting is happening right
+ * now and the recorded tab is a known meeting URL, its title beats the page title.
+ * Never rejects and never blocks capture — any miss (no host, empty feed, the user
+ * renamed first) leaves the tab-derived title in place.
+ */
+async function applyCalendarTitle(
+  sessionId: string,
+  tabUrl: string | undefined,
+  fallbackTitle: string,
+): Promise<void> {
+  try {
+    if (!isMeetingPlatform(tabUrl)) return;
+    const events = await getUpcomingEvents();
+    const match = matchUpcomingEvent(events, Date.now(), CALENDAR_TITLE_SKEW_MS);
+    if (!match) return;
+    const current = await getSession(sessionId);
+    if (!current || current.status !== 'recording') return;
+    if (current.title !== fallbackTitle) return; // renamed in the meantime
+    await updateSession(sessionId, { title: match.title });
+  } catch {
+    // Cosmetic only — recording continues with the tab title.
+  }
+}
+
 async function handleStart(): Promise<Ack> {
   if (opInFlight) return { ok: false, error: 'Operation in progress' };
   opInFlight = true;
@@ -507,18 +540,21 @@ async function handleStart(): Promise<Ack> {
       transcription !== null,
     );
     const sessionId = crypto.randomUUID();
+    const tabTitle = titleFromTab(tab);
     createdId = sessionId;
     resetCaptionTimeline(sessionId);
     await failStaleRecordings(sessionId, settings.retainAudio);
     await createSession({
       id: sessionId,
-      title: titleFromTab(tab),
+      title: tabTitle,
       startedAt: new Date().toISOString(),
       platform,
       tabUrl: tab.url,
       status: 'recording',
       captionsOnly,
     });
+    // Fire-and-forget: naming the session from the calendar must never delay START.
+    void applyCalendarTitle(sessionId, tab.url, tabTitle);
     // Publish session id before offscreen start so AUDIO_STARTED / captions can land.
     await chrome.storage.local.set({
       currentSessionId: sessionId,
