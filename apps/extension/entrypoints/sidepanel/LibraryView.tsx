@@ -11,6 +11,7 @@ import { deleteSession, getSession, listSessions, type StoredSession } from '@/u
 import { canDeleteSession } from '@/utils/librarySession';
 import { getSettings } from '@/utils/settings';
 import { nextSelection } from '@/utils/actionExport';
+import { applyStoredSpeakerNames, speakerMergeTarget } from '@/utils/speakerRename';
 import { humanError } from '@/utils/userError';
 import {
   EMPTY_SUMMARY_LIVE,
@@ -319,6 +320,12 @@ export function LibraryView() {
       })),
     [contextualHighlights],
   );
+  // Display names, not raw stored labels: two aliases merged onto one name are
+  // one speaker, and the list must not show that name twice.
+  const speakers = useMemo(
+    () => (open ? distinctSpeakers(applyStoredSpeakerNames(openSegments, open.speakerNames)) : []),
+    [open, openSegments],
+  );
 
   const exportOne = async (format: ExportFormat) => {
     if (!open) return;
@@ -505,8 +512,13 @@ export function LibraryView() {
   const renameSpeaker = async (displayName: string) => {
     if (!open || busy) return;
     const from = Object.entries(open.speakerNames ?? {}).find(([, name]) => name === displayName)?.[0] ?? displayName;
-    const to = window.prompt(`Rename speaker ${displayName}`, displayName);
-    if (to === null) return;
+    const typed = window.prompt(`Rename speaker ${displayName}`, displayName);
+    if (typed === null) return;
+    const to = typed.trim();
+    // Renaming onto a name another speaker already uses is a merge: both
+    // original aliases end up pointing at the same display name.
+    const collision = speakerMergeTarget(openSegments, open.speakerNames, from, to);
+    if (collision && !confirm(`Merge ${displayName} into ${collision}?`)) return;
     setBusy(true);
     setActionError(null);
     try {
@@ -515,7 +527,7 @@ export function LibraryView() {
         type: 'RENAME_SPEAKER',
         sessionId: open.id,
         from,
-        to: to.trim(),
+        to,
       })) as Ack;
       if (!res?.ok) {
         setActionError(res?.error ?? humanError('Speaker rename failed'));
@@ -531,7 +543,6 @@ export function LibraryView() {
   };
 
   if (open) {
-    const speakers = distinctSpeakers(openSegments);
     const hasAudio = audioSource?.sessionId === open.id;
     const activeSegment = hasAudio ? playingSegmentIndex(openSegments, currentTime * 1000) : -1;
     return (
