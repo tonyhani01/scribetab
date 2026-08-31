@@ -144,4 +144,20 @@ export interface ExportActionsAck {
   pageUrl?: string;
 }
 
-export type HostMessage = HostSyncMessage | ExportActionsMessage;
+export interface UpcomingEvent {
+  title: string;
+  startMs: number;
+  endMs: number;
+}
+
+export type GetUpcomingMessage = {
+  type: 'get_upcoming';
+  protocolVersion: 1;
+};
+
+export interface GetUpcomingAck {
+  ok: boolean;
+  events: UpcomingEvent[];
+}
+
+export type HostMessage = HostSyncMessage | ExportActionsMessage | GetUpcomingMessage;

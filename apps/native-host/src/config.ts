@@ -14,6 +14,7 @@ export interface HostConfig {
   obsidianVaultPath?: string;
   notionEnabled: boolean;
   notion?: NotionConfig;
+  icsUrl?: string;
   /** Ordered routing rules; they never enable a disabled integration. */
   automations?: AutomationRule[];
 }
@@ -29,6 +30,7 @@ export const CONFIG_KEYS = [
   'notionEnabled',
   'notion.token',
   'notion.parentPageId',
+  'icsUrl',
   'automations',
 ] as const;
 
@@ -68,6 +70,8 @@ export function parseHostConfig(raw: unknown): HostConfig {
     const parentPageId = asOptionalString(raw.notion.parentPageId, 'notion.parentPageId') ?? '';
     if (token || parentPageId) cfg.notion = { token, parentPageId };
   }
+  const icsUrl = asOptionalString(raw.icsUrl, 'icsUrl');
+  if (icsUrl) cfg.icsUrl = icsUrl;
   if (raw.automations !== undefined && raw.automations !== null) {
     const rules = parseAutomations(raw.automations);
     if (rules.length) cfg.automations = rules;
@@ -132,6 +136,8 @@ export function getConfigValue(cfg: HostConfig, key: ConfigKey): string {
       return cfg.notion?.token ?? '';
     case 'notion.parentPageId':
       return cfg.notion?.parentPageId ?? '';
+    case 'icsUrl':
+      return cfg.icsUrl ?? '';
     case 'automations':
       return cfg.automations ? JSON.stringify(cfg.automations) : '';
   }
@@ -144,6 +150,7 @@ export function setConfigValue(cfg: HostConfig, key: ConfigKey, value: string): 
   };
   if (cfg.obsidianVaultPath) next.obsidianVaultPath = cfg.obsidianVaultPath;
   if (cfg.notion) next.notion = { ...cfg.notion };
+  if (cfg.icsUrl) next.icsUrl = cfg.icsUrl;
   if (cfg.automations) next.automations = cfg.automations.map((r) => ({ ...r }));
 
   const unset = value.trim() === '';
@@ -177,6 +184,10 @@ export function setConfigValue(cfg: HostConfig, key: ConfigKey, value: string): 
       next.notion = notion;
       break;
     }
+    case 'icsUrl':
+      if (unset) delete next.icsUrl;
+      else next.icsUrl = value.trim();
+      break;
     case 'automations': {
       if (unset) delete next.automations;
       else {
