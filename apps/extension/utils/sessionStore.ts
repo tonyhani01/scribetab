@@ -31,6 +31,8 @@ export type StoredSession = MeetingSession & {
   intelligenceRetryCount?: number | null;
   /** Earliest wall-clock time at which the next summary attempt may run. */
   intelligenceNextRetryAt?: number | null;
+  /** System labels computed at finalize (see autoLabel.ts); empty rows predate labeling. */
+  labels?: string[];
 };
 
 const ARCHIVE_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;

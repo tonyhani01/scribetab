@@ -90,6 +90,20 @@ function formatElapsed(ms: number): string {
   return `${m}:${String(s % 60).padStart(2, '0')}`;
 }
 
+/** Display-only chips for cards (the whole card is a button, so no nested controls). */
+function labelChips(labels: string[] | undefined) {
+  if (!labels || labels.length === 0) return null;
+  return (
+    <div data-testid="session-labels" style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+      {labels.map((label) => (
+        <span key={label} class="st-chip" style={{ cursor: 'default', padding: '2px 8px', fontSize: 11 }}>
+          {label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 // Markdown export / clipboard transcript options, in checkbox row order.
 const EXPORT_OPTIONS: ReadonlyArray<{ key: keyof TranscriptExportOptions; label: string }> = [
   { key: 'timestamps', label: 'Timestamps' },
@@ -100,6 +114,7 @@ const EXPORT_OPTIONS: ReadonlyArray<{ key: keyof TranscriptExportOptions; label:
 export function LibraryView() {
   const [sessions, setSessions] = useState<StoredSession[]>([]);
   const [query, setQuery] = useState('');
+  const [labelFilter, setLabelFilter] = useState<string | null>(null);
   const [index, setIndex] = useState<MiniSearch<SearchDoc> | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [openSegments, setOpenSegments] = useState<TranscriptSegment[]>([]);
@@ -320,6 +335,27 @@ export function LibraryView() {
   const hits = query.trim() && index ? index.search(query.trim()) : [];
   const activeSessions = sessions.filter((session) => session.archivedAt === undefined);
   const archivedSessions = sessions.filter((session) => session.archivedAt !== undefined);
+  // System labels are computed at finalize (autoLabel.ts); filtering is local UI
+  // state — no settings, no custom rules in v1.
+  const labelsBySession = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const s of sessions) {
+      if (s.labels && s.labels.length > 0) map.set(s.id, s.labels);
+    }
+    return map;
+  }, [sessions]);
+  const allLabels = useMemo(
+    () => [...new Set([...labelsBySession.values()].flat())].sort((a, b) => a.localeCompare(b)),
+    [labelsBySession],
+  );
+  const matchesLabelFilter = (session: StoredSession) =>
+    labelFilter == null || labelsBySession.get(session.id)?.includes(labelFilter) === true;
+  const visibleActive = activeSessions.filter(matchesLabelFilter);
+  const visibleArchived = archivedSessions.filter(matchesLabelFilter);
+  const visibleHits =
+    labelFilter == null
+      ? hits
+      : hits.filter((h) => labelsBySession.get(String(h.sessionId))?.includes(labelFilter));
   const open = sessions.find((s) => s.id === openId) ?? null;
   const generating = Boolean(open && open.intelligence === 'pending' && !open.intelligenceError);
   const playbackSessionId = open?.id ?? null;
@@ -1151,12 +1187,42 @@ export function LibraryView() {
         class="st-input"
         style={{ maxWidth: 'none', marginBottom: 10 }}
       />
+      {allLabels.length > 0 && (
+        <div
+          role="group"
+          aria-label="Filter meetings by label"
+          style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '0 0 10px' }}
+        >
+          <button
+            type="button"
+            class="st-chip"
+            aria-pressed={labelFilter === null}
+            style={labelFilter === null ? { background: 'var(--st-tint)' } : undefined}
+            onClick={() => setLabelFilter(null)}
+          >
+            All
+          </button>
+          {allLabels.map((label) => (
+            <button
+              key={label}
+              type="button"
+              class="st-chip"
+              data-testid="label-filter-chip"
+              aria-pressed={labelFilter === label}
+              style={labelFilter === label ? { background: 'var(--st-tint)' } : undefined}
+              onClick={() => setLabelFilter(labelFilter === label ? null : label)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
       {query.trim() ? (
-        hits.length === 0 ? (
+        visibleHits.length === 0 ? (
           <p data-testid="library-empty-search" class="st-empty">No matches for that search.</p>
         ) : (
           <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {hits.map((h) => (
+            {visibleHits.map((h) => (
               <li key={h.id}>
                 <button class="st-session" onClick={() => void openSession(String(h.sessionId))}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -1168,34 +1234,40 @@ export function LibraryView() {
             ))}
           </ul>
         )
-      ) : activeSessions.length === 0 ? (
-        <p data-testid="library-empty" class="st-empty">No meetings yet. Record a tab from the popup — past sessions will show up here.</p>
+      ) : visibleActive.length === 0 ? (
+        labelFilter ? (
+          <p data-testid="library-empty-label" class="st-empty">No meetings labeled "{labelFilter}".</p>
+        ) : (
+          <p data-testid="library-empty" class="st-empty">No meetings yet. Record a tab from the popup — past sessions will show up here.</p>
+        )
       ) : (
         <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {activeSessions.map((s) => (
+          {visibleActive.map((s) => (
             <li key={s.id}>
               <button class="st-session" onClick={() => void openSession(s.id)}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                   <div class="st-title">{s.title}</div>
                   <div class="st-meta">{sessionCardMeta(s)}</div>
+                  {labelChips(s.labels)}
                 </div>
               </button>
             </li>
           ))}
         </ul>
       )}
-      {archivedSessions.length > 0 && (
+      {visibleArchived.length > 0 && (
         <details style={{ marginTop: 14 }}>
           <summary style={{ color: 'var(--st-muted)', cursor: 'pointer', fontSize: 13 }}>
-            Archived ({archivedSessions.length})
+            Archived ({visibleArchived.length})
           </summary>
           <ul style={{ listStyle: 'none', padding: 0, margin: '8px 0 0', display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {archivedSessions.map((session) => (
+            {visibleArchived.map((session) => (
               <li key={session.id} class="st-detail-card" style={{ margin: 0 }}>
                 <div class="st-title" style={{ fontSize: 13.5, fontWeight: 600 }}>{session.title}</div>
                 <div class="st-meta" style={{ color: 'var(--st-muted)', fontSize: 12, marginTop: 2 }}>
                   {sessionCardMeta(session)}
                 </div>
+                {labelChips(session.labels)}
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
                   <button class="st-chip" disabled={busy} onClick={() => void restoreArchived(session)}>Restore</button>
                   <button data-testid="delete-session" class="st-chip st-chip--danger" disabled={busy} onClick={() => void deleteArchived(session)}>Delete forever</button>

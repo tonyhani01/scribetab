@@ -1,9 +1,11 @@
 import {
+  distinctSpeakers,
   originPattern,
   parseVocab,
   transcriptionEndpoint,
 } from '@scribetab/shared';
 import type { TranscriptSegment } from '@scribetab/shared';
+import { computeLabels } from '@/utils/autoLabel';
 import {
   acceptsCaptionEvents,
   captionsOnlyFallbackNotice,
@@ -453,6 +455,32 @@ export async function sweepRetainedAudio(): Promise<number> {
   return victims.length;
 }
 
+/**
+ * Derive system labels (1:1, Long, Meet/Zoom/Teams/YouTube) from session facts
+ * and persist them. Speaker count uses alias-resolved names so merged speakers
+ * count once. Best-effort: labeling must never break the finalize path.
+ */
+async function applyAutoLabels(sessionId: string): Promise<void> {
+  const session = await getSession(sessionId);
+  if (!session) return;
+  const segs = await getSegments(sessionId);
+  const named = applyStoredSpeakerNames(segs, session.speakerNames);
+  const endedMs = session.endedAt ? Date.parse(session.endedAt) : Number.NaN;
+  const startedMs = Date.parse(session.startedAt);
+  const durationMs =
+    Number.isFinite(endedMs) && Number.isFinite(startedMs) && endedMs > startedMs
+      ? endedMs - startedMs
+      : 0;
+  await updateSession(sessionId, {
+    labels: computeLabels({
+      title: session.title,
+      durationMs,
+      speakerCount: distinctSpeakers(named).length,
+      url: session.tabUrl,
+    }),
+  });
+}
+
 async function completeSession(
   sessionId: string | undefined,
   status: 'complete' | 'failed',
@@ -468,6 +496,7 @@ async function completeSession(
       providerId: s.providerId || undefined,
       model: s.model.trim() || undefined,
     });
+    await applyAutoLabels(sessionId).catch(() => {});
   }
   if (flipped && status === 'complete') {
     const [session, segs] = await Promise.all([

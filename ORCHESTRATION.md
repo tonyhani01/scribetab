@@ -21,7 +21,7 @@ Costs/speed: /tmp/st-orch/costs.tsv
 | D3 ics calendar | done | pass (147 host, 7 ext) | |
 | D4 automations | done | pass (106 host tests) | |
 | E1 export options | done | pass (5+346 tests) | |
-| E2 labels | pending | |
+| E2 labels | done | pass (339 ext tests, typecheck) — pi glm $0.029 |
 | E3 notes | done | pass (332 ext, 365 shared, typecheck) — pi glm $0.030 |
 | E4 meet chat | done | pass (305 ext tests, typecheck) | |
 | E5 theme | done | pass (21 tests) | |
