@@ -1,4 +1,5 @@
 import { formatUsd } from '../costs.js';
+import { highlightKindEmoji } from '../speakers.js';
 import type { MeetingSession, TranscriptSegment } from '../types.js';
 import type { ExportExtras } from './extras.js';
 import { orderedSegments } from './order.js';
@@ -114,7 +115,8 @@ export function exportMarkdown(
       const label = hl.label?.trim();
       const text = hl.text?.trim();
       const desc = label || text || '';
-      lines.push(`- **[${formatClock(hl.startMs)}]**${desc ? ` ${desc}` : ''}`);
+      const emoji = highlightKindEmoji(hl.kind);
+      lines.push(`- **[${formatClock(hl.startMs)}]** ${emoji}${desc ? ` ${desc}` : ''}`);
     }
   }
   lines.push('', '## Transcript', '');

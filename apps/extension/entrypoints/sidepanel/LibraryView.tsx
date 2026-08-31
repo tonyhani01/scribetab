@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { ExportActionsAck, SummaryTemplate, TranscriptExportOptions, TranscriptSegment } from '@scribetab/shared';
-import { DEFAULT_TRANSCRIPT_EXPORT_OPTIONS, distinctSpeakers, formatClock, formatUsd, highlightsWithContext, llmEndpoint, originPattern } from '@scribetab/shared';
+import type { ExportActionsAck, HighlightKind, SummaryTemplate, TranscriptExportOptions, TranscriptSegment } from '@scribetab/shared';
+import { DEFAULT_TRANSCRIPT_EXPORT_OPTIONS, distinctSpeakers, formatClock, formatUsd, HIGHLIGHT_KINDS, highlightKindEmoji, highlightsWithContext, llmEndpoint, originPattern } from '@scribetab/shared';
 import type MiniSearch from 'minisearch';
 import type {
   Ack,
@@ -122,6 +122,7 @@ export function LibraryView() {
   });
   const [copied, setCopied] = useState(false);
   const [detailPane, setDetailPane] = useState<'transcript' | 'ask'>('transcript');
+  const [highlightFilter, setHighlightFilter] = useState<HighlightKind | 'all'>('all');
   const [askQuery, setAskQuery] = useState('');
   const [askPending, setAskPending] = useState(false);
   const [askAnswer, setAskAnswer] = useState<string | null>(null);
@@ -273,6 +274,7 @@ export function LibraryView() {
     setOpenId(id);
     setOpenSegments([]);
     setOpenHighlights([]);
+    setHighlightFilter('all');
     setSummaryLive(EMPTY_SUMMARY_LIVE);
     setCopied(false);
     setDetailPane('transcript');
@@ -424,11 +426,30 @@ export function LibraryView() {
     () => highlightsWithContext(openHighlights, openSegments),
     [openHighlights, openSegments],
   );
+  // Legacy rows without a kind read back as 'highlight' (store backfill), so the
+  // ?? here only guards direct callers.
+  const highlightKindsPresent = useMemo(
+    () =>
+      HIGHLIGHT_KINDS.filter((kind) =>
+        contextualHighlights.some(({ highlight }) => (highlight.kind ?? 'highlight') === kind),
+      ),
+    [contextualHighlights],
+  );
+  const visibleHighlights = useMemo(
+    () =>
+      highlightFilter === 'all'
+        ? contextualHighlights
+        : contextualHighlights.filter(
+            ({ highlight }) => (highlight.kind ?? 'highlight') === highlightFilter,
+          ),
+    [contextualHighlights, highlightFilter],
+  );
   const highlightExtras = useMemo(
     () =>
       contextualHighlights.map(({ highlight, segment }) => ({
         startMs: highlight.startMs,
         ...(highlight.label ? { label: highlight.label } : {}),
+        ...(highlight.kind ? { kind: highlight.kind } : {}),
         ...(segment?.text ? { text: segment.text } : {}),
       })),
     [contextualHighlights],
@@ -877,12 +898,43 @@ export function LibraryView() {
         {contextualHighlights.length > 0 && (
           <section class="st-detail-card" aria-label="Highlights">
             <h2>Highlights</h2>
+            {highlightKindsPresent.length > 1 && (
+              <div role="group" aria-label="Filter highlights by kind" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '0 0 8px' }}>
+                <button
+                  type="button"
+                  class="st-chip"
+                  aria-pressed={highlightFilter === 'all'}
+                  style={highlightFilter === 'all' ? { background: 'var(--st-tint)' } : undefined}
+                  onClick={() => setHighlightFilter('all')}
+                >
+                  All
+                </button>
+                {highlightKindsPresent.map((kind) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    class="st-chip"
+                    title={`Filter: ${kind}`}
+                    aria-label={`Filter highlights: ${kind}`}
+                    aria-pressed={highlightFilter === kind}
+                    style={highlightFilter === kind ? { background: 'var(--st-tint)' } : undefined}
+                    onClick={() => setHighlightFilter(kind)}
+                  >
+                    {highlightKindEmoji(kind)}
+                  </button>
+                ))}
+              </div>
+            )}
             <ol class="st-highlights">
-              {contextualHighlights.map(({ highlight, segment }) => (
+              {visibleHighlights.map(({ highlight, segment }) => (
                 <li key={highlight.id}>
                   <span class="st-highlight-time">{formatClock(highlight.startMs)}</span>
                   <span class="st-highlight-text">
-                    {highlight.label && <strong>{highlight.label}</strong>}
+                    <span>
+                      {highlightKindEmoji(highlight.kind)}
+                      {highlight.label && ' '}
+                      {highlight.label && <strong>{highlight.label}</strong>}
+                    </span>
                     {segment?.text && <span>{segment.text}</span>}
                   </span>
                 </li>

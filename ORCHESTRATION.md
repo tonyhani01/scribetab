@@ -13,7 +13,7 @@ Costs/speed: /tmp/st-orch/costs.tsv
 | B2 chat | done | pass (313 ext tests, typecheck) |
 | B3 library ask | done | pass (330 ext tests, typecheck) — pi glm-5.3-flash $0.054 |
 | C1 edit segments | done | pass | |
-| C2 typed tags | pending | |
+| C2 typed tags | done | pass (331 ext, 364 shared, typecheck) — pi glm $0.051 |
 | C3 import | done | pass | |
 | C4 vocabulary | done | pass (260 ext, 335 shared, typecheck) | |
 | D1 chapters+talktime | done | pass (309 shared tests) | |

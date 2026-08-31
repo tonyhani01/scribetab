@@ -120,13 +120,13 @@ describe('exportMarkdown', () => {
   it('renders highlights in timestamp order and prefers labels over context', () => {
     const md = exportMarkdown(session, segments, {
       highlights: [
-        { startMs: 61_000, label: 'Decide rollout', text: 'Second line' },
+        { startMs: 61_000, label: 'Decide rollout', text: 'Second line', kind: 'decision' },
         { startMs: 2_000, text: 'Hello team' },
       ],
     });
     expect(md.indexOf('Decide rollout')).toBeGreaterThan(md.indexOf('Hello team'));
-    expect(md).toContain('- **[00:00:02]** Hello team');
-    expect(md).toContain('- **[00:01:01]** Decide rollout');
+    expect(md).toContain('- **[00:00:02]** ⭐ Hello team'); // legacy row → default kind
+    expect(md).toContain('- **[00:01:01]** 🔴 Decide rollout');
     expect(md).not.toContain('Decide rollout Second line');
   });
 
@@ -443,11 +443,11 @@ describe('exportNotebookLm', () => {
   it('renders ordered highlights and prefers labels over context', () => {
     const md = exportNotebookLm(session, segments, {
       highlights: [
-        { startMs: 61_000, label: 'Decide rollout', text: 'Second line' },
+        { startMs: 61_000, label: 'Decide rollout', text: 'Second line', kind: 'question' },
         { startMs: 2_000, text: 'Hello team' },
       ],
     });
-    expect(md.indexOf('[00:00:02] Hello team')).toBeLessThan(md.indexOf('[00:01:01] Decide rollout'));
+    expect(md.indexOf('[00:00:02] ⭐ Hello team')).toBeLessThan(md.indexOf('[00:01:01] ❓ Decide rollout'));
     expect(md).not.toContain('Decide rollout Second line');
   });
 });

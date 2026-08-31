@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { TranscriptSegment } from '@scribetab/shared';
+import type { HighlightKind, TranscriptSegment } from '@scribetab/shared';
+import { HIGHLIGHT_KIND_EMOJI } from '@scribetab/shared';
 import { ConsentBanner } from '@/components/ConsentBanner';
 import type { Ack, CaptureState, ToSidePanel, TranscriptionIssue } from '@/utils/messages';
 import { type NativeHostStatus } from '@/utils/nativeSync';
@@ -11,6 +12,14 @@ import { mergeSegments } from '@/utils/segmentMerge';
 import { ChatView } from './ChatView';
 import { SegmentList } from './SegmentList';
 import { openSettingsWindow } from '@/utils/settingsWindow';
+
+/** The four flag buttons shown while recording, in display order. */
+const HIGHLIGHT_BUTTONS: readonly { kind: HighlightKind; title: string; added: string }[] = [
+  { kind: 'highlight', title: 'Add highlight', added: 'Highlight added' },
+  { kind: 'action', title: 'Add action item', added: 'Action added' },
+  { kind: 'decision', title: 'Add decision', added: 'Decision added' },
+  { kind: 'question', title: 'Add question', added: 'Question added' },
+];
 
 export function LiveView() {
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
@@ -26,7 +35,7 @@ export function LiveView() {
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [commandBusy, setCommandBusy] = useState(false);
   const [highlightBusy, setHighlightBusy] = useState(false);
-  const [highlightStatus, setHighlightStatus] = useState<string | null>(null);
+  const [highlightStatus, setHighlightStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [pending, setPending] = useState<PendingChunk[]>([]);
   const [pane, setPane] = useState<'transcript' | 'ask'>('transcript');
   const [transcribedCount, setTranscribedCount] = useState(0);
@@ -177,8 +186,9 @@ export function LiveView() {
     }
   };
 
-  const addHighlight = async () => {
+  const addHighlight = async (kind: HighlightKind) => {
     if (!sessionId || state !== 'recording' || highlightBusy) return;
+    const added = HIGHLIGHT_BUTTONS.find((b) => b.kind === kind)?.added ?? 'Highlight added';
     setHighlightBusy(true);
     setHighlightStatus(null);
     try {
@@ -186,10 +196,11 @@ export function LiveView() {
         target: 'background',
         type: 'ADD_HIGHLIGHT',
         sessionId,
+        kind,
       })) as Ack;
-      setHighlightStatus(res?.ok ? 'Highlight added' : res?.error ?? 'Could not add highlight');
+      setHighlightStatus(res?.ok ? { ok: true, text: added } : { ok: false, text: res?.error ?? 'Could not add highlight' });
     } catch (e) {
-      setHighlightStatus(humanError(e));
+      setHighlightStatus({ ok: false, text: humanError(e) });
     } finally {
       setHighlightBusy(false);
       if (highlightTimerRef.current !== undefined) window.clearTimeout(highlightTimerRef.current);
@@ -260,16 +271,21 @@ export function LiveView() {
             {state === 'starting' ? 'Starting…' : 'Start recording'}
           </button>
         )}
-        <button
-          type="button"
-          class="st-btn st-btn--quiet"
-          disabled={captureBusy || highlightBusy || state !== 'recording' || !sessionId}
-          onClick={() => void addHighlight()}
-        >
-          {highlightBusy ? 'Adding…' : 'Highlight'}
-        </button>
+        {HIGHLIGHT_BUTTONS.map(({ kind, title }) => (
+          <button
+            key={kind}
+            type="button"
+            class="st-chip"
+            title={title}
+            aria-label={title}
+            disabled={captureBusy || highlightBusy || state !== 'recording' || !sessionId}
+            onClick={() => void addHighlight(kind)}
+          >
+            {HIGHLIGHT_KIND_EMOJI[kind]}
+          </button>
+        ))}
       </div>
-      {highlightStatus && <p class={highlightStatus === 'Highlight added' ? 'st-status-text' : 'st-status-text st-status-text--error'} aria-live="polite">{highlightStatus}</p>}
+      {highlightStatus && <p class={highlightStatus.ok ? 'st-status-text' : 'st-status-text st-status-text--error'} aria-live="polite">{highlightStatus.text}</p>}
 
       {sessionId && (
         <nav class="st-seg" style={{ margin: '10px 0' }}>

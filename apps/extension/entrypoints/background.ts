@@ -60,7 +60,7 @@ import {
   isLiveCaptureState,
 } from '@/utils/messages';
 import { exportSelectedActionItems } from '@/utils/actionExport';
-import { putHighlight } from '@/utils/highlightStore';
+import { normalizeHighlightKind, putHighlight } from '@/utils/highlightStore';
 import {
   getUpcomingEvents,
   matchUpcomingEvent,
@@ -962,6 +962,7 @@ export default defineBackground(() => {
             sessionId: msg.sessionId,
             startMs,
             label: normalizeHighlightLabel(msg.label),
+            kind: normalizeHighlightKind(msg.kind),
             createdAt: new Date().toISOString(),
           });
           notifySidePanel({

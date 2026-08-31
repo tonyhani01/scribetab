@@ -20,12 +20,16 @@ export interface TranscriptSegment {
   source: 'audio' | 'captions';
 }
 
+/** What a flagged moment means; rendered as an emoji prefix in lists/exports. */
+export type HighlightKind = 'highlight' | 'action' | 'decision' | 'question' | 'note';
+
 /** A moment the user flagged mid-call (hotkey or side-panel button). */
 export interface HighlightMoment {
   id: string;                // crypto.randomUUID()
   sessionId: string;
   startMs: number;           // session-relative
   label?: string;            // optional short note typed later (≤ 200 chars)
+  kind?: HighlightKind;      // rows from before kinds existed are 'highlight'
   createdAt: string;         // ISO 8601 wall clock
 }
 

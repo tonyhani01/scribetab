@@ -1,4 +1,4 @@
-import type { TranscriptSegment } from '@scribetab/shared';
+import type { HighlightKind, TranscriptSegment } from '@scribetab/shared';
 
 export type CaptureState = 'idle' | 'starting' | 'recording' | 'paused' | 'stopping';
 
@@ -83,7 +83,13 @@ export type ToBackground =
       templateId?: string;
     }
   | { target: 'background'; type: 'EXPORT_ACTIONS'; sessionId: string; itemIds: string[] }
-  | { target: 'background'; type: 'ADD_HIGHLIGHT'; sessionId: string; label?: string }
+  | {
+      target: 'background';
+      type: 'ADD_HIGHLIGHT';
+      sessionId: string;
+      label?: string;
+      kind?: HighlightKind;
+    }
   | { target: 'background'; type: 'RENAME_SPEAKER'; sessionId: string; from: string; to: string }
   | { target: 'background'; type: 'RENAME_SESSION'; sessionId: string; title: string }
   | { target: 'background'; type: 'ARCHIVE_SESSION'; sessionId: string }
