@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
-import type { HighlightKind, TranscriptSegment } from '@scribetab/shared';
-import { HIGHLIGHT_KIND_EMOJI } from '@scribetab/shared';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import type { HighlightKind, HighlightMoment, TranscriptSegment } from '@scribetab/shared';
+import { highlightKindEmoji, highlightsWithContext } from '@scribetab/shared';
+import { getHighlightsForSession } from '@/utils/highlightStore';
 import { ConsentBanner } from '@/components/ConsentBanner';
 import type { Ack, CaptureState, ToSidePanel, TranscriptionIssue } from '@/utils/messages';
 import { type NativeHostStatus } from '@/utils/nativeSync';
@@ -10,7 +11,7 @@ import { addPending, clearPending, resolveBelow, resolvePending, type PendingChu
 import { canApplySessionRead, type SessionReadToken } from '@/utils/sessionReadGuard';
 import { mergeSegments } from '@/utils/segmentMerge';
 import { ChatView } from './ChatView';
-import { SegmentList } from './SegmentList';
+import { fmt } from './SegmentList';
 import { openSettingsWindow } from '@/utils/settingsWindow';
 
 /** The four flag buttons shown while recording, in display order. */
@@ -21,8 +22,42 @@ const HIGHLIGHT_BUTTONS: readonly { kind: HighlightKind; title: string; added: s
   { kind: 'question', title: 'Add question', added: 'Question added' },
 ];
 
+/** One row of the live transcript flow: a transcript segment or a flagged moment. */
+type TranscriptRow =
+  | { type: 'segment'; segment: TranscriptSegment }
+  | { type: 'highlight'; highlight: HighlightMoment; context?: TranscriptSegment };
+
+/**
+ * Segments and highlights merged into one time-ordered flow, so flagged moments
+ * (including typed notes) render where they happened. Segments are re-sorted
+ * defensively; highlightsWithContext sorts highlights and attaches the nearest
+ * segment text for rows that carry no label of their own.
+ */
+function buildTranscriptFlow(
+  segments: readonly TranscriptSegment[],
+  highlights: readonly HighlightMoment[],
+): TranscriptRow[] {
+  const ordered = [...segments].sort((a, b) => a.startMs - b.startMs);
+  const contextual = highlightsWithContext(highlights, segments);
+  const rows: TranscriptRow[] = [];
+  let i = 0;
+  for (const segment of ordered) {
+    while (i < contextual.length && contextual[i].highlight.startMs <= segment.startMs) {
+      rows.push({ type: 'highlight', ...contextual[i] });
+      i += 1;
+    }
+    rows.push({ type: 'segment', segment });
+  }
+  while (i < contextual.length) {
+    rows.push({ type: 'highlight', ...contextual[i] });
+    i += 1;
+  }
+  return rows;
+}
+
 export function LiveView() {
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
+  const [highlights, setHighlights] = useState<HighlightMoment[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [state, setState] = useState<CaptureState>('idle');
   const [configured, setConfigured] = useState(true);
@@ -36,6 +71,7 @@ export function LiveView() {
   const [commandBusy, setCommandBusy] = useState(false);
   const [highlightBusy, setHighlightBusy] = useState(false);
   const [highlightStatus, setHighlightStatus] = useState<{ ok: boolean; text: string } | null>(null);
+  const [noteDraft, setNoteDraft] = useState('');
   const [pending, setPending] = useState<PendingChunk[]>([]);
   const [pane, setPane] = useState<'transcript' | 'ask'>('transcript');
   const [transcribedCount, setTranscribedCount] = useState(0);
@@ -62,6 +98,16 @@ export function LiveView() {
       const current = sessionReadRef.current;
       if (canApplySessionRead(token, current.currentSessionId, current.version)) {
         setSegments((prev) => mergeSegments(rows, prev));
+      }
+    });
+  };
+
+  const loadSessionHighlights = (id: string, version: number) => {
+    const token: SessionReadToken = { sessionId: id, version };
+    void getHighlightsForSession(id).then((rows) => {
+      const current = sessionReadRef.current;
+      if (canApplySessionRead(token, current.currentSessionId, current.version)) {
+        setHighlights(rows);
       }
     });
   };
@@ -95,7 +141,10 @@ export function LiveView() {
         const sid = (v.currentSessionId as string) ?? null;
         const version = selectSession(sid);
         setSessionId(sid);
-        if (sid) loadSessionSegments(sid, version);
+        if (sid) {
+          loadSessionSegments(sid, version);
+          loadSessionHighlights(sid, version);
+        }
       });
 
     const onStorage = (c: Record<string, chrome.storage.StorageChange>, area: string) => {
@@ -128,8 +177,12 @@ export function LiveView() {
         const version = selectSession(sid);
         setSessionId(sid);
         setSegments([]);
+        setHighlights([]);
         setPending(clearPending());
-        if (sid) loadSessionSegments(sid, version);
+        if (sid) {
+          loadSessionSegments(sid, version);
+          loadSessionHighlights(sid, version);
+        }
       }
     };
     chrome.storage.onChanged.addListener(onStorage);
@@ -156,6 +209,10 @@ export function LiveView() {
       } else if (msg.type === 'SEGMENTS_UPDATED') {
         if (!sessionRef.current || msg.sessionId !== sessionRef.current) return;
         setSegments((prev) => mergeSegments(prev, msg.segments));
+      } else if (msg.type === 'HIGHLIGHT_ADDED') {
+        // Background already persisted the row; re-read so notes and flags land in the flow.
+        if (!sessionRef.current) return;
+        loadSessionHighlights(sessionRef.current, sessionReadRef.current.version);
       }
     };
     chrome.runtime.onMessage.addListener(onMessage);
@@ -168,7 +225,7 @@ export function LiveView() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' });
-  }, [segments.length, pending.length]);
+  }, [segments.length, highlights.length, pending.length]);
 
   const sendCapture = async (
     type: 'START_CAPTURE' | 'PAUSE_CAPTURE' | 'RESUME_CAPTURE' | 'STOP_CAPTURE',
@@ -186,9 +243,12 @@ export function LiveView() {
     }
   };
 
-  const addHighlight = async (kind: HighlightKind) => {
-    if (!sessionId || state !== 'recording' || highlightBusy) return;
-    const added = HIGHLIGHT_BUTTONS.find((b) => b.kind === kind)?.added ?? 'Highlight added';
+  const sendHighlight = async (
+    kind: HighlightKind,
+    label: string | undefined,
+    added: string,
+  ): Promise<boolean> => {
+    if (!sessionId || state !== 'recording' || highlightBusy) return false;
     setHighlightBusy(true);
     setHighlightStatus(null);
     try {
@@ -197,10 +257,13 @@ export function LiveView() {
         type: 'ADD_HIGHLIGHT',
         sessionId,
         kind,
+        ...(label === undefined ? {} : { label }),
       })) as Ack;
       setHighlightStatus(res?.ok ? { ok: true, text: added } : { ok: false, text: res?.error ?? 'Could not add highlight' });
+      return Boolean(res?.ok);
     } catch (e) {
       setHighlightStatus({ ok: false, text: humanError(e) });
+      return false;
     } finally {
       setHighlightBusy(false);
       if (highlightTimerRef.current !== undefined) window.clearTimeout(highlightTimerRef.current);
@@ -208,7 +271,21 @@ export function LiveView() {
     }
   };
 
+  const addHighlight = (kind: HighlightKind) => {
+    void sendHighlight(kind, undefined, HIGHLIGHT_BUTTONS.find((b) => b.kind === kind)?.added ?? 'Highlight added');
+  };
+
+  /** Private note: kind 'note', the typed text travels as the label. */
+  const addNote = () => {
+    const label = noteDraft.trim();
+    if (!label) return;
+    void sendHighlight('note', label, 'Note added').then((ok) => {
+      if (ok) setNoteDraft('');
+    });
+  };
+
   const captureBusy = commandBusy || state === 'starting' || state === 'stopping';
+  const flow = useMemo(() => buildTranscriptFlow(segments, highlights), [segments, highlights]);
   return (
     <section>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -279,13 +356,32 @@ export function LiveView() {
             title={title}
             aria-label={title}
             disabled={captureBusy || highlightBusy || state !== 'recording' || !sessionId}
-            onClick={() => void addHighlight(kind)}
+            onClick={() => addHighlight(kind)}
           >
-            {HIGHLIGHT_KIND_EMOJI[kind]}
+            {highlightKindEmoji(kind)}
           </button>
         ))}
       </div>
       {highlightStatus && <p class={highlightStatus.ok ? 'st-status-text' : 'st-status-text st-status-text--error'} aria-live="polite">{highlightStatus.text}</p>}
+
+      {state === 'recording' && sessionId && (
+        <form style={{ display: 'flex', gap: 6, marginTop: 6 }} onSubmit={(e) => { e.preventDefault(); addNote(); }}>
+          <input
+            type="text"
+            data-testid="note-input"
+            class="st-input"
+            style={{ flex: 1, maxWidth: 'none' }}
+            placeholder="Private note…"
+            maxLength={200}
+            value={noteDraft}
+            disabled={highlightBusy}
+            onInput={(e) => setNoteDraft((e.currentTarget as HTMLInputElement).value)}
+          />
+          <button type="submit" data-testid="note-add" class="st-btn" disabled={highlightBusy || !noteDraft.trim()}>
+            Add
+          </button>
+        </form>
+      )}
 
       {sessionId && (
         <nav class="st-seg" style={{ margin: '10px 0' }}>
@@ -298,10 +394,47 @@ export function LiveView() {
       )}
       {pane === 'ask' && sessionId ? (
         <ChatView key={sessionId} sessionId={sessionId} />
-      ) : state === 'idle' && segments.length === 0 && pending.length === 0 ? (
+      ) : state === 'idle' && segments.length === 0 && pending.length === 0 && highlights.length === 0 ? (
         <p data-testid="live-empty" class="st-empty">No live session. Start recording from the popup or press Alt+Shift+R.</p>
+      ) : flow.length === 0 && pending.length === 0 ? (
+        <p class="st-empty">Segments appear here as chunks are transcribed.</p>
       ) : (
-        <SegmentList segments={segments} pending={pending} empty="Segments appear here as chunks are transcribed." />
+        <ol class="st-segments">
+          {flow.map((row) =>
+            row.type === 'segment' ? (
+              <li key={row.segment.id}>
+                <span class="st-time">{fmt(row.segment.startMs)}</span>
+                <span
+                  class="st-text"
+                  style={row.segment.text === '[transcription failed]' ? { color: 'var(--st-danger)' } : undefined}
+                >
+                  {row.segment.speaker && <strong>{row.segment.speaker}: </strong>}
+                  {row.segment.text}
+                </span>
+              </li>
+            ) : (
+              <li key={row.highlight.id}>
+                <span class="st-time">{fmt(row.highlight.startMs)}</span>
+                <span class="st-text">
+                  {highlightKindEmoji(row.highlight.kind)}
+                  {row.highlight.label && <strong> {row.highlight.label}</strong>}
+                  {!row.highlight.label && row.context?.text && (
+                    <span style={{ color: 'var(--st-muted)' }}> {row.context.text}</span>
+                  )}
+                </span>
+              </li>
+            ),
+          )}
+          {pending.map((p) => (
+            <li key={`pending-${p.chunkIndex}`} class="st-segment--pending">
+              <span class="st-time">{fmt(p.startMs)}</span>
+              <span class="st-text">
+                <span class="st-shimmer" />
+                Transcribing…
+              </span>
+            </li>
+          ))}
+        </ol>
       )}
       {pane !== 'ask' && state === 'recording' && (
         <p class="st-hint st-livestatus">

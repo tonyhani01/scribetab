@@ -65,4 +65,25 @@ describe('highlightStore', () => {
     await updateHighlightLabel(rows[0]!, 'note');
     expect((await getHighlightsForSession('s1'))[0]?.kind).toBe('decision');
   });
+
+  it('flows private notes through with kind and label intact', async () => {
+    await putHighlight({ id: 'flag', sessionId: 's1', startMs: 1_000, createdAt: 't', kind: 'highlight' });
+    await putHighlight({
+      id: 'note',
+      sessionId: 's1',
+      startMs: 4_000,
+      createdAt: 't',
+      kind: 'note',
+      label: 'Follow up with Ada',
+    });
+    const rows = await getHighlightsForSession('s1');
+    expect(rows.map((r) => [r.id, r.kind, r.label])).toEqual([
+      ['flag', 'highlight', undefined],
+      ['note', 'note', 'Follow up with Ada'],
+    ]);
+    // Label edits keep the note kind (trimmed like every other highlight label).
+    await updateHighlightLabel(rows[1]!, '  Renamed note  ');
+    const edited = (await getHighlightsForSession('s1')).find((r) => r.id === 'note');
+    expect([edited?.kind, edited?.label]).toEqual(['note', 'Renamed note']);
+  });
 });

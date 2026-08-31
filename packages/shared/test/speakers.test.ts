@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { HighlightMoment, TranscriptSegment } from '../src/types';
 import {
+  HIGHLIGHT_KIND_EMOJI,
+  HIGHLIGHT_KINDS,
   applySpeakerNames,
   distinctSpeakers,
+  highlightKindEmoji,
   highlightsWithContext,
   normalizeSpeakerNames,
 } from '../src/speakers';
@@ -61,5 +64,11 @@ describe('speaker helpers', () => {
       ['early', 'near'],
       ['late', 'far'],
     ]);
+  });
+
+  it('renders private notes with the 📝 prefix used by exports', () => {
+    expect(HIGHLIGHT_KINDS).toContain('note');
+    expect(HIGHLIGHT_KIND_EMOJI.note).toBe('📝');
+    expect(highlightKindEmoji('note')).toBe('📝');
   });
 });

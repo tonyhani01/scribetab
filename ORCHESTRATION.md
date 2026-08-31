@@ -22,7 +22,7 @@ Costs/speed: /tmp/st-orch/costs.tsv
 | D4 automations | done | pass (106 host tests) | |
 | E1 export options | done | pass (5+346 tests) | |
 | E2 labels | pending | |
-| E3 notes | pending | |
+| E3 notes | done | pass (332 ext, 365 shared, typecheck) — pi glm $0.030 |
 | E4 meet chat | done | pass (305 ext tests, typecheck) | |
 | E5 theme | done | pass (21 tests) | |
 | E6 cost card+onboarding | done | pass | |
