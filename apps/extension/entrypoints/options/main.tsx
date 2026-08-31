@@ -16,6 +16,7 @@ import {
 } from '@scribetab/shared';
 import {
   DEFAULT_SETTINGS,
+  THEME_CHOICES,
   getSettings,
   saveSettings,
   withLlmField,
@@ -23,7 +24,9 @@ import {
   withSttField,
   withSttProvider,
   type Settings,
+  type ThemeChoice,
 } from '@/utils/settings';
+import { watchTheme } from '@/utils/theme';
 import {
   ensureHostOrigin,
   probeLlm,
@@ -50,6 +53,12 @@ const STT_PROVIDER_LABELS: Record<string, string> = {
 const LLM_MODEL_PLACEHOLDERS: Record<string, string> = {
   openai: 'gpt-4o-mini',
   custom: 'llama3.2',
+};
+
+const THEME_LABELS: Record<ThemeChoice, string> = {
+  system: 'System default',
+  light: 'Light',
+  dark: 'Dark',
 };
 
 const row = { display: 'block', margin: '12px 0 4px', fontWeight: 600, fontSize: 12.5, color: 'var(--st-muted)' } as const;
@@ -275,6 +284,31 @@ function App() {
             <option value={String(choice)}>{retentionLabel(choice)}</option>
           ))}
         </select>
+      </section>
+
+      <section class="st-section">
+        <h2>Appearance</h2>
+        <p style={hint}>
+          Applies to the popup, the transcript panel, and this page. The choice is stored in this
+          browser profile only.
+        </p>
+        <div style={row} id="themeLabel">
+          Theme
+        </div>
+        <div class="st-radios" role="radiogroup" aria-labelledby="themeLabel">
+          {THEME_CHOICES.map((choice) => (
+            <label key={choice} class="st-check">
+              <input
+                type="radio"
+                name="theme"
+                data-testid={`theme-${choice}`}
+                checked={s.theme === choice}
+                onChange={() => set('theme', choice)}
+              />{' '}
+              {THEME_LABELS[choice]}
+            </label>
+          ))}
+        </div>
       </section>
 
       <section class="st-section">
@@ -633,5 +667,9 @@ scribetab-host config set notion.parentPageId PAGE_ID`}</pre>
     </main>
   );
 }
+
+// Paint the saved scheme on <html> before the first render, then keep it live
+// (storage changes from a save here, or an OS appearance flip while on "system").
+watchTheme();
 
 render(<App />, document.getElementById('app')!);

@@ -2,7 +2,11 @@ import { render } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { LibraryView } from './LibraryView';
 import { LiveView } from './LiveView';
+import { watchTheme } from '@/utils/theme';
 import '@/assets/theme.css';
+
+// Apply the stored theme before the first paint; keeps following chrome.storage and the OS.
+watchTheme();
 
 type Tab = 'live' | 'library';
 

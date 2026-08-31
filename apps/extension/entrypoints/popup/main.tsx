@@ -12,6 +12,10 @@ import { getSettings } from '@/utils/settings';
 import { formatElapsedMs } from '@/utils/elapsed';
 import '@/assets/theme.css';
 import { openSettingsWindow } from '@/utils/settingsWindow';
+import { watchTheme } from '@/utils/theme';
+
+// Apply the stored theme before the first paint; keeps following chrome.storage and the OS.
+watchTheme();
 
 function MicIcon() {
   return (

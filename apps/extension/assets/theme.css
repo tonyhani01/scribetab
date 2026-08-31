@@ -1,5 +1,10 @@
 /* ScribeTab design tokens & components — see design canvas "ScribeTab UI" */
-:root {
+
+/* Light tokens. The explicit `data-theme="light"` selector is part of this rule so a
+   user-set light choice never has to redeclare the list; the dark blocks below win on
+   source order + specificity when the resolved scheme is dark. */
+:root,
+:root[data-theme='light'] {
   --st-bg: #fafafc;
   --st-surface: #ffffff;
   --st-border: #eceaf4;
@@ -19,10 +24,14 @@
   --st-warn-bg: #fff8e1;
   --st-on-accent: #ffffff;
   --st-shadow: 0 1px 2px rgba(28, 37, 71, 0.08);
+  color-scheme: light;
 }
 
+/* System dark — applies only until utils/theme.ts puts an explicit `data-theme`
+   on <html> (i.e. before the first paint, and on any page that does not watch
+   the setting). Keep this block in sync with :root[data-theme='dark'] below. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     --st-bg: #131a30;
     --st-surface: #1b2340;
     --st-border: #262e52;
@@ -42,7 +51,33 @@
     --st-warn-bg: #33301c;
     --st-on-accent: #131a30;
     --st-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    color-scheme: dark;
   }
+}
+
+/* User preference: "Dark". Mirrors the media block above and always wins, because
+   the media block excludes any element carrying data-theme. */
+:root[data-theme='dark'] {
+  --st-bg: #131a30;
+  --st-surface: #1b2340;
+  --st-border: #262e52;
+  --st-border-strong: #323b63;
+  --st-ink: #ecedf7;
+  --st-muted: #9aa1c0;
+  --st-faint: #616a8e;
+  --st-accent: #a79bf5;
+  --st-accent-deep: #c3baf8;
+  --st-tint: #262e52;
+  --st-track: #131a30;
+  --st-danger: #e5484d;
+  --st-danger-bg: #3a1f2c;
+  --st-danger-border: #5c2a34;
+  --st-success: #4cc38a;
+  --st-warn: #d8b64a;
+  --st-warn-bg: #33301c;
+  --st-on-accent: #131a30;
+  --st-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  color-scheme: dark;
 }
 
 * {
@@ -68,7 +103,8 @@ pre {
   font-size: 12px;
 }
 
-input[type='checkbox'] {
+input[type='checkbox'],
+input[type='radio'] {
   accent-color: var(--st-accent);
 }
 
@@ -667,6 +703,23 @@ button:focus-visible {
 
 .st-check input {
   margin-top: 2px;
+}
+
+/* Radio groups (appearance / theme) reuse .st-check for the row itself. */
+.st-radios {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin-top: 8px;
+}
+
+.st-radios .st-check {
+  align-items: center;
+  margin: 0;
+}
+
+.st-radios .st-check input {
+  margin-top: 0;
 }
 
 .st-hint {

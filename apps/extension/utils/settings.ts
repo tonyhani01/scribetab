@@ -1,6 +1,10 @@
 import type { LlmProviderId, RetentionDays, TranscriptionProviderId } from '@scribetab/shared';
 import { isLlmProviderId, isRetentionDays, isTranscriptionProviderId } from '@scribetab/shared';
 
+/** Color scheme preference. `system` follows the OS `prefers-color-scheme`. */
+export const THEME_CHOICES = ['system', 'light', 'dark'] as const;
+export type ThemeChoice = (typeof THEME_CHOICES)[number];
+
 export interface Settings {
   providerId: '' | TranscriptionProviderId;
   apiKey: string;      // current STT provider — chrome.storage.local ONLY
@@ -26,6 +30,8 @@ export interface Settings {
   summaryPrompt: string; // '' = use default guidance
   /** Audio retention: auto-delete chunks this many days after the meeting ends. */
   retentionDays: RetentionDays;
+  /** UI color scheme; mirrored onto `<html data-theme>` by utils/theme.ts. */
+  theme: ThemeChoice;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -52,9 +58,11 @@ export const DEFAULT_SETTINGS: Settings = {
   consentReminder: true,
   summaryPrompt: '',
   retentionDays: 'forever',
+  theme: 'system',
 };
 
-const KEY = 'settings';
+/** Storage key holding the whole Settings blob in chrome.storage.local. */
+export const SETTINGS_STORAGE_KEY = 'settings';
 
 function asStringMap(v: unknown): Record<string, string> {
   if (!v || typeof v !== 'object') return {};
@@ -63,6 +71,12 @@ function asStringMap(v: unknown): Record<string, string> {
     if (typeof val === 'string') out[k] = val;
   }
   return out;
+}
+
+function asTheme(v: unknown): ThemeChoice {
+  return typeof v === 'string' && (THEME_CHOICES as readonly string[]).includes(v)
+    ? (v as ThemeChoice)
+    : 'system';
 }
 
 function asProviderId(v: unknown): '' | TranscriptionProviderId {
@@ -105,6 +119,7 @@ export function normalizeSettings(raw: Partial<Settings> | undefined): Settings 
     models,
     llmApiKeys,
     llmModels,
+    theme: asTheme(src.theme),
     apiKey: providerId ? (apiKeys[providerId] ?? '') : '',
     model: providerId ? (models[providerId] ?? '') : '',
     llmApiKey: llmProviderId ? (llmApiKeys[llmProviderId] ?? '') : '',
@@ -166,10 +181,10 @@ export function withLlmField(s: Settings, field: 'llmApiKey' | 'llmModel', value
 }
 
 export async function getSettings(): Promise<Settings> {
-  const v = await chrome.storage.local.get(KEY);
-  return normalizeSettings(v[KEY] as Partial<Settings> | undefined);
+  const v = await chrome.storage.local.get(SETTINGS_STORAGE_KEY);
+  return normalizeSettings(v[SETTINGS_STORAGE_KEY] as Partial<Settings> | undefined);
 }
 
 export async function saveSettings(s: Settings): Promise<void> {
-  await chrome.storage.local.set({ [KEY]: persistCurrent(s) });
+  await chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: persistCurrent(s) });
 }
