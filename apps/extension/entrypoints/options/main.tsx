@@ -136,6 +136,7 @@ function App() {
         baseUrl: s.baseUrl.trim(),
         llmBaseUrl: s.llmBaseUrl.trim(),
         redactTerms: s.redactTerms.map((t) => t.trim()).filter(Boolean),
+        vocabTerms: s.vocabTerms.map((t) => t.trim()).filter(Boolean),
         summaryPrompt: s.summaryPrompt.trim(),
       });
       setStatus({
@@ -198,6 +199,7 @@ function App() {
         llmApiKeys: {},
         llmModels: {},
         redactTerms: [],
+        vocabTerms: [],
       });
       setStatus({ kind: 'ok', text: 'All data wiped.' });
     } catch (e) {
@@ -389,6 +391,27 @@ function App() {
             </div>
           </>
         )}
+
+        <label style={row} for="vocabTerms">Custom vocabulary</label>
+        <textarea
+          id="vocabTerms"
+          data-testid="vocab-terms"
+          class="st-textarea"
+          style={{ minHeight: 96 }}
+          aria-describedby="vocabTermsHint"
+          placeholder={'ScribeTab\nteh=>the'}
+          value={s.vocabTerms.join('\n')}
+          onInput={(e) =>
+            set(
+              'vocabTerms',
+              (e.currentTarget as HTMLTextAreaElement).value.split(/\r?\n/),
+            )
+          }
+        />
+        <p id="vocabTermsHint" style={{ ...hint, margin: '4px 0 0' }}>
+          One term per line. Use <code>wrong=&gt;right</code> to correct stored transcript text.
+          Plain terms are sent only as hints with configured transcription calls; corrections run locally.
+        </p>
       </section>
 
       <section class="st-section">

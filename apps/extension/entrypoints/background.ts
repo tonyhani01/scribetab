@@ -1,7 +1,6 @@
 import {
   originPattern,
-  redactSegment,
-  redactSegments,
+  parseVocab,
   transcriptionEndpoint,
 } from '@scribetab/shared';
 import type { TranscriptSegment } from '@scribetab/shared';
@@ -57,6 +56,11 @@ import { persistHostStatus, syncSessionToHost } from '@/utils/nativeSync';
 import { isCapturableUrl, platformFromUrl, titleFromTab } from '@/utils/platform';
 import { checkQuota } from '@/utils/quota';
 import { getSegments, putSegments } from '@/utils/segmentStore';
+import {
+  normalizeVocabReplacements,
+  prepareFusedSegmentsForStorage,
+  prepareSegmentsForStorage,
+} from '@/utils/segmentIngest';
 import { applyStoredSpeakerNames, renameStoredSpeaker } from '@/utils/speakerRename';
 import {
   bootExceptId,
@@ -73,7 +77,7 @@ import {
   listSessions,
   updateSession,
 } from '@/utils/sessionStore';
-import { getSettings } from '@/utils/settings';
+import { getSettings, type Settings } from '@/utils/settings';
 import { persistLastTranscriptionError } from '@/utils/transcriptionError';
 import { GENERIC_USER_ERROR, humanError } from '@/utils/userError';
 import { deleteChunksForSession, sessionHasChunks } from '@/utils/chunkStore';
@@ -183,12 +187,16 @@ async function applyFusion(sessionId: string, force = false): Promise<void> {
     const fused = fuseWithCaptions(segs, sessionId);
     const session = await getSession(sessionId);
     const named = applyStoredSpeakerNames(fused, session?.speakerNames);
-    const changed = named.filter((s, i) => s.speaker !== segs[i]?.speaker);
-    if (changed.length === 0) return;
     const settings = await getSettings();
-    const stored = settings.redactAtRest
-      ? redactSegments(named, { extraTerms: settings.redactTerms })
-      : named;
+    const stored = prepareFusedSegmentsForStorage(
+      named,
+      settings.redactAtRest ? { extraTerms: settings.redactTerms } : null,
+    );
+    const changed = stored.some(
+      (segment, index) =>
+        segment.speaker !== segs[index]?.speaker || segment.text !== segs[index]?.text,
+    );
+    if (!changed) return;
     await putSegments(stored);
     notifySidePanel({
       target: 'sidepanel',
@@ -210,20 +218,26 @@ async function applyCaptionEvent(
 
   if (captionsOnly) {
     await segmentMutationQueue.run(sessionId, async () => {
-      let segment: TranscriptSegment = captionCueToSegment(sessionId, cue, crypto.randomUUID());
+      const segment: TranscriptSegment = captionCueToSegment(sessionId, cue, crypto.randomUUID());
       const session = await getSession(sessionId);
-      segment = applyStoredSpeakerNames([segment], session?.speakerNames)[0]!;
-      const settings = await getSettings();
-      if (settings.redactAtRest) {
-        segment = redactSegment(segment, { extraTerms: settings.redactTerms });
-      }
-      await putSegments([segment]);
+      const named = applyStoredSpeakerNames([segment], session?.speakerNames)[0]!;
+      const [settings, captureState] = await Promise.all([
+        getSettings(),
+        chrome.storage.local.get('sessionVocabReplacements'),
+      ]);
+      const replacements = normalizeVocabReplacements(captureState.sessionVocabReplacements);
+      const stored = prepareSegmentsForStorage(
+        [named],
+        settings.redactAtRest ? { extraTerms: settings.redactTerms } : null,
+        replacements,
+      )[0]!;
+      await putSegments([stored]);
       await syncSegmentCount(sessionId);
       notifySidePanel({
         target: 'sidepanel',
         type: 'SEGMENTS_ADDED',
         sessionId,
-        segments: [segment],
+        segments: [stored],
       });
     });
   } else {
@@ -322,11 +336,10 @@ function getMediaStreamId(options: chrome.tabCapture.GetMediaStreamOptions): Pro
  * cloud provider, or the host permission was never granted). Recording still
  * proceeds — transcription is an overlay on capture, not a precondition.
  */
-async function transcriptionStatus(): Promise<{
+async function transcriptionStatus(s: Settings): Promise<{
   payload: TranscriptionSettingsPayload | null;
   issue: TranscriptionIssue;
 }> {
-  const s = await getSettings();
   if (s.providerId === '') return { payload: null, issue: 'unconfigured' };
   let endpoint: string;
   try {
@@ -366,7 +379,12 @@ async function setIdle(extra: Record<string, unknown> = {}): Promise<void> {
     notifyMeetConsent(capturedTabId, false);
   }
   captionBuffer.length = 0;
-  await chrome.storage.local.set({ captureState: 'idle', capturedTabId: null, ...extra });
+  await chrome.storage.local.set({
+    captureState: 'idle',
+    capturedTabId: null,
+    sessionVocabReplacements: [],
+    ...extra,
+  });
   // Clear REC on the tab we captured, not whatever is focused now.
   if (typeof capturedTabId === 'number') void refreshActionBadge(capturedTabId);
   void refreshActiveTabBadge();
@@ -467,6 +485,7 @@ async function handleStart(): Promise<Ack> {
       segmentCount: 0,
     });
     const settings = await getSettings();
+    const vocab = parseVocab(settings.vocabTerms);
     notifyMeetTab(tab.id, true);
     if (settings.consentReminder) notifyMeetConsent(tab.id, true);
 
@@ -480,8 +499,8 @@ async function handleStart(): Promise<Ack> {
     const captionsOnly = freezeCaptionsOnly(settings.captionsOnly, platform);
     const { payload, issue } = captionsOnly
       ? { payload: null, issue: null as TranscriptionIssue }
-      : await transcriptionStatus();
-    const transcription = payload;
+      : await transcriptionStatus(settings);
+    const transcription = payload ? { ...payload, vocabHints: vocab.hints } : null;
     const notice = captionsOnlyFallbackNotice(
       settings.captionsOnly,
       platform,
@@ -504,6 +523,7 @@ async function handleStart(): Promise<Ack> {
     await chrome.storage.local.set({
       currentSessionId: sessionId,
       sessionCaptionsOnly: captionsOnly,
+      sessionVocabReplacements: vocab.replacements,
       captureNotice: notice,
       transcriptionConfigured: captionsOnly || transcription !== null,
       transcriptionIssue: captionsOnly ? null : issue,
@@ -516,6 +536,7 @@ async function handleStart(): Promise<Ack> {
       transcription,
       micEnabled: settings.micEnabled,
       redaction: settings.redactAtRest ? { extraTerms: settings.redactTerms } : null,
+      replacements: vocab.replacements,
     } as const satisfies ToOffscreen;
 
     const first = await sendToOffscreen(startMsg);
@@ -561,6 +582,7 @@ async function handleStart(): Promise<Ack> {
       captureState: 'idle',
       capturedTabId: null,
       sessionCaptionsOnly: false,
+      sessionVocabReplacements: [],
       captureNotice: null,
       lastError: startError,
     });

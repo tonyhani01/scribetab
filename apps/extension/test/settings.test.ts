@@ -12,6 +12,15 @@ import {
 } from '../utils/settings';
 
 describe('normalizeSettings', () => {
+  it('defaults custom vocabulary and filters corrupted stored entries', () => {
+    expect(DEFAULT_SETTINGS.vocabTerms).toEqual([]);
+    expect(normalizeSettings(undefined).vocabTerms).toEqual([]);
+    expect(normalizeSettings({
+      vocabTerms: ['AcmeCorp', 42, 'teh=>the', null] as unknown as string[],
+    }).vocabTerms).toEqual(['AcmeCorp', 'teh=>the']);
+    expect(normalizeSettings({ vocabTerms: 'AcmeCorp' as unknown as string[] }).vocabTerms).toEqual([]);
+  });
+
   it('preserves valid retention choices and normalizes invalid stored values', () => {
     expect(normalizeSettings({ retentionDays: 7 }).retentionDays).toBe(7);
     expect(normalizeSettings({ retentionDays: 30 }).retentionDays).toBe(30);

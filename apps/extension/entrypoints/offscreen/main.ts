@@ -6,13 +6,13 @@ import {
   addCostUsd,
   encodeWav,
   getTranscriptionProvider,
-  redactSegments,
   resampleLinear,
 } from '@scribetab/shared';
 import type { Ack, ToOffscreen, ToSidePanel } from '@/utils/messages';
 import { putChunk } from '@/utils/chunkStore';
 import { encodeChunkToOggOpus } from '@/utils/opusEncode';
 import { offscreenStopApplies } from '@/utils/sessionIdentity';
+import { prepareSegmentsForStorage } from '@/utils/segmentIngest';
 import { putSegments } from '@/utils/segmentStore';
 import { getSession, updateSession } from '@/utils/sessionStore';
 
@@ -181,6 +181,7 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
               apiKey: transcription.apiKey,
               baseUrl: transcription.baseUrl,
               model: transcription.model,
+              vocabHints: transcription.vocabHints,
             });
             notifyBackground({
               target: 'background',
@@ -217,9 +218,11 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
               });
           },
           onSegments: async (segments, job) => {
-            const stored = msg.redaction
-              ? redactSegments(segments, { extraTerms: msg.redaction.extraTerms })
-              : segments;
+            const stored = prepareSegmentsForStorage(
+              segments,
+              msg.redaction,
+              msg.replacements,
+            );
             await putSegments(stored);
             segmentCount += stored.length;
             void chrome.runtime

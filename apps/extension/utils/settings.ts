@@ -8,6 +8,7 @@ export interface Settings {
   apiKeys: Record<string, string>;  // STT keys keyed by provider id
   models: Record<string, string>;   // STT models keyed by provider id
   language: string;    // '' = provider auto-detect; BCP-47 hint otherwise
+  vocabTerms: string[]; // recognition hints and wrong=>right correction rules
   baseUrl: string;     // custom provider only
   micEnabled: boolean;
   retainAudio: boolean; // when false, audioChunks are deleted on session finalize
@@ -34,6 +35,7 @@ export const DEFAULT_SETTINGS: Settings = {
   apiKeys: {},
   models: {},
   language: '',
+  vocabTerms: [],
   baseUrl: '',
   micEnabled: false,
   retainAudio: true,
@@ -109,6 +111,9 @@ export function normalizeSettings(raw: Partial<Settings> | undefined): Settings 
     llmModel: llmProviderId ? (llmModels[llmProviderId] ?? '') : '',
   };
   if (!Array.isArray(merged.redactTerms)) merged.redactTerms = [];
+  merged.vocabTerms = Array.isArray(merged.vocabTerms)
+    ? merged.vocabTerms.filter((term): term is string => typeof term === 'string')
+    : [];
   if (typeof merged.summaryPrompt !== 'string') merged.summaryPrompt = '';
   if (!isRetentionDays(merged.retentionDays)) merged.retentionDays = 'forever';
   return merged;
