@@ -8,7 +8,7 @@ configure (cloud key or localhost), and optional Notion page create from the
 native host (`api.notion.com`). Transcripts are exposed to AI agents and
 notetaking apps via MCP.
 
-**Status: v1.1.0.** Capture, live transcription, library/search/export, native
+**Status: v1.1.2.** Capture, live transcription, library/search/export, native
 host + MCP, Meet caption speakers, summaries, and Obsidian/Notion/NotebookLM
 integrations are implemented.
 
@@ -58,7 +58,7 @@ License: GPL-3.0-only
    `cambjpbepplcihlihagiheggdkfcpmef`
 
 Store-submittable zip: `pnpm --filter @scribetab/extension zip` →
-`apps/extension/.output/scribetab-1.1.0-chrome.zip` (exact name is printed by
+`apps/extension/.output/scribetab-<version>-chrome.zip` (exact name is printed by
 the command). Listing copy and permission justifications:
 [`docs/store-listing.md`](docs/store-listing.md).
 

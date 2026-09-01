@@ -15,6 +15,7 @@ import { pathToFileURL } from "node:url";
 const ROOT_PACKAGE = "package.json";
 const EXT_PACKAGE = "apps/extension/package.json";
 const CHANGELOG = "CHANGELOG.md";
+const README = "README.md";
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
 
 /**
@@ -117,6 +118,18 @@ function writeVersion(path, version) {
   writeFileSync(path, JSON.stringify(pkg, null, 2) + "\n", "utf8");
 }
 
+/** Update the `**Status: vX.Y.Z.**` line in README.md, if present. */
+function writeReadmeVersion(version) {
+  let text;
+  try {
+    text = readFileSync(README, "utf8");
+  } catch {
+    return;
+  }
+  const updated = text.replace(/\*\*Status: v\d+\.\d+\.\d+\.\*\*/, `**Status: v${version}.**`);
+  if (updated !== text) writeFileSync(README, updated, "utf8");
+}
+
 function lastTag() {
   const out = gitOut(["tag", "--list", "v*", "--sort=-v:refname"]);
   return out.split("\n").map((l) => l.trim()).find(Boolean) ?? null;
@@ -149,7 +162,7 @@ function insertChangelogSection(existing, section) {
  * is removed or rewound directly instead, since git checkout cannot.
  */
 function restoreFiles(changelogTracked, originalChangelog) {
-  const paths = [ROOT_PACKAGE, EXT_PACKAGE, ...(changelogTracked ? [CHANGELOG] : [])];
+  const paths = [ROOT_PACKAGE, EXT_PACKAGE, README, ...(changelogTracked ? [CHANGELOG] : [])];
   spawnSync("git", ["checkout", "--", ...paths], { stdio: "inherit" });
   if (!changelogTracked) {
     if (originalChangelog === null) rmSync(CHANGELOG, { force: true });
@@ -221,6 +234,7 @@ function main(argv) {
   // 4. Write the new version into both package.json files.
   writeVersion(ROOT_PACKAGE, next);
   writeVersion(EXT_PACKAGE, next);
+  writeReadmeVersion(next);
 
   // 5. Prepend the changelog section under the top header.
   const changelogExisted = existsSync(CHANGELOG);
@@ -248,7 +262,7 @@ function main(argv) {
   }
 
   // 7. Commit and tag. Never push (step 8 is a printed instruction only).
-  if (!run("git", ["add", ROOT_PACKAGE, EXT_PACKAGE, CHANGELOG])) fail("git add failed");
+  if (!run("git", ["add", ROOT_PACKAGE, EXT_PACKAGE, README, CHANGELOG])) fail("git add failed");
   if (!run("git", ["commit", "-m", `chore(release): v${next}`])) fail("git commit failed");
   if (!run("git", ["tag", "-a", `v${next}`, "-m", `v${next}`])) fail("git tag failed");
 
