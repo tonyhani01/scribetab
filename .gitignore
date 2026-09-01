@@ -14,4 +14,4 @@ audit-shots/
 docs/audit-*.html
 
 # Chrome Web Store submit credentials (wxt submit init)
-.env.submit
+.env.submit*
