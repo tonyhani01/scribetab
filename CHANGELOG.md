@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.2.0 — 2026-09-01
+
+- Merge fix/stt-speaker-labels: STT speaker labels + Scribe/Gemini provider options
+- fix: surface STT speaker labels; add Scribe diarize toggle and Gemini Smart mode
+- chore: gitignore local operator playbook
+- docs+release: README status line at v1.1.2, auto-bumped by release script
+- chore: widen gitignore to .env.submit* (wizard backups)
+- Merge claude/musing-murdock-db2e26: fix flaky native-host protocol test (buffer coalesced acks in test helper)
+- ci: dispatchable store-status workflow to query CWS item state
+- fix(test): buffer leftover stdout bytes across readNativeMessage calls
+- chore: gitignore .env.submit store credentials
+
 ## v1.1.2 — 2026-09-01
 
 - Merge feat/mic-permission: options-page mic grant flow — offscreen getUserMedia cannot prompt
