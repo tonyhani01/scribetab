@@ -3,7 +3,10 @@ import { isCuratedSttModel, sttModelCatalog } from '@scribetab/shared';
 import { sttProbeRequest } from '../utils/providerProbe';
 import {
   DEFAULT_SETTINGS,
+  LEGACY_CUSTOM_TEMPLATE_ID,
   normalizeSettings,
+  summaryGuidance,
+  withDefaultSummaryGuidance,
   withLlmField,
   withLlmProvider,
   withSttField,
@@ -12,6 +15,36 @@ import {
 } from '../utils/settings';
 
 describe('normalizeSettings', () => {
+  it('defaults and guards ready-notification and Meet-chat booleans', () => {
+    expect(normalizeSettings(undefined)).toMatchObject({
+      notifyOnReady: true,
+      saveMeetChat: false,
+    });
+    expect(normalizeSettings({
+      notifyOnReady: false,
+      saveMeetChat: true,
+    })).toMatchObject({
+      notifyOnReady: false,
+      saveMeetChat: true,
+    });
+    expect(normalizeSettings({
+      notifyOnReady: 'yes' as unknown as boolean,
+      saveMeetChat: 1 as unknown as boolean,
+    })).toMatchObject({
+      notifyOnReady: true,
+      saveMeetChat: false,
+    });
+  });
+
+  it('defaults custom vocabulary and filters corrupted stored entries', () => {
+    expect(DEFAULT_SETTINGS.vocabTerms).toEqual([]);
+    expect(normalizeSettings(undefined).vocabTerms).toEqual([]);
+    expect(normalizeSettings({
+      vocabTerms: ['AcmeCorp', 42, 'teh=>the', null] as unknown as string[],
+    }).vocabTerms).toEqual(['AcmeCorp', 'teh=>the']);
+    expect(normalizeSettings({ vocabTerms: 'AcmeCorp' as unknown as string[] }).vocabTerms).toEqual([]);
+  });
+
   it('preserves valid retention choices and normalizes invalid stored values', () => {
     expect(normalizeSettings({ retentionDays: 7 }).retentionDays).toBe(7);
     expect(normalizeSettings({ retentionDays: 30 }).retentionDays).toBe(30);
@@ -19,12 +52,84 @@ describe('normalizeSettings', () => {
     expect(normalizeSettings({ retentionDays: 14 as unknown as 7 }).retentionDays).toBe('forever');
     expect(normalizeSettings({ retentionDays: 'bad' as unknown as 'forever' }).retentionDays).toBe('forever');
   });
-  it('defaults summaryPrompt to empty and preserves stored values', () => {
+  it('migrates legacy summaryPrompt into a selected custom template', () => {
     expect(normalizeSettings(undefined).summaryPrompt).toBe('');
-    expect(normalizeSettings({ summaryPrompt: 'Budget focus.' } as Partial<Settings>).summaryPrompt).toBe('Budget focus.');
+    const migrated = normalizeSettings({
+      summaryPrompt: '  Budget focus.  ',
+    } as Partial<Settings>);
+    expect(migrated.summaryPrompt).toBe('');
+    expect(migrated.activeTemplateId).toBe(LEGACY_CUSTOM_TEMPLATE_ID);
+    expect(migrated.summaryTemplates).toEqual([
+      { id: LEGACY_CUSTOM_TEMPLATE_ID, name: 'Custom', guidance: 'Budget focus.' },
+    ]);
+    expect(summaryGuidance(migrated)).toBe('Budget focus.');
   });
+
   it('coerces a non-string summaryPrompt to empty', () => {
     expect(normalizeSettings({ summaryPrompt: 42 as unknown as string }).summaryPrompt).toBe('');
+  });
+
+  it('guards templates, active id, and personal context from corrupted storage', () => {
+    const normalized = normalizeSettings({
+      summaryTemplates: [
+        { id: 'custom-risks', name: 'Risks', guidance: 'Focus on risks.' },
+        { id: 'builtin-standup', name: 'Shadowed', guidance: 'Unsafe.' },
+        { id: 'custom-risks', name: 'Duplicate', guidance: 'Duplicate.' },
+        { id: 42, name: 'Broken', guidance: 'Broken.' },
+      ] as unknown as Settings['summaryTemplates'],
+      activeTemplateId: 'custom-risks',
+      personalContext: {
+        name: '  Ada\nLovelace ',
+        role: 42,
+        team: ' Platform   engineering ',
+        outputLanguage: ' French ',
+      } as unknown as Settings['personalContext'],
+    });
+    expect(normalized.summaryTemplates).toEqual([
+      { id: 'custom-risks', name: 'Risks', guidance: 'Focus on risks.' },
+    ]);
+    expect(normalized.activeTemplateId).toBe('custom-risks');
+    expect(normalized.personalContext).toEqual({
+      name: 'Ada Lovelace',
+      role: '',
+      team: 'Platform engineering',
+      outputLanguage: 'French',
+    });
+
+    const corrupted = normalizeSettings({
+      summaryTemplates: 'not-an-array' as unknown as Settings['summaryTemplates'],
+      activeTemplateId: 'missing',
+      personalContext: [] as unknown as Settings['personalContext'],
+    });
+    expect(corrupted.summaryTemplates).toEqual([]);
+    expect(corrupted.activeTemplateId).toBe('');
+    expect(corrupted.personalContext).toEqual({
+      name: '',
+      role: '',
+      team: '',
+      outputLanguage: '',
+    });
+  });
+
+  it('prioritizes legacy guidance when the stored active id is invalid or templates are capped', () => {
+    const cappedTemplates = Array.from({ length: 50 }, (_, index) => ({
+      id: `custom-${index}`,
+      name: `Custom ${index}`,
+      guidance: `Guidance ${index}`,
+    }));
+    const migrated = normalizeSettings({
+      summaryPrompt: 'Keep the legacy focus.',
+      summaryTemplates: cappedTemplates,
+      activeTemplateId: 'missing-template',
+    });
+    expect(migrated.summaryTemplates).toHaveLength(50);
+    expect(migrated.summaryTemplates).toContainEqual({
+      id: LEGACY_CUSTOM_TEMPLATE_ID,
+      name: 'Custom',
+      guidance: 'Keep the legacy focus.',
+    });
+    expect(migrated.activeTemplateId).toBe(LEGACY_CUSTOM_TEMPLATE_ID);
+    expect(summaryGuidance(migrated)).toBe('Keep the legacy focus.');
   });
 
   it('migrates a single apiKey/model into the current provider map', () => {
@@ -84,6 +189,22 @@ describe('per-provider STT credentials', () => {
     const openaiProbe = sttProbeRequest(s.providerId, s.apiKey, s.baseUrl);
     expect(openaiProbe.headers.Authorization).toBe('Bearer sk-openai');
     expect(JSON.stringify(openaiProbe.headers)).not.toContain('g-key');
+  });
+});
+
+describe('summary template editing', () => {
+  it('resets selection without erasing a personal template', () => {
+    const configured = normalizeSettings({
+      summaryTemplates: [
+        { id: 'custom-risks', name: 'Risks', guidance: 'Focus on risks.' },
+      ],
+      activeTemplateId: 'custom-risks',
+    });
+    const reset = withDefaultSummaryGuidance(configured);
+    expect(reset.activeTemplateId).toBe('');
+    expect(reset.summaryTemplates).toEqual([
+      { id: 'custom-risks', name: 'Risks', guidance: 'Focus on risks.' },
+    ]);
   });
 });
 

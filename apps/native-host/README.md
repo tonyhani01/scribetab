@@ -42,7 +42,7 @@ Manifest locations (per-user):
 
 Slug is `[a-z0-9-]`, max 60 characters, with `-2`, `-3`, … on collision. Sessions are written to a hidden temp directory and renamed into place on `sync_end`.
 
-## Host config (Obsidian / Notion)
+## Host config (Obsidian / Notion / calendar)
 
 All integrations are **off by default**. There is no interactive prompt — use:
 
@@ -54,11 +54,14 @@ scribetab-host config set obsidianVaultPath /path/to/vault
 scribetab-host config set notionEnabled true
 scribetab-host config set notion.token -
 scribetab-host config set notion.parentPageId PAGE_ID
+scribetab-host config set icsUrl https://calendar.example.com/private/feed.ics
 ```
 
 `config set` takes a single value argument (quote it if it contains spaces). Values may start with `-`. The recommended way to set `notion.token` is `-`, which reads the token from stdin and avoids exposing it on the process command line. The argv form (`config set notion.token secret`) still works.
 
 `obsidianVaultPath` must be an absolute path. Config writes are atomic (temp file + rename, mode `0600`) but are **not locked** against concurrent `config set` processes.
+
+`icsUrl` is the only calendar setting: HTTPS only, fetched by the host (never the extension) on `get_upcoming`, cached 5 minutes in-process, and any failure replies `{ ok: true, events: [] }`. Unset by default, so no calendar request ever leaves the machine.
 
 Config file (mode `0600`):
 

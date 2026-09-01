@@ -38,7 +38,8 @@ Source: GPL-3.0-only.
 | `activeTab` | Act on the tab the user invoked the extension on. |
 | `sidePanel` | Live transcript + library UI. |
 | `nativeMessaging` | Optional sync to `com.scribetab.host`. Unused if the host is not installed. |
-| `tabs` | Observe tab URLs (and titles) for badge detection: `REC?` on Meet/Teams/Zoom, `REC` on the captured tab, and to hide capture on `chrome://` pages. Least privilege vs site host permissions (those would allow injecting into meeting sites). The Meet content script already matches `https://meet.google.com/*` only and displays the in-tab consent banner. |
+| `notifications` | Optional "transcript ready" / "summary ready" desktop notifications after a recording finalizes. Off with one toggle in options (`notifyOnReady`); no notification content leaves the machine. |
+| `tabs` | Observe tab URLs (and titles) for badge detection: `REC?` on Meet/Teams/Zoom, `REC` on the captured tab, and to hide capture on `chrome://` pages. Least privilege vs site host permissions (those would allow injecting into meeting sites). The caption content scripts match only meeting hosts — `https://meet.google.com/*` (which also shows the in-tab consent banner), `https://*.zoom.us/wc/*` / `https://app.zoom.us/wc/*` (Zoom web client), and `https://teams.microsoft.com/*` / `https://teams.live.com/*` — and only read on-screen captions (and, if enabled, Meet chat) while the user is recording. |
 | `optional_host_permissions` (`http://*/*`, `https://*/*`) | Granted per origin from options (Save / Test connection) for the STT or LLM endpoint the user typed — cloud or localhost. Never granted for all sites up front. |
 
 Commands (`chrome.commands`) need no extra permission; `add-highlight` marks a moment in the active recording.

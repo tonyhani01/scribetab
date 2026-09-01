@@ -105,6 +105,32 @@ describe('openAiCompatible', () => {
     expect(init.headers.Authorization).toBeUndefined();
   });
 
+  it('sends custom vocabulary as the Whisper prompt field', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okJson({ text: 'hi' }));
+    vi.stubGlobal('fetch', fetchMock);
+    await openaiProvider.transcribe(req, { apiKey: 'k', vocabHints: ['Kubernetes', 'AcmeCorp'] });
+    const form = fetchMock.mock.calls[0]![1].body as FormData;
+    expect(form.get('prompt')).toBe('Kubernetes AcmeCorp');
+  });
+
+  it('omits prompt when hints are empty, blank, or absent', async () => {
+    for (const vocabHints of [undefined, [], ['  ', '']]) {
+      const fetchMock = vi.fn().mockResolvedValue(okJson({ text: 'hi' }));
+      vi.stubGlobal('fetch', fetchMock);
+      await openaiProvider.transcribe(req, { apiKey: 'k', ...(vocabHints ? { vocabHints } : {}) });
+      expect((fetchMock.mock.calls[0]![1].body as FormData).get('prompt')).toBeNull();
+    }
+  });
+
+  it('groq and mistral carry the prompt field through the same adapter', async () => {
+    for (const provider of [groqProvider, mistralProvider]) {
+      const fetchMock = vi.fn().mockResolvedValue(okJson({ text: 'hi' }));
+      vi.stubGlobal('fetch', fetchMock);
+      await provider.transcribe(req, { apiKey: 'k', vocabHints: ['AcmeCorp'] });
+      expect((fetchMock.mock.calls[0]![1].body as FormData).get('prompt')).toBe('AcmeCorp');
+    }
+  });
+
   it('throws when 200 JSON lacks a string text', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okJson({ segments: [] })));
     await expect(openaiProvider.transcribe(req, { apiKey: 'k' })).rejects.toThrow(

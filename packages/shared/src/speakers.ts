@@ -1,4 +1,27 @@
-import type { HighlightMoment, TranscriptSegment } from './types.js';
+import type { HighlightKind, HighlightMoment, TranscriptSegment } from './types.js';
+
+/** Canonical kind order for UI chips and normalization. */
+export const HIGHLIGHT_KINDS: readonly HighlightKind[] = [
+  'highlight',
+  'action',
+  'decision',
+  'question',
+  'note',
+];
+
+/** Emoji prefix per highlight kind, used by the side panel and exports. */
+export const HIGHLIGHT_KIND_EMOJI: Record<HighlightKind, string> = {
+  highlight: '⭐',
+  action: '✅',
+  decision: '🔴',
+  question: '❓',
+  note: '📝',
+};
+
+/** Emoji for a highlight kind; rows stored before kinds existed get ⭐. */
+export function highlightKindEmoji(kind: HighlightKind | undefined): string {
+  return HIGHLIGHT_KIND_EMOJI[kind ?? 'highlight'];
+}
 
 /**
  * Apply manual speaker renames to segments. Does not mutate inputs.

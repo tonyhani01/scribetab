@@ -1,6 +1,7 @@
 import {
   addCostUsd,
   audioTranscribedMs,
+  buildChatMessages,
   estimateTokens,
   getLlmProvider,
   llmCostUsd,
@@ -15,11 +16,12 @@ import {
   type ProviderConfig,
   type SessionSummary,
 } from '@scribetab/shared';
-import type { ToSidePanel } from './messages';
+import type { ChatAskAck, ToSidePanel } from './messages';
 import { getSegments, putSegments } from './segmentStore';
 import { getSession, listSessions, updateSession, type StoredSession } from './sessionStore';
 import { humanError } from './userError';
-import { getSettings, type Settings } from './settings';
+import { getSettings, personalContextPromptLine, summaryGuidance, type Settings } from './settings';
+import { notifyReady } from './notify';
 
 const SUMMARY_DELTA_MIN_MS = 150;
 
@@ -112,7 +114,12 @@ export async function retryPendingIntelligence(): Promise<void> {
  * structured LLM summary, and a session cost total (transcribed STT minutes
  * + LLM tokens). Failures here must not fail capture finalize.
  */
-export async function runFinalizeIntelligence(sessionId: string, settings: Settings): Promise<void> {
+export async function runFinalizeIntelligence(
+  sessionId: string,
+  settings: Settings,
+  templateId?: string,
+  opts?: { notify?: boolean },
+): Promise<void> {
   const extraTerms = settings.redactTerms;
   let segments = await getSegments(sessionId);
 
@@ -171,8 +178,9 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
         // Long meetings use map-reduce so nothing is silently dropped by the
         // 24k-char clip; short ones keep the single-pass call.
         summary = await summarizeMeetingLong(complete, forLlm, {
-          guidance: settings.summaryPrompt,
+          guidance: summaryGuidance(settings, templateId),
           model: settings.llmModel.trim() || undefined,
+          personalContext: settings.personalContext,
         });
         intelligence = null;
       } catch (e) {
@@ -191,6 +199,94 @@ export async function runFinalizeIntelligence(sessionId: string, settings: Setti
     ...retry,
     ...(summary ? { summary, summaryMarkdown: summaryToMarkdown(summary) } : {}),
   });
+  if (summary) {
+    // Manual regenerate happens with the panel open — no OS notification then.
+    const notify = opts?.notify ?? true;
+    notifyReady('summary', existing?.title ?? 'Untitled meeting', notify && settings.notifyOnReady);
+  }
+}
+
+/** Q/A turns from the panel kept for the follow-up prompt. Prompt cost only — cap it. */
+export const CHAT_HISTORY_MAX_TURNS = 8;
+
+/**
+ * Drop malformed turns and keep only the most recent exchanges. The history
+ * crosses the extension message boundary, so it is validated like any other
+ * untrusted payload even though our own panel sends it.
+ */
+export function sanitizeChatHistory(input: unknown): { q: string; a: string }[] {
+  if (!Array.isArray(input)) return [];
+  const turns = input.filter(
+    (t): t is { q: string; a: string } =>
+      typeof t === 'object' &&
+      t !== null &&
+      typeof (t as { q?: unknown }).q === 'string' &&
+      typeof (t as { a?: unknown }).a === 'string' &&
+      (t as { q: string }).q.trim() !== '' &&
+      (t as { a: string }).a.trim() !== '',
+  );
+  return turns.slice(-CHAT_HISTORY_MAX_TURNS).map(({ q, a }) => ({ q, a }));
+}
+
+/**
+ * One transcript-chat turn: same redaction, provider, permission gate, and
+ * cost accounting as the finalize summary. Works on a live session (segments
+ * so far) and on a completed one. The answer is returned to the caller and
+ * never persisted.
+ */
+export async function answerTranscriptQuestion(
+  sessionId: string,
+  question: string,
+  history: unknown,
+  settings: Settings,
+): Promise<ChatAskAck> {
+  if (!llmConfigured(settings)) return { ok: false, error: 'No LLM configured' };
+  if (!(await llmOriginGranted(settings))) return { ok: false, error: 'needs-permission' };
+  const q = question.trim();
+  if (!q) return { ok: false, error: 'Question cannot be empty' };
+  const segments = await getSegments(sessionId);
+  if (segments.length === 0) {
+    return { ok: false, error: 'No transcript yet — ask again once segments appear.' };
+  }
+  // Same policy as runFinalizeIntelligence: redact-at-rest sessions are already
+  // clean on disk; otherwise redact just before the LLM sees the text.
+  const forLlm = settings.redactAtRest
+    ? segments
+    : redactSegments(segments, { extraTerms: settings.redactTerms });
+  const provider = getLlmProvider(settings.llmProviderId);
+  const cfg: ProviderConfig = {
+    apiKey: settings.llmApiKey,
+    baseUrl: settings.llmProviderId === 'custom' ? settings.llmBaseUrl.trim() || undefined : undefined,
+    model: settings.llmModel.trim() || undefined,
+  };
+  const messages = buildChatMessages({
+    segments: forLlm,
+    question: q,
+    history: sanitizeChatHistory(history),
+    personalContext: personalContextPromptLine(settings),
+  });
+  try {
+    const answer = await provider.complete(messages, cfg);
+    const prompt = messages.map((m) => m.content).join('\n');
+    const added = llmCostUsd(
+      settings.llmProviderId,
+      estimateTokens(prompt),
+      estimateTokens(answer),
+      settings.llmModel || undefined,
+    );
+    // Cost bookkeeping is best-effort — a failed write must not eat the answer.
+    if (added !== undefined) {
+      try {
+        const row = await getSession(sessionId);
+        await updateSession(sessionId, { costUsd: addCostUsd(row?.costUsd ?? undefined, added) });
+      } catch {
+        // Session row missing or store unavailable — the answer still stands.
+      }
+    }
+    return { ok: true, answer };
+  } catch (e) {
+    return { ok: false, error: humanError(e) };
+  }
 }
 
 export function createDeltaEmitter(

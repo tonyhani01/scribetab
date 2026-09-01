@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { atomicWriteFile } from './atomicWrite.js';
+import { parseAutomations, type AutomationRule } from './automations.js';
 import { configPath } from './paths.js';
 
 export interface NotionConfig {
@@ -13,6 +14,9 @@ export interface HostConfig {
   obsidianVaultPath?: string;
   notionEnabled: boolean;
   notion?: NotionConfig;
+  icsUrl?: string;
+  /** Ordered routing rules; they never enable a disabled integration. */
+  automations?: AutomationRule[];
 }
 
 export const DEFAULT_HOST_CONFIG: HostConfig = {
@@ -26,6 +30,8 @@ export const CONFIG_KEYS = [
   'notionEnabled',
   'notion.token',
   'notion.parentPageId',
+  'icsUrl',
+  'automations',
 ] as const;
 
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -63,6 +69,12 @@ export function parseHostConfig(raw: unknown): HostConfig {
     const token = asOptionalString(raw.notion.token, 'notion.token') ?? '';
     const parentPageId = asOptionalString(raw.notion.parentPageId, 'notion.parentPageId') ?? '';
     if (token || parentPageId) cfg.notion = { token, parentPageId };
+  }
+  const icsUrl = asOptionalString(raw.icsUrl, 'icsUrl');
+  if (icsUrl) cfg.icsUrl = icsUrl;
+  if (raw.automations !== undefined && raw.automations !== null) {
+    const rules = parseAutomations(raw.automations);
+    if (rules.length) cfg.automations = rules;
   }
   return cfg;
 }
@@ -124,6 +136,10 @@ export function getConfigValue(cfg: HostConfig, key: ConfigKey): string {
       return cfg.notion?.token ?? '';
     case 'notion.parentPageId':
       return cfg.notion?.parentPageId ?? '';
+    case 'icsUrl':
+      return cfg.icsUrl ?? '';
+    case 'automations':
+      return cfg.automations ? JSON.stringify(cfg.automations) : '';
   }
 }
 
@@ -134,6 +150,8 @@ export function setConfigValue(cfg: HostConfig, key: ConfigKey, value: string): 
   };
   if (cfg.obsidianVaultPath) next.obsidianVaultPath = cfg.obsidianVaultPath;
   if (cfg.notion) next.notion = { ...cfg.notion };
+  if (cfg.icsUrl) next.icsUrl = cfg.icsUrl;
+  if (cfg.automations) next.automations = cfg.automations.map((r) => ({ ...r }));
 
   const unset = value.trim() === '';
 
@@ -164,6 +182,27 @@ export function setConfigValue(cfg: HostConfig, key: ConfigKey, value: string): 
       const notion = next.notion ?? { token: '', parentPageId: '' };
       notion.parentPageId = unset ? '' : value.trim();
       next.notion = notion;
+      break;
+    }
+    case 'icsUrl':
+      if (unset) delete next.icsUrl;
+      else next.icsUrl = value.trim();
+      break;
+    case 'automations': {
+      if (unset) delete next.automations;
+      else {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(value) as unknown;
+        } catch {
+          throw new Error(
+            'automations must be a JSON array of rules, e.g. [{"titleContains":"Acme","destination":"obsidian","subfolder":"Clients/Acme"}]',
+          );
+        }
+        const rules = parseAutomations(parsed);
+        if (rules.length) next.automations = rules;
+        else delete next.automations;
+      }
       break;
     }
   }

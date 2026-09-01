@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import type { MeetingSession, TranscriptSegment } from '@scribetab/shared';
 import { atomicWriteFile } from './atomicWrite.js';
+import { obsidianSubfolderFor } from './automations.js';
 import { loadConfig } from './config.js';
 import { copyToObsidian } from './obsidian.js';
 import { createNotionPage, NOTION_INTEGRATION_BUDGET_MS } from './notion.js';
@@ -84,13 +85,21 @@ export async function runPostSyncIntegrations(opts: {
       };
     } else {
       try {
+        // Automations only route what the enabled integration already writes:
+        // no rules, or no matching Obsidian rule ⇒ vault root, unchanged.
+        const subfolder = obsidianSubfolderFor(cfg.automations ?? [], opts.session.title);
         const path = await copyToObsidian({
           vaultPath: vault,
           session: opts.session,
           segments: opts.segments,
           summaryMarkdown: opts.summaryMarkdown,
+          subfolder,
         });
-        statuses.obsidian = { ok: true, path };
+        statuses.obsidian = {
+          ok: true,
+          path,
+          message: subfolder ? `routed to ScribeTab/${subfolder}` : undefined,
+        };
       } catch (e) {
         statuses.obsidian = { ok: false, message: sanitizeIntegrationError(errMsg(e), token) };
       }

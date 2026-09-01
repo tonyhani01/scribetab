@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { redactSegments } from '@scribetab/shared';
+import { DEFAULT_SUMMARY_GUIDANCE, redactSegments } from '@scribetab/shared';
 import { closeDb } from '../utils/db';
 import {
   createDeltaEmitter,
@@ -110,6 +110,21 @@ function stubChat(narrative: string, actionLine = '') {
 }
 
 describe('runFinalizeIntelligence', () => {
+  it('notifies with the stored title after a summary succeeds', async () => {
+    const create = vi.fn().mockResolvedValue('notification-id');
+    (chrome as typeof chrome & { notifications: { create: typeof create } }).notifications = { create };
+    stubChat('Ship on Friday.', '- Ada ships');
+
+    await runFinalizeIntelligence(
+      's1',
+      settings({ llmProviderId: 'openai', llmApiKey: 'sk-x', notifyOnReady: true }),
+    );
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Summary ready: Standup',
+    }));
+  });
+
   it('stores summary, action items, and STT+LLM cost when an LLM is configured', async () => {
     const fetchMock = stubChat('Ship on Friday.', '- Ada ships');
     await runFinalizeIntelligence(
@@ -318,14 +333,23 @@ describe('runFinalizeIntelligence', () => {
     expect(row?.intelligence).toBeNull();
   });
 
-  it('passes user summaryPrompt into the summary request', async () => {
+  it('uses the active summary template and personal context in their fixed prompt turns', async () => {
     const fetchMock = stubChat('ok', '- none');
     await runFinalizeIntelligence(
       's1',
       settings({
         llmProviderId: 'openai',
         llmApiKey: 'sk-x',
-        summaryPrompt: 'Focus on risks.',
+        summaryTemplates: [
+          { id: 'custom-risks', name: 'Risks', guidance: 'Focus on risks.' },
+        ],
+        activeTemplateId: 'custom-risks',
+        personalContext: {
+          name: 'Ada',
+          role: 'Engineering lead',
+          team: 'Platform',
+          outputLanguage: 'French',
+        },
       }),
     );
     const sent = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as {
@@ -334,8 +358,55 @@ describe('runFinalizeIntelligence', () => {
     const system = sent.messages.find((m) => m.role === 'system');
     const user = sent.messages.find((m) => m.role === 'user');
     expect(system?.content).toContain('JSON');
+    expect(system?.content).toContain(
+      'The user is Ada, Engineering lead on Platform. Write outputs in French.',
+    );
     expect(user?.content).toContain('Focus on risks.');
+    expect(user?.content).not.toContain('The user is Ada');
     expect(user?.content.trimEnd().endsWith('</transcript>')).toBe(true);
+  });
+
+  it('uses a per-run template override without changing the active template', async () => {
+    const fetchMock = stubChat('ok', '- none');
+    const configured = settings({
+      llmProviderId: 'openai',
+      llmApiKey: 'sk-x',
+      summaryTemplates: [
+        { id: 'custom-risks', name: 'Risks', guidance: 'Focus on risks.' },
+        { id: 'custom-decisions', name: 'Decisions', guidance: 'Focus on decisions.' },
+      ],
+      activeTemplateId: 'custom-risks',
+    });
+    await runFinalizeIntelligence('s1', configured, 'custom-decisions');
+    const sent = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as {
+      messages: { role: string; content: string }[];
+    };
+    const user = sent.messages.find((m) => m.role === 'user');
+    expect(user?.content).toContain('Focus on decisions.');
+    expect(user?.content).not.toContain('Focus on risks.');
+    expect(configured.activeTemplateId).toBe('custom-risks');
+  });
+
+  it('honors an explicit default-template override instead of falling back to the active template', async () => {
+    const fetchMock = stubChat('ok', '- none');
+    await runFinalizeIntelligence(
+      's1',
+      settings({
+        llmProviderId: 'openai',
+        llmApiKey: 'sk-x',
+        summaryTemplates: [
+          { id: 'custom-risks', name: 'Risks', guidance: 'Focus on risks.' },
+        ],
+        activeTemplateId: 'custom-risks',
+      }),
+      '',
+    );
+    const sent = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as {
+      messages: { role: string; content: string }[];
+    };
+    const user = sent.messages.find((m) => m.role === 'user');
+    expect(user?.content).toContain(DEFAULT_SUMMARY_GUIDANCE);
+    expect(user?.content).not.toContain('Focus on risks.');
   });
 
   it('does not fetch when the LLM origin is not permitted', async () => {

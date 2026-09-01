@@ -1,14 +1,18 @@
-import type { MeetingSession, SessionSummary } from '@scribetab/shared';
+import { parseTranscriptFile, redactSegments, type MeetingSession, type SessionSummary } from '@scribetab/shared';
 import { deleteCuesForSession } from './captionCueStore';
 import { deleteChunksForSession } from './chunkStore';
 import { SESSIONS_STORE as STORE, openDb } from './db';
-import { deleteSegmentsForSession } from './segmentStore';
+import { deleteSegmentsForSession, putSegments, updateSegmentText } from './segmentStore';
 import { deleteHighlightsForSession } from './highlightStore';
 
 export type IntelligenceState = 'pending' | 'needs-permission';
 
 /** Extension-side session row. Extra fields are not on the locked MeetingSession. */
 export type StoredSession = MeetingSession & {
+  archivedAt?: number;
+  editedAt?: number;
+  providerId?: string;
+  model?: string;
   summaryMarkdown?: string;
   summary?: SessionSummary;
   actionExports?: Record<string, { destination: 'notion'; at: string }>;
@@ -27,7 +31,11 @@ export type StoredSession = MeetingSession & {
   intelligenceRetryCount?: number | null;
   /** Earliest wall-clock time at which the next summary attempt may run. */
   intelligenceNextRetryAt?: number | null;
+  /** System labels computed at finalize (see autoLabel.ts); empty rows predate labeling. */
+  labels?: string[];
 };
+
+const ARCHIVE_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 
 function txDone(tx: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -55,6 +63,82 @@ export async function updateSession(
   const tx = db.transaction(STORE, 'readwrite');
   tx.objectStore(STORE).put({ ...current, ...patch, id });
   await txDone(tx);
+}
+
+export async function archiveSession(id: string, archivedAt = Date.now()): Promise<void> {
+  await updateSession(id, { archivedAt });
+}
+
+export async function restoreSession(id: string): Promise<void> {
+  await updateSession(id, { archivedAt: undefined });
+}
+
+/**
+ * Redact-at-rest contract: when the setting is on, every LLM path assumes rows
+ * on disk are already clean and skips redaction. Text entering storage from
+ * outside the capture pipeline (user edits, file imports) must therefore be
+ * redacted here, with the same extra terms the capture path uses.
+ */
+export interface AtRestRedaction {
+  extraTerms: string[];
+}
+
+function redactText(text: string, redaction: AtRestRedaction | null | undefined): string {
+  if (!redaction) return text;
+  return redactSegments([{ text }], { extraTerms: redaction.extraTerms })[0]?.text ?? text;
+}
+
+export async function editSessionSegment(
+  sessionId: string,
+  segmentId: string,
+  text: string,
+  editedAt = Date.now(),
+  redaction?: AtRestRedaction | null,
+): Promise<Awaited<ReturnType<typeof updateSegmentText>>> {
+  if (!(await getSession(sessionId))) throw new Error(`Session not found: ${sessionId}`);
+  const updated = await updateSegmentText(sessionId, segmentId, redactText(text, redaction));
+  await updateSession(sessionId, { editedAt });
+  return updated;
+}
+
+export async function importTranscriptSession(
+  name: string,
+  content: string,
+  redaction?: AtRestRedaction | null,
+): Promise<{ sessionId: string } | { error: string }> {
+  const parsed = parseTranscriptFile(name, content);
+  if ('error' in parsed) return parsed;
+
+  const sessionId = crypto.randomUUID();
+  await createSession({
+    id: sessionId,
+    title: parsed.title,
+    startedAt: new Date().toISOString(),
+    platform: 'other',
+    status: 'recording',
+  });
+  try {
+    const clean = redaction
+      ? redactSegments(parsed.segments, { extraTerms: redaction.extraTerms })
+      : parsed.segments;
+    await putSegments(
+      clean.map((segment) => ({
+        ...segment,
+        id: crypto.randomUUID(),
+        sessionId,
+        source: 'captions' as const,
+      })),
+    );
+    const finalized = await finalizeSession(sessionId, {
+      retainAudio: false,
+      status: 'complete',
+    });
+    if (!finalized) throw new Error('Imported session could not be finalized');
+    return { sessionId };
+  } catch (error) {
+    await deleteSession(sessionId).catch(() => {});
+    throw error;
+  }
 }
 
 export async function getSession(id: string): Promise<StoredSession | undefined> {
@@ -125,6 +209,16 @@ export async function deleteSession(id: string): Promise<void> {
   const tx = db.transaction(STORE, 'readwrite');
   tx.objectStore(STORE).delete(id);
   await txDone(tx);
+}
+
+/** Permanently remove archives strictly older than the 30-day recovery window. */
+export async function purgeExpiredArchivedSessions(now = Date.now()): Promise<number> {
+  const cutoff = now - ARCHIVE_RETENTION_MS;
+  const expired = (await listSessions()).filter(
+    (session) => typeof session.archivedAt === 'number' && session.archivedAt < cutoff,
+  );
+  for (const session of expired) await deleteSession(session.id);
+  return expired.length;
 }
 
 /** Abandoned 'recording' rows from a crashed SW/offscreen. */

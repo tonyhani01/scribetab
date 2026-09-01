@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { closeDb } from '../utils/db';
+import { closeDb, openDb } from '../utils/db';
 import {
   deleteHighlight,
   deleteHighlightsForSession,
@@ -40,5 +40,50 @@ describe('highlightStore', () => {
     expect((await getHighlightsForSession('s1')).map((h) => h.id)).toEqual(['one', 'two']);
     await deleteHighlightsForSession('s1');
     expect((await getAllHighlights()).map((h) => h.id)).toEqual(['three']);
+  });
+
+  it('persists the kind and backfills the default for legacy rows', async () => {
+    await putHighlight({ id: 'k', sessionId: 's1', startMs: 0, createdAt: 't', kind: 'decision' });
+    await putHighlight({ id: 'bad', sessionId: 's1', startMs: 1, createdAt: 't', kind: 'bogus' as never });
+    // Legacy row written raw, before kinds existed in the schema.
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction('highlights', 'readwrite');
+      tx.objectStore('highlights').put({ id: 'legacy', sessionId: 's1', startMs: 2, createdAt: 't' });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    await closeDb();
+    const rows = await getHighlightsForSession('s1');
+    expect(rows.map((r) => [r.id, r.kind])).toEqual([
+      ['k', 'decision'],
+      ['bad', 'highlight'],
+      ['legacy', 'highlight'],
+    ]);
+    expect((await getAllHighlights()).map((r) => r.kind)).toContain('highlight');
+    // Kind survives label edits.
+    await updateHighlightLabel(rows[0]!, 'note');
+    expect((await getHighlightsForSession('s1'))[0]?.kind).toBe('decision');
+  });
+
+  it('flows private notes through with kind and label intact', async () => {
+    await putHighlight({ id: 'flag', sessionId: 's1', startMs: 1_000, createdAt: 't', kind: 'highlight' });
+    await putHighlight({
+      id: 'note',
+      sessionId: 's1',
+      startMs: 4_000,
+      createdAt: 't',
+      kind: 'note',
+      label: 'Follow up with Ada',
+    });
+    const rows = await getHighlightsForSession('s1');
+    expect(rows.map((r) => [r.id, r.kind, r.label])).toEqual([
+      ['flag', 'highlight', undefined],
+      ['note', 'note', 'Follow up with Ada'],
+    ]);
+    // Label edits keep the note kind (trimmed like every other highlight label).
+    await updateHighlightLabel(rows[1]!, '  Renamed note  ');
+    const edited = (await getHighlightsForSession('s1')).find((r) => r.id === 'note');
+    expect([edited?.kind, edited?.label]).toEqual(['note', 'Renamed note']);
   });
 });

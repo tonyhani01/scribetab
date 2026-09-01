@@ -1,4 +1,5 @@
-import type { HighlightMoment } from '@scribetab/shared';
+import { HIGHLIGHT_KINDS } from '@scribetab/shared';
+import type { HighlightKind, HighlightMoment } from '@scribetab/shared';
 import { openDb } from './db';
 
 /**
@@ -16,10 +17,20 @@ function txDone(tx: IDBTransaction): Promise<void> {
   });
 }
 
+/** Unknown or missing kinds (legacy rows, corrupted payloads) fall back to 'highlight'. */
+export function normalizeHighlightKind(kind: unknown): HighlightKind {
+  return HIGHLIGHT_KINDS.includes(kind as HighlightKind) ? (kind as HighlightKind) : 'highlight';
+}
+
+/** Reads backfill the default so legacy rows display and filter like new ones. */
+function backfillKind(row: HighlightMoment): HighlightMoment {
+  return { ...row, kind: normalizeHighlightKind(row.kind) };
+}
+
 export async function putHighlight(row: HighlightMoment): Promise<void> {
   const db = await openDb();
   const tx = db.transaction('highlights', 'readwrite');
-  tx.objectStore('highlights').put(row);
+  tx.objectStore('highlights').put({ ...row, kind: normalizeHighlightKind(row.kind) });
   await txDone(tx);
 }
 
@@ -32,7 +43,7 @@ export async function getHighlightsForSession(sessionId: string): Promise<Highli
     req.onerror = () => reject(req.error);
     tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'));
   });
-  return rows.sort((a, b) => a.startMs - b.startMs);
+  return rows.map(backfillKind).sort((a, b) => a.startMs - b.startMs);
 }
 
 export async function getAllHighlights(): Promise<HighlightMoment[]> {
@@ -40,7 +51,7 @@ export async function getAllHighlights(): Promise<HighlightMoment[]> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction('highlights', 'readonly');
     const req = tx.objectStore('highlights').getAll();
-    req.onsuccess = () => resolve(req.result as HighlightMoment[]);
+    req.onsuccess = () => resolve((req.result as HighlightMoment[]).map(backfillKind));
     req.onerror = () => reject(req.error);
     tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'));
   });

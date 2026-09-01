@@ -1,4 +1,5 @@
 import { WAV_HEADER_BYTES } from '../wav.js';
+import { hintsToPrompt } from '../vocab.js';
 import type {
   ProviderConfig,
   TranscribeRequest,
@@ -48,6 +49,10 @@ export function openAiCompatible(opts: OpenAiCompatibleOptions): TranscriptionPr
       form.append('model', model);
       for (const [k, v] of Object.entries(extra)) form.append(k, v);
       if (req.language) form.append('language', req.language);
+      // Whisper's context prompt is how custom vocabulary reaches the model;
+      // capped locally so an over-long list cannot make every chunk fail with 400.
+      const prompt = hintsToPrompt(cfg.vocabHints ?? []);
+      if (prompt) form.append('prompt', prompt);
 
       const headers: Record<string, string> = {};
       if (cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`;

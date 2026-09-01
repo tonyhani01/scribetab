@@ -22,9 +22,24 @@ License: GPL-3.0-only
 - Live transcript in the side panel via OpenAI, Groq, Deepgram, Mistral,
   OpenRouter, Google Gemini, or a custom OpenAI-compatible server
   (whisper.cpp, Speaches, LM Studio)
-- Captions-only mode on Google Meet (zero STT cost)
-- Library search, Markdown/JSON/SRT/VTT export, NotebookLM-ready Markdown
-- Manual speaker renaming and highlight moments (Alt+Shift+H)
+- Captions-only mode on Google Meet, Zoom (web client), and Microsoft Teams
+  (zero STT cost), with optional Meet chat capture
+- Audio playback in the library with segment seeking, plus pause/resume while
+  recording
+- Library search, Markdown/JSON/SRT/VTT export with configurable options,
+  NotebookLM-ready Markdown, and transcript import (VTT/SRT/TXT/JSON)
+- Chat with a transcript (live or from the library) and "Ask your meetings"
+  across the whole library — answers come only from your configured LLM
+- Summary templates (Standup, 1:1, Sales discovery, Lecture, Interview) with
+  personal context, chapters, and talk-time stats
+- Manual speaker renaming (with merge on collision) and typed highlight
+  moments — ⭐ highlight, ✅ action, 🔴 decision, ❓ question, 📝 private notes
+  (Alt+Shift+H)
+- Transcript segment editing, custom vocabulary, auto-labels (1:1, Long,
+  Meet/Zoom/Teams/YouTube), and archive with 30-day purge
+- Desktop notifications when transcripts and summaries are ready (optional)
+- Calendar-aware session naming via .ics feeds and host-side automations
+- Light/dark/system theme
 - Configurable audio retention (7 days, 30 days, or until storage runs low)
 - Optional summaries and action items (OpenAI or local Ollama)
 - PII redaction on text (not on audio sent to STT)

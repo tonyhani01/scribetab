@@ -2,6 +2,7 @@ import { lstat, mkdir, readdir, readFile, rename, unlink, writeFile } from 'node
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { exportMarkdown, type MeetingSession, type TranscriptSegment } from '@scribetab/shared';
+import { subfolderSegments } from './automations.js';
 import { meetingDirBase } from './slug.js';
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
@@ -93,30 +94,57 @@ export async function assertVaultDir(vaultPath: string): Promise<void> {
   }
 }
 
+/**
+ * Resolve (and create) `ScribeTab/<subfolder…>` level by level, refusing to
+ * write through a symlink at any point on the path. Created one segment at a
+ * time so a missing level can never be satisfied by a pre-planted symlink.
+ */
+async function requireRealDir(path: string): Promise<void> {
+  let st;
+  try {
+    st = await lstat(path);
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code !== 'ENOENT') throw e;
+    try {
+      await mkdir(path);
+    } catch (e2) {
+      const race = e2 as NodeJS.ErrnoException;
+      // Lost a creation race: re-check before trusting whatever appeared.
+      if (race.code !== 'EEXIST') throw e2;
+      await requireRealDir(path);
+    }
+    return;
+  }
+  if (st.isSymbolicLink()) {
+    throw new Error(`Refusing to write through symlink: ${path}`);
+  }
+  if (!st.isDirectory()) {
+    throw new Error(`Obsidian ScribeTab path is not a directory: ${path}`);
+  }
+}
+
+async function ensureOutputDir(vaultPath: string, subfolder?: string): Promise<string> {
+  let dir = join(vaultPath, 'ScribeTab');
+  await requireRealDir(dir);
+  for (const seg of subfolder ? subfolderSegments(subfolder) : []) {
+    const next = join(dir, seg);
+    await requireRealDir(next);
+    dir = next;
+  }
+  return dir;
+}
+
 export async function copyToObsidian(opts: {
   vaultPath: string;
   session: MeetingSession;
   segments: TranscriptSegment[];
   summaryMarkdown?: string;
+  /** Vault-relative folder under `ScribeTab/`, set by a matched automation rule. */
+  subfolder?: string;
 }): Promise<string> {
   await assertVaultDir(opts.vaultPath);
-  const outDir = join(opts.vaultPath, 'ScribeTab');
-  try {
-    const st = await lstat(outDir);
-    if (st.isSymbolicLink()) {
-      throw new Error(`Refusing to write through symlink: ${outDir}`);
-    }
-    if (!st.isDirectory()) {
-      throw new Error(`Obsidian ScribeTab path is not a directory: ${outDir}`);
-    }
-  } catch (e) {
-    const err = e as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') {
-      await mkdir(outDir, { recursive: true });
-    } else {
-      throw e;
-    }
-  }
+  const outDir = await ensureOutputDir(opts.vaultPath, opts.subfolder);
   const existing = await findFileBySessionId(outDir, opts.session.id);
   const dest =
     existing ?? (await uniqueMarkdownPath(outDir, meetingDirBase(opts.session.startedAt, opts.session.title)));

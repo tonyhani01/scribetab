@@ -20,12 +20,16 @@ export interface TranscriptSegment {
   source: 'audio' | 'captions';
 }
 
+/** What a flagged moment means; rendered as an emoji prefix in lists/exports. */
+export type HighlightKind = 'highlight' | 'action' | 'decision' | 'question' | 'note';
+
 /** A moment the user flagged mid-call (hotkey or side-panel button). */
 export interface HighlightMoment {
   id: string;                // crypto.randomUUID()
   sessionId: string;
   startMs: number;           // session-relative
   label?: string;            // optional short note typed later (≤ 200 chars)
+  kind?: HighlightKind;      // rows from before kinds existed are 'highlight'
   createdAt: string;         // ISO 8601 wall clock
 }
 
@@ -50,6 +54,13 @@ export interface ProviderConfig {
   apiKey: string;
   baseUrl?: string;          // set for 'custom' → localhost servers = local models
   model?: string;
+  /**
+   * Custom-vocabulary terms the user wants recognised (Whisper-style `prompt`
+   * field, Deepgram `keyterm` params). Settings-derived, so it travels with the
+   * config rather than the per-chunk audio request. Providers without hint
+   * support ignore it — the ingest-side replacement dictionary still applies.
+   */
+  vocabHints?: string[];
 }
 
 export interface ChatMessage {
@@ -75,12 +86,20 @@ export interface ActionItem {
   due?: string;             // verbatim phrase, never an inferred date
 }
 
+/** A named section of the meeting, anchored to a transcript timestamp. */
+export interface SummaryChapter {
+  title: string;
+  startMs: number;           // session-relative
+}
+
 export interface SessionSummary {
   version: 1;
   narrative: string;        // markdown paragraphs
   actionItems: ActionItem[];
   decisions: string[];
   usefulInfo: string[];
+  /** Optional: absent on summaries generated before chapters existed. */
+  chapters?: SummaryChapter[];
   generatedAt: string;      // ISO 8601
   model?: string;
   degraded?: true;          // set when JSON extraction failed (raw text fallback)
@@ -129,4 +148,20 @@ export interface ExportActionsAck {
   pageUrl?: string;
 }
 
-export type HostMessage = HostSyncMessage | ExportActionsMessage;
+export interface UpcomingEvent {
+  title: string;
+  startMs: number;
+  endMs: number;
+}
+
+export type GetUpcomingMessage = {
+  type: 'get_upcoming';
+  protocolVersion: 1;
+};
+
+export interface GetUpcomingAck {
+  ok: boolean;
+  events: UpcomingEvent[];
+}
+
+export type HostMessage = HostSyncMessage | ExportActionsMessage | GetUpcomingMessage;

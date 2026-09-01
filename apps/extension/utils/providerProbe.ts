@@ -1,4 +1,9 @@
-import { llmEndpoint, originPattern, transcriptionEndpoint } from '@scribetab/shared';
+import {
+  ELEVENLABS_DEFAULT_MODEL,
+  llmEndpoint,
+  originPattern,
+  transcriptionEndpoint,
+} from '@scribetab/shared';
 
 const PROBE_TIMEOUT_MS = 8_000;
 
@@ -30,19 +35,30 @@ function classifyHttp(status: number): string {
   return `The provider returned HTTP ${status}.`;
 }
 
+export interface ProbeRequest {
+  url: string;
+  headers: Record<string, string>;
+  method?: 'GET' | 'POST';
+  body?: FormData;
+}
+
 async function ping(
-  url: string,
-  headers: Record<string, string>,
+  req: ProbeRequest,
   fetchImpl: typeof fetch,
-  opts?: { customStt?: boolean },
+  opts?: { customStt?: boolean; noFile422Ok?: boolean },
 ): Promise<ProbeResult> {
   try {
-    const res = await fetchImpl(url, {
-      method: 'GET',
-      headers,
+    const res = await fetchImpl(req.url, {
+      method: req.method ?? 'GET',
+      headers: req.headers,
+      body: req.body,
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
     if (res.ok) return { ok: true, message: 'Connected.' };
+    // A file-less probe POST fails validation (422) only after auth passes.
+    if (opts?.noFile422Ok && res.status === 422) {
+      return { ok: true, message: 'Connected.' };
+    }
     if (opts?.customStt && res.status === 404) {
       return { ok: true, message: 'reachable (models endpoint not supported)' };
     }
@@ -63,7 +79,7 @@ export function sttProbeRequest(
   providerId: string,
   apiKey: string,
   baseUrl: string,
-): { url: string; headers: Record<string, string> } {
+): ProbeRequest {
   const endpoint = transcriptionEndpoint(providerId, baseUrl.trim() || undefined);
   const headers: Record<string, string> = {};
   if (providerId === 'deepgram') {
@@ -75,9 +91,14 @@ export function sttProbeRequest(
     return { url: join(endpoint, '/models?pageSize=1'), headers };
   }
   if (providerId === 'elevenlabs') {
-    // GET /v1/user is a cheap authenticated read; no audio is sent.
+    // GET /v1/user requires the user_read key permission, which STT-scoped
+    // keys lack — it would 401 for keys that transcribe fine. Instead POST
+    // the real endpoint with no file: auth runs before validation, so a good
+    // key gets 422 (missing file, nothing billed) and a bad key gets 401.
     if (apiKey) headers['xi-api-key'] = apiKey;
-    return { url: join(endpoint, '/user'), headers };
+    const body = new FormData();
+    body.append('model_id', ELEVENLABS_DEFAULT_MODEL);
+    return { url: join(endpoint, '/speech-to-text'), headers, method: 'POST', body };
   }
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
   // OpenRouter GET /models is public (200 for any key); /key is authenticated.
@@ -113,7 +134,7 @@ export async function probeTranscription(opts: {
     return { ok: false, message: 'This provider needs an API key.' };
   }
 
-  let req: { url: string; headers: Record<string, string> };
+  let req: ProbeRequest;
   try {
     req = sttProbeRequest(opts.providerId, opts.apiKey, opts.baseUrl);
   } catch {
@@ -127,8 +148,9 @@ export async function probeTranscription(opts: {
     }
   }
 
-  return ping(req.url, req.headers, opts.fetchImpl ?? fetch, {
+  return ping(req, opts.fetchImpl ?? fetch, {
     customStt: opts.providerId === 'custom',
+    noFile422Ok: opts.providerId === 'elevenlabs',
   });
 }
 
@@ -161,7 +183,7 @@ export async function probeLlm(opts: {
     }
   }
 
-  return ping(req.url, req.headers, opts.fetchImpl ?? fetch);
+  return ping({ url: req.url, headers: req.headers }, opts.fetchImpl ?? fetch);
 }
 
 /** Must run on the click path with no prior await (user-gesture for request()). */
