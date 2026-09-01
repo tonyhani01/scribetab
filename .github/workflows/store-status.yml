@@ -1,0 +1,25 @@
+name: Store status
+on:
+  workflow_dispatch:
+permissions: {}
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query Chrome Web Store item status
+        env:
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+        run: |
+          TOKEN=$(curl -sf "https://oauth2.googleapis.com/token" \
+            -d "client_secret=$CHROME_CLIENT_SECRET&grant_type=refresh_token&refresh_token=$CHROME_REFRESH_TOKEN&client_id=$CHROME_CLIENT_ID" \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
+          echo "::add-mask::$TOKEN"
+          echo "=== Draft status (projection=DRAFT) ==="
+          curl -sf -H "Authorization: Bearer $TOKEN" \
+            "https://www.googleapis.com/chromewebstore/v1.1/items/$CHROME_EXTENSION_ID?projection=DRAFT" | python3 -m json.tool
+          echo "=== Published status (projection=PUBLISHED) ==="
+          curl -s -H "Authorization: Bearer $TOKEN" \
+            "https://www.googleapis.com/chromewebstore/v1.1/items/$CHROME_EXTENSION_ID?projection=PUBLISHED" | python3 -m json.tool || true
