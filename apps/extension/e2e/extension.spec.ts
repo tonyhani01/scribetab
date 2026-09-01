@@ -107,7 +107,8 @@ test('popup shows first-run transcription onboarding', async () => {
     });
     const page = await context.newPage();
     await page.goto(`chrome-extension://${extensionId}/popup.html`);
-    await expect(page.getByTestId('popup-onboarding')).toContainText('No transcription provider yet — set one up to get live transcripts.');
+    await expect(page.getByTestId('popup-onboarding')).toContainText('Choose provider');
+    await expect(page.getByTestId('popup-onboarding')).toContainText('Record this tab');
     await expect(page.getByTestId('popup-open-options')).toBeVisible();
   } finally {
     await context.close();
