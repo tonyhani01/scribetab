@@ -27,6 +27,8 @@ jobs:
       - run: pnpm -r test
       - run: pnpm build
       - run: pnpm --filter @scribetab/extension zip
+      - name: Store preflight checks
+        run: node scripts/release-checks.mjs
       - name: Submit to Chrome Web Store
         if: ${{ vars.CHROME_PUBLISH_ENABLED == 'true' }}
         env:
