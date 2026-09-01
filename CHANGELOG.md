@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.1.2 — 2026-09-01
+
+- Merge feat/mic-permission: options-page mic grant flow — offscreen getUserMedia cannot prompt
+- fix(capture): mic permission grant flow in options — offscreen getUserMedia cannot prompt
+
 ## v1.1.1 — 2026-09-01
 
 - Merge feat/release-automation: store release tooling — release script, preflight checks, CI wiring, docs
