@@ -40,6 +40,11 @@ import {
   validateHttpUrl,
 } from '@/utils/providerProbe';
 import { humanError } from '@/utils/userError';
+import {
+  queryMicPermission,
+  requestMicAccess,
+  type MicPermissionState,
+} from '@/utils/micPermission';
 import { listSessions } from '@/utils/sessionStore';
 import { monthlySpend, type MonthlySpend } from '@/utils/costMeter';
 import { formatUsd } from '@scribetab/shared';
@@ -79,6 +84,7 @@ function App() {
   const [probing, setProbing] = useState<'stt' | 'llm' | null>(null);
   const [spend, setSpend] = useState<MonthlySpend | null>(null);
   const [wiping, setWiping] = useState(false);
+  const [micPerm, setMicPerm] = useState<MicPermissionState | null>(null);
   // Advanced model entry stays open once chosen, even while the field is blank.
   const [customModelOpen, setCustomModelOpen] = useState(false);
 
@@ -88,6 +94,23 @@ function App() {
       .then((rows) => setSpend(monthlySpend(rows)))
       .catch(() => setSpend(null));
   }, []);
+
+  // Offscreen getUserMedia cannot prompt — the extension origin must be granted
+  // mic access from this visible page, so check whenever mic capture is on.
+  useEffect(() => {
+    if (!s.micEnabled) return;
+    let active = true;
+    void queryMicPermission().then((state) => {
+      if (active) setMicPerm(state);
+    });
+    return () => {
+      active = false;
+    };
+  }, [s.micEnabled]);
+
+  const grantMic = async () => {
+    setMicPerm(await requestMicAccess());
+  };
 
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) =>
     setS((prev) => ({ ...prev, [key]: value }));
@@ -246,10 +269,29 @@ function App() {
           <input
             type="checkbox"
             checked={s.micEnabled}
-            onChange={(e) => set('micEnabled', (e.currentTarget as HTMLInputElement).checked)}
+            onChange={(e) => {
+              const on = (e.currentTarget as HTMLInputElement).checked;
+              set('micEnabled', on);
+              if (on) void grantMic();
+            }}
           />{' '}
           Mix in my microphone (echo-cancelled; falls back to tab-only if denied)
         </label>
+        {s.micEnabled && micPerm !== null && (
+          <p
+            style={micPerm === 'denied' ? err : hint}
+            data-testid="mic-permission-status"
+          >
+            {micPerm === 'granted' && '✓ Microphone access granted'}
+            {micPerm === 'denied' &&
+              "Microphone is blocked for this extension. Click the lock/mic icon in this page's address bar (Site settings) to allow it, then try again. "}
+            {(micPerm === 'prompt' || micPerm === 'unsupported' || micPerm === 'denied') && (
+              <button type="button" class="st-btn st-btn--quiet" onClick={() => void grantMic()}>
+                Grant microphone access
+              </button>
+            )}
+          </p>
+        )}
         <label style={{ ...row, fontWeight: 400 }}>
           <input
             id="retainAudio"

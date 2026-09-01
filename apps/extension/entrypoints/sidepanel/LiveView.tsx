@@ -293,7 +293,7 @@ export function LiveView() {
         <span class={state === 'recording' ? 'st-pill st-pill--rec' : 'st-pill'}>
           {state === 'recording' && <span class="st-dot" />}
           {state}
-          {micStatus === 'denied' && ' · mic denied — tab audio only'}
+          {micStatus === 'denied' && ' · mic denied — grant it in Options'}
         </span>
       </header>
 
