@@ -28,3 +28,13 @@ Costs/speed: /tmp/st-orch/costs.tsv
 | E6 cost card+onboarding | done | pass | |
 | E7 speaker merge | done | pass (8 tests) | |
 | F1 docs | done | README + store-listing + PRIVACY updated (orchestrator) |
+
+# Orchestration ledger — feat/release-automation (2026-09-01)
+Plan: docs/superpowers/plans/2026-09-01-store-release-automation.md
+Implementers: pi @ openrouter/z-ai/glm-5.3-flash · Review: Fable (orchestrator)
+
+| Task | Status | Verdict |
+|---|---|---|
+| R1 release.mjs | done | pass (9/9 node:test, dry-run ok, code reviewed) |
+| R2 release-checks.mjs | done | pass (10/10 node:test, CLI verified, code reviewed) |
+| R3 CI wiring + RELEASING.md | done | pass (yaml+json parse ok, diff reviewed) |
