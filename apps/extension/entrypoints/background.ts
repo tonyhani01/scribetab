@@ -945,7 +945,7 @@ export default defineBackground(() => {
             break;
           }
           await markIntelligencePending(msg.sessionId, settings);
-          await runFinalizeIntelligence(msg.sessionId, settings, msg.templateId);
+          await runFinalizeIntelligence(msg.sessionId, settings, msg.templateId, { notify: false });
           const row = await getSession(msg.sessionId);
           if (row?.intelligence === 'needs-permission') {
             sendResponse({ ok: false, error: 'needs-permission' });
@@ -1074,7 +1074,14 @@ export default defineBackground(() => {
             if (!text) {
               return { ok: false, error: 'Transcript text cannot be empty' } satisfies Ack;
             }
-            const updated = await editSessionSegment(msg.sessionId, msg.segmentId, text);
+            const settings = await getSettings();
+            const updated = await editSessionSegment(
+              msg.sessionId,
+              msg.segmentId,
+              text,
+              undefined,
+              settings.redactAtRest ? { extraTerms: settings.redactTerms } : null,
+            );
             notifySidePanel({
               target: 'sidepanel',
               type: 'SEGMENTS_UPDATED',
@@ -1087,7 +1094,12 @@ export default defineBackground(() => {
           break;
         }
         case 'IMPORT_TRANSCRIPT': {
-          const imported = await importTranscriptSession(msg.name, msg.content);
+          const importSettings = await getSettings();
+          const imported = await importTranscriptSession(
+            msg.name,
+            msg.content,
+            importSettings.redactAtRest ? { extraTerms: importSettings.redactTerms } : null,
+          );
           if ('error' in imported) {
             sendResponse({ ok: false, error: imported.error });
             break;

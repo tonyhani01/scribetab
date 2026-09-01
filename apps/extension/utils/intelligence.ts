@@ -118,6 +118,7 @@ export async function runFinalizeIntelligence(
   sessionId: string,
   settings: Settings,
   templateId?: string,
+  opts?: { notify?: boolean },
 ): Promise<void> {
   const extraTerms = settings.redactTerms;
   let segments = await getSegments(sessionId);
@@ -199,7 +200,9 @@ export async function runFinalizeIntelligence(
     ...(summary ? { summary, summaryMarkdown: summaryToMarkdown(summary) } : {}),
   });
   if (summary) {
-    notifyReady('summary', existing?.title ?? 'Untitled meeting', settings.notifyOnReady);
+    // Manual regenerate happens with the panel open — no OS notification then.
+    const notify = opts?.notify ?? true;
+    notifyReady('summary', existing?.title ?? 'Untitled meeting', notify && settings.notifyOnReady);
   }
 }
 

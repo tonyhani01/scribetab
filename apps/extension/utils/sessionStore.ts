@@ -1,4 +1,4 @@
-import { parseTranscriptFile, type MeetingSession, type SessionSummary } from '@scribetab/shared';
+import { parseTranscriptFile, redactSegments, type MeetingSession, type SessionSummary } from '@scribetab/shared';
 import { deleteCuesForSession } from './captionCueStore';
 import { deleteChunksForSession } from './chunkStore';
 import { SESSIONS_STORE as STORE, openDb } from './db';
@@ -73,14 +73,30 @@ export async function restoreSession(id: string): Promise<void> {
   await updateSession(id, { archivedAt: undefined });
 }
 
+/**
+ * Redact-at-rest contract: when the setting is on, every LLM path assumes rows
+ * on disk are already clean and skips redaction. Text entering storage from
+ * outside the capture pipeline (user edits, file imports) must therefore be
+ * redacted here, with the same extra terms the capture path uses.
+ */
+export interface AtRestRedaction {
+  extraTerms: string[];
+}
+
+function redactText(text: string, redaction: AtRestRedaction | null | undefined): string {
+  if (!redaction) return text;
+  return redactSegments([{ text }], { extraTerms: redaction.extraTerms })[0]?.text ?? text;
+}
+
 export async function editSessionSegment(
   sessionId: string,
   segmentId: string,
   text: string,
   editedAt = Date.now(),
+  redaction?: AtRestRedaction | null,
 ): Promise<Awaited<ReturnType<typeof updateSegmentText>>> {
   if (!(await getSession(sessionId))) throw new Error(`Session not found: ${sessionId}`);
-  const updated = await updateSegmentText(sessionId, segmentId, text);
+  const updated = await updateSegmentText(sessionId, segmentId, redactText(text, redaction));
   await updateSession(sessionId, { editedAt });
   return updated;
 }
@@ -88,6 +104,7 @@ export async function editSessionSegment(
 export async function importTranscriptSession(
   name: string,
   content: string,
+  redaction?: AtRestRedaction | null,
 ): Promise<{ sessionId: string } | { error: string }> {
   const parsed = parseTranscriptFile(name, content);
   if ('error' in parsed) return parsed;
@@ -101,8 +118,11 @@ export async function importTranscriptSession(
     status: 'recording',
   });
   try {
+    const clean = redaction
+      ? redactSegments(parsed.segments, { extraTerms: redaction.extraTerms })
+      : parsed.segments;
     await putSegments(
-      parsed.segments.map((segment) => ({
+      clean.map((segment) => ({
         ...segment,
         id: crypto.randomUUID(),
         sessionId,

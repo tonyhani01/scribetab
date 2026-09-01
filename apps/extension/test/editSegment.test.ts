@@ -74,3 +74,16 @@ describe('segment text editing', () => {
     expect((await getSegments('s1'))[0]?.text).toBe('Original text');
   });
 });
+
+describe('redact-at-rest on edit', () => {
+  it('redacts PII in edited text when redaction is passed', async () => {
+    const updated = await editSessionSegment(
+      's1',
+      'seg1',
+      'Call me at ada@example.com',
+      987_654,
+      { extraTerms: [] },
+    );
+    expect(updated.text).toBe('Call me at [EMAIL]');
+  });
+});

@@ -72,3 +72,33 @@ Thanks!`,
     expect(await listSessions()).toEqual([]);
   });
 });
+
+describe('redact-at-rest on import', () => {
+  it('redacts PII in imported segments when redaction is passed', async () => {
+    const result = await importTranscriptSession(
+      'call.srt',
+      `1
+00:00:01,000 --> 00:00:03,000
+Reach me at ada@example.com about Project Nightfall.`,
+      { extraTerms: ['Project Nightfall'] },
+    );
+    if ('error' in result) throw new Error(result.error);
+    const [seg] = await getSegments(result.sessionId);
+    expect(seg.text).not.toContain('ada@example.com');
+    expect(seg.text).not.toContain('Project Nightfall');
+    expect(seg.text).toContain('[EMAIL]');
+    expect(seg.text).toContain('[REDACTED]');
+  });
+
+  it('stores text verbatim when no redaction is passed', async () => {
+    const result = await importTranscriptSession(
+      'call.srt',
+      `1
+00:00:01,000 --> 00:00:03,000
+Reach me at ada@example.com.`,
+    );
+    if ('error' in result) throw new Error(result.error);
+    const [seg] = await getSegments(result.sessionId);
+    expect(seg.text).toContain('ada@example.com');
+  });
+});
