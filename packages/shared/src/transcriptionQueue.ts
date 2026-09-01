@@ -44,6 +44,7 @@ export function segmentsFromResult(
         endMs: job.startMs + s.endMs,
         text: s.text.trim(),
         source: 'audio' as const,
+        ...(s.speaker ? { speaker: s.speaker } : {}),
       }));
   }
   const text = result.text.trim();

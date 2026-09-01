@@ -27,6 +27,18 @@ describe('segmentsFromResult', () => {
     });
   });
 
+  it('carries provider speaker labels onto stored segments', () => {
+    const segs = segmentsFromResult(
+      { text: 'x', segments: [
+        { startMs: 0, endMs: 1000, text: 'hi', speaker: 'Speaker 1' },
+        { startMs: 1000, endMs: 2000, text: 'yo' },
+      ] },
+      job(0), 's1', ids,
+    );
+    expect(segs[0]!.speaker).toBe('Speaker 1');
+    expect('speaker' in segs[1]!).toBe(false);
+  });
+
   it('falls back to one whole-chunk segment when the provider returns only text', () => {
     const segs = segmentsFromResult({ text: ' just text ' }, job(0), 's1', ids);
     expect(segs).toEqual([expect.objectContaining({
