@@ -161,9 +161,19 @@ describe('googleProvider', () => {
     );
     const result = await googleProvider.transcribe(req, { apiKey: 'k' });
     expect(result.segments).toEqual([
-      { startMs: 100, endMs: 850, text: 'Hello world' },
-      { startMs: 1000, endMs: 1400, text: 'thanks' },
+      { startMs: 100, endMs: 850, text: 'Hello world', speaker: 'Speaker 1' },
+      { startMs: 1000, endMs: 1400, text: 'thanks', speaker: 'Speaker 2' },
     ]);
+  });
+
+  it('requests smart mode without word timestamps when cfg.smartMode is set', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okJson({ output_text: 'Clean notes.' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await googleProvider.transcribe(req, { apiKey: 'k', smartMode: true });
+    expect(result).toEqual({ text: 'Clean notes.', segments: undefined });
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body as string).generation_config).toEqual({
+      transcription_config: { mode: { type: 'smart' } },
+    });
   });
 
   it('surfaces HTTP 400/401/429 with truncated error JSON', async () => {
@@ -266,7 +276,7 @@ describe('googleProvider', () => {
     const result = await googleProvider.transcribe(req, { apiKey: 'k' });
     expect(result.segments).toEqual([
       { startMs: 100, endMs: 450, text: 'Hello' },
-      { startMs: 1000, endMs: 1400, text: 'thanks' },
+      { startMs: 1000, endMs: 1400, text: 'thanks', speaker: 'Speaker 2' },
     ]);
   });
 

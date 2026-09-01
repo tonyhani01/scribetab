@@ -34,7 +34,7 @@ describe('STT model catalog', () => {
   it('explains Smart vs verbatim without claiming Smart supports timestamps', () => {
     const hint = sttModelCatalog('google').hint ?? '';
     expect(hint).toMatch(/verbatim/i);
-    expect(hint).toMatch(/Smart mode .* does not support timestamps or diarization/i);
+    expect(hint).toMatch(/Smart mode .* without timestamps or diarization/i);
     expect(sttModelCatalog('elevenlabs').hint).toMatch(/multilingual \/ code-switched/);
   });
 

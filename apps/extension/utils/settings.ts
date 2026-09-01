@@ -28,6 +28,10 @@ export interface Settings {
   apiKeys: Record<string, string>;  // STT keys keyed by provider id
   models: Record<string, string>;   // STT models keyed by provider id
   language: string;    // '' = provider auto-detect; BCP-47 hint otherwise
+  /** Speaker diarization (ElevenLabs Scribe toggle); default on. */
+  diarize: boolean;
+  /** Gemini Smart mode: clean formatted text, no timestamps/diarization. */
+  googleSmartMode: boolean;
   vocabTerms: string[]; // recognition hints and wrong=>right correction rules
   baseUrl: string;     // custom provider only
   micEnabled: boolean;
@@ -70,6 +74,8 @@ export const DEFAULT_SETTINGS: Settings = {
   apiKeys: {},
   models: {},
   language: '',
+  diarize: true,
+  googleSmartMode: false,
   vocabTerms: [],
   baseUrl: '',
   micEnabled: false,
@@ -309,6 +315,10 @@ export function normalizeSettings(raw: Partial<Settings> | undefined): Settings 
     activeTemplateId,
     personalContext: asPersonalContext(src.personalContext),
     theme: asTheme(src.theme),
+    diarize: typeof src.diarize === 'boolean' ? src.diarize : DEFAULT_SETTINGS.diarize,
+    googleSmartMode: typeof src.googleSmartMode === 'boolean'
+      ? src.googleSmartMode
+      : DEFAULT_SETTINGS.googleSmartMode,
     saveMeetChat: typeof src.saveMeetChat === 'boolean'
       ? src.saveMeetChat
       : DEFAULT_SETTINGS.saveMeetChat,

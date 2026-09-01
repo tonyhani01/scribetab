@@ -23,15 +23,15 @@ export const STT_MODEL_CATALOG: Readonly<Record<string, SttModelCatalog>> = Obje
     allowCustom: false,
     hint:
       'Scribe v2: best for multilingual / code-switched meetings and speaker diarization. ' +
-      'Word timestamps and speaker turns are always requested.',
+      'Word timestamps are always requested; diarization is toggleable below.',
   },
   google: {
     choices: [{ id: 'gemini-3.5-transcribe', label: 'Gemini 3.5 Transcribe' }],
     allowCustom: false,
     hint:
-      'Runs in verbatim mode with word timestamps and diarization, which the live transcript needs. ' +
-      "Gemini's Smart mode produces clean, formatted notes but does not support timestamps or " +
-      'diarization, so ScribeTab does not use it.',
+      'Verbatim mode (default) gives word timestamps and speaker diarization, which the live ' +
+      "transcript needs. Gemini's Smart mode produces clean, formatted notes without timestamps " +
+      'or diarization — pick it below if you prefer polished text.',
   },
   openrouter: {
     choices: [

@@ -47,6 +47,8 @@ export interface TranscriptionSettingsPayload {
   language?: string;
   baseUrl?: string;
   vocabHints?: string[];
+  diarize?: boolean;   // ElevenLabs Scribe diarization toggle (default true)
+  smartMode?: boolean; // Gemini Smart mode (no timestamps/diarization)
 }
 
 /** Messages handled by the service worker (from popup, offscreen, or Meet content script). */

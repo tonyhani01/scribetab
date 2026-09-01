@@ -1,4 +1,5 @@
 import { arrayBufferToBase64 } from '../base64.js';
+import { sttSpeakerDisplayMap } from '../speakers.js';
 import { WAV_HEADER_BYTES } from '../wav.js';
 import type {
   ProviderConfig,
@@ -55,8 +56,12 @@ export const googleProvider: TranscriptionProvider = {
         mime_type: req.mimeType || 'audio/wav',
       },
     ];
+    // Smart mode returns clean formatted text but no word timestamps or
+    // diarization, so verbatim (the default) is what the live transcript wants.
     const transcriptionConfig: Record<string, unknown> = {
-      mode: { type: 'verbatim', timestamp_granularities: ['word'] },
+      mode: cfg.smartMode
+        ? { type: 'smart' }
+        : { type: 'verbatim', timestamp_granularities: ['word'] },
     };
     if (req.language) transcriptionConfig.language_codes = [req.language];
     const body: Record<string, unknown> = {
@@ -150,7 +155,15 @@ function segmentsFromWordInfo(json: InteractionsResponse): TranscribeResult['seg
   }
   if (words.length === 0) return undefined;
 
-  const segs: { startMs: number; endMs: number; text: string }[] = [];
+  const labels = sttSpeakerDisplayMap(words.map((w) => w.speaker));
+  const flush = (cur: { startMs: number; endMs: number; text: string; speaker?: string }) => ({
+    startMs: cur.startMs,
+    endMs: Math.max(cur.endMs, cur.startMs),
+    text: cur.text,
+    speaker: cur.speaker ? labels.get(cur.speaker) : undefined,
+  });
+
+  const segs: { startMs: number; endMs: number; text: string; speaker?: string }[] = [];
   let cur = {
     startMs: words[0]!.startMs,
     endMs: words[0]!.endMs,
@@ -161,13 +174,13 @@ function segmentsFromWordInfo(json: InteractionsResponse): TranscribeResult['seg
     const gap = w.startMs - cur.endMs;
     const spanMs = Math.max(w.endMs, cur.endMs) - cur.startMs;
     if (w.speaker !== cur.speaker || gap > GAP_SPLIT_MS || spanMs > MAX_SEGMENT_MS) {
-      segs.push({ startMs: cur.startMs, endMs: Math.max(cur.endMs, cur.startMs), text: cur.text });
+      segs.push(flush(cur));
       cur = { startMs: w.startMs, endMs: w.endMs, text: w.text, speaker: w.speaker };
     } else {
       cur.endMs = Math.max(cur.endMs, w.endMs, cur.startMs);
       cur.text = cur.text ? `${cur.text} ${w.text}` : w.text;
     }
   }
-  segs.push({ startMs: cur.startMs, endMs: Math.max(cur.endMs, cur.startMs), text: cur.text });
+  segs.push(flush(cur));
   return segs;
 }

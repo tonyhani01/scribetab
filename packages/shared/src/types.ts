@@ -41,7 +41,7 @@ export interface TranscribeRequest {
 
 export interface TranscribeResult {
   text: string;
-  segments?: { startMs: number; endMs: number; text: string }[];
+  segments?: { startMs: number; endMs: number; text: string; speaker?: string }[];
   costUsd?: number;          // provider-computed estimate, feeds cost meter
 }
 
@@ -61,6 +61,18 @@ export interface ProviderConfig {
    * support ignore it — the ingest-side replacement dictionary still applies.
    */
   vocabHints?: string[];
+  /**
+   * Speaker diarization request flag (default true). Honored by providers whose
+   * API exposes a toggle (ElevenLabs Scribe `diarize`); others always diarize
+   * or never do, and ignore it.
+   */
+  diarize?: boolean;
+  /**
+   * Gemini only: use Smart mode (clean, formatted text) instead of verbatim.
+   * Smart mode returns no word timestamps or diarization, so segments collapse
+   * to one per chunk. Ignored by other providers.
+   */
+  smartMode?: boolean;
 }
 
 export interface ChatMessage {

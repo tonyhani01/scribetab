@@ -473,6 +473,43 @@ function App() {
               );
             })()}
 
+            {s.providerId === 'elevenlabs' && (
+              <label style={{ ...row, fontWeight: 400 }}>
+                <input
+                  data-testid="stt-diarize"
+                  type="checkbox"
+                  checked={s.diarize}
+                  onChange={(e) => set('diarize', (e.currentTarget as HTMLInputElement).checked)}
+                />{' '}
+                Speaker diarization — label segments “Speaker 1/2/…” (per audio chunk; captions or
+                manual renames refine the names)
+              </label>
+            )}
+
+            {s.providerId === 'google' && (
+              <>
+                <label style={row} for="googleMode">Transcription mode</label>
+                <select
+                  id="googleMode"
+                  data-testid="stt-google-mode"
+                  class="st-select"
+                  value={s.googleSmartMode ? 'smart' : 'verbatim'}
+                  onChange={(e) =>
+                    set('googleSmartMode', (e.currentTarget as HTMLSelectElement).value === 'smart')
+                  }
+                >
+                  <option value="verbatim">Verbatim — word timestamps + speaker diarization</option>
+                  <option value="smart">Smart — clean formatted text, no timestamps or speakers</option>
+                </select>
+                {s.googleSmartMode && (
+                  <p style={{ ...hint, margin: '4px 0 0' }}>
+                    Smart mode returns one block of polished text per audio chunk — the live
+                    transcript loses per-word timing and speaker labels.
+                  </p>
+                )}
+              </>
+            )}
+
             <label style={row} for="language">{languageLabel}</label>
             <input
               id="language"

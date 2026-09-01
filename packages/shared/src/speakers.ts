@@ -64,6 +64,25 @@ export function normalizeSpeakerNames(
   return out;
 }
 
+/**
+ * Map raw STT diarization ids (`speaker_0`, `S1`, `"2"`) to display labels
+ * ("Speaker 1", "Speaker 2"). Zero-based id schemes are shifted so labels start
+ * at 1; non-numeric ids (real names some providers emit) pass through as-is.
+ */
+export function sttSpeakerDisplayMap(raw: Iterable<string | undefined>): Map<string, string> {
+  const ids = [...new Set([...raw].map((s) => s?.trim()).filter((s): s is string => Boolean(s)))];
+  const parsed = ids.map((id) => {
+    const m = id.match(/^(?:speaker|spk|s)?[_\s-]?(\d+)$/i);
+    return { id, n: m ? Number(m[1]) : undefined };
+  });
+  const offset = parsed.some((p) => p.n === 0) ? 1 : 0;
+  const map = new Map<string, string>();
+  for (const p of parsed) {
+    map.set(p.id, p.n === undefined ? p.id : `Speaker ${p.n + offset}`);
+  }
+  return map;
+}
+
 /** Ordered highlights with text of the nearest segment attached (for display/export). */
 export interface HighlightWithContext {
   highlight: HighlightMoment;

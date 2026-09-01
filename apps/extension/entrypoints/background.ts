@@ -382,6 +382,8 @@ async function transcriptionStatus(s: Settings): Promise<{
       model: s.model || undefined,
       language: s.language || undefined,
       baseUrl: s.providerId === 'custom' ? s.baseUrl || undefined : undefined,
+      diarize: s.diarize,
+      smartMode: s.providerId === 'google' ? s.googleSmartMode : undefined,
     },
     issue: null,
   };

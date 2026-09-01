@@ -121,9 +121,16 @@ describe('elevenlabsProvider response', () => {
     const result = await elevenlabsProvider.transcribe(req, { apiKey: 'k' });
     expect(result.text).toBe('Hello world thanks');
     expect(result.segments).toEqual([
-      { startMs: 100, endMs: 850, text: 'Hello world' },
-      { startMs: 1000, endMs: 1400, text: 'thanks' },
+      { startMs: 100, endMs: 850, text: 'Hello world', speaker: 'Speaker 1' },
+      { startMs: 1000, endMs: 1400, text: 'thanks', speaker: 'Speaker 2' },
     ]);
+  });
+
+  it('sends diarize=false when cfg.diarize is false', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okJson({ text: 'x' }));
+    vi.stubGlobal('fetch', fetchMock);
+    await elevenlabsProvider.transcribe(req, { apiKey: 'k', diarize: false });
+    expect(formOf(fetchMock.mock.calls[0]![1]).get('diarize')).toBe('false');
   });
 
   it('splits on silence gaps >1.5s and spans >12s, clamping endMs', async () => {

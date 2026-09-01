@@ -1,3 +1,4 @@
+import { sttSpeakerDisplayMap } from '../speakers.js';
 import { WAV_HEADER_BYTES } from '../wav.js';
 import type {
   ProviderConfig,
@@ -33,10 +34,12 @@ interface ScribeResponse {
  * Docs: https://elevenlabs.io/docs/api-reference/speech-to-text/convert
  *
  * Multipart POST to the pinned /v1/speech-to-text endpoint with `xi-api-key`.
- * Diarization + word timestamps are always requested so the live transcript
- * gets timestamped segments split on speaker turns. Speaker ids are used only
- * for segmentation: TranscribeResult carries no speaker field, so labels are
- * not persisted downstream. cfg.baseUrl is ignored so keys cannot leak.
+ * Word timestamps are always requested; diarization is on unless cfg.diarize
+ * is explicitly false. Speaker ids split segments on speaker turns and are
+ * surfaced as "Speaker N" labels on each segment (per-chunk ids — Scribe
+ * numbers speakers per request, so labels may not be stable across chunks;
+ * caption fusion or manual renames refine them). cfg.baseUrl is ignored so
+ * keys cannot leak.
  */
 export const elevenlabsProvider: TranscriptionProvider = {
   id: 'elevenlabs',
@@ -49,7 +52,7 @@ export const elevenlabsProvider: TranscriptionProvider = {
     form.append('model_id', cfg.model?.trim() || ELEVENLABS_DEFAULT_MODEL);
     const lang = elevenLabsLanguageCode(req.language);
     if (lang) form.append('language_code', lang);
-    form.append('diarize', 'true');
+    form.append('diarize', String(cfg.diarize !== false));
     form.append('timestamps_granularity', 'word');
     form.append('temperature', '0');
     form.append('tag_audio_events', 'true');
@@ -136,19 +139,27 @@ function segmentsFromWords(raw: ScribeWord[]): TranscribeResult['segments'] {
   }
   if (words.length === 0) return undefined;
 
-  const segs: { startMs: number; endMs: number; text: string }[] = [];
+  const labels = sttSpeakerDisplayMap(words.map((w) => w.speaker));
+  const flush = (cur: { startMs: number; endMs: number; text: string; speaker?: string }) => ({
+    startMs: cur.startMs,
+    endMs: Math.max(cur.endMs, cur.startMs),
+    text: cur.text,
+    speaker: cur.speaker ? labels.get(cur.speaker) : undefined,
+  });
+
+  const segs: { startMs: number; endMs: number; text: string; speaker?: string }[] = [];
   let cur = { ...words[0]! };
   for (const w of words.slice(1)) {
     const gap = w.startMs - cur.endMs;
     const spanMs = Math.max(w.endMs, cur.endMs) - cur.startMs;
     if (w.speaker !== cur.speaker || gap > GAP_SPLIT_MS || spanMs > MAX_SEGMENT_MS) {
-      segs.push({ startMs: cur.startMs, endMs: Math.max(cur.endMs, cur.startMs), text: cur.text });
+      segs.push(flush(cur));
       cur = { ...w };
     } else {
       cur.endMs = Math.max(cur.endMs, w.endMs, cur.startMs);
       cur.text = `${cur.text} ${w.text}`;
     }
   }
-  segs.push({ startMs: cur.startMs, endMs: Math.max(cur.endMs, cur.startMs), text: cur.text });
+  segs.push(flush(cur));
   return segs;
 }

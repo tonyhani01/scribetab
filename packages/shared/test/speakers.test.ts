@@ -8,6 +8,7 @@ import {
   highlightKindEmoji,
   highlightsWithContext,
   normalizeSpeakerNames,
+  sttSpeakerDisplayMap,
 } from '../src/speakers';
 
 const segment = (over: Partial<TranscriptSegment> = {}): TranscriptSegment => ({
@@ -70,5 +71,22 @@ describe('speaker helpers', () => {
     expect(HIGHLIGHT_KINDS).toContain('note');
     expect(HIGHLIGHT_KIND_EMOJI.note).toBe('📝');
     expect(highlightKindEmoji('note')).toBe('📝');
+  });
+});
+
+describe('sttSpeakerDisplayMap', () => {
+  it('maps zero-based ids to 1-based Speaker labels', () => {
+    const m = sttSpeakerDisplayMap(['speaker_0', 'speaker_1', undefined, 'speaker_0']);
+    expect(m.get('speaker_0')).toBe('Speaker 1');
+    expect(m.get('speaker_1')).toBe('Speaker 2');
+    expect(m.size).toBe(2);
+  });
+
+  it('keeps 1-based schemes (S1, spk_2, "3") as-is and passes names through', () => {
+    const m = sttSpeakerDisplayMap(['S1', 'spk_2', '3', 'Alice']);
+    expect(m.get('S1')).toBe('Speaker 1');
+    expect(m.get('spk_2')).toBe('Speaker 2');
+    expect(m.get('3')).toBe('Speaker 3');
+    expect(m.get('Alice')).toBe('Alice');
   });
 });

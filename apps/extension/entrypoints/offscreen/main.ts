@@ -183,6 +183,8 @@ async function start(msg: Extract<ToOffscreen, { type: 'OFFSCREEN_START' }>): Pr
               baseUrl: transcription.baseUrl,
               model: transcription.model,
               vocabHints: transcription.vocabHints,
+              diarize: transcription.diarize,
+              smartMode: transcription.smartMode,
             });
             notifyBackground({
               target: 'background',
