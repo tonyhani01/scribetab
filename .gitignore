@@ -15,3 +15,6 @@ docs/audit-*.html
 
 # Chrome Web Store submit credentials (wxt submit init)
 .env.submit*
+
+# Local-only operator playbook
+PLAYBOOK.local.md
