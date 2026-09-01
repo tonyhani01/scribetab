@@ -29,29 +29,38 @@ export function sendNative(child: ChildProcessWithoutNullStreams, msg: unknown):
   child.stdin.write(encodeNativeMessage(msg));
 }
 
+// Bytes read off a child's stdout but not yet consumed as a message. Two acks
+// written back-to-back often arrive coalesced in one 'data' chunk; without this
+// the trailing ack would be dropped and the next read would time out.
+const leftovers = new WeakMap<ChildProcessWithoutNullStreams, Buffer>();
+
 export function readNativeMessage(
   child: ChildProcessWithoutNullStreams,
   timeoutMs = 5000,
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    let buf = Buffer.alloc(0);
     const timer = setTimeout(() => {
       cleanup();
       const err = child.stderr.read()?.toString() ?? '';
       reject(new Error(`Timed out waiting for native message. stderr=${err}`));
     }, timeoutMs);
 
-    const onData = (chunk: Buffer) => {
-      buf = Buffer.concat([buf, chunk]);
+    const tryConsume = () => {
+      const buf = leftovers.get(child) ?? Buffer.alloc(0);
       if (buf.length < 4) return;
       const len = buf.readUInt32LE(0);
       if (buf.length < 4 + len) return;
+      leftovers.set(child, buf.subarray(4 + len));
       cleanup();
       try {
         resolve(JSON.parse(buf.subarray(4, 4 + len).toString('utf8')));
       } catch (e) {
         reject(e);
       }
+    };
+    const onData = (chunk: Buffer) => {
+      leftovers.set(child, Buffer.concat([leftovers.get(child) ?? Buffer.alloc(0), chunk]));
+      tryConsume();
     };
     const onExit = (code: number | null) => {
       cleanup();
@@ -65,6 +74,7 @@ export function readNativeMessage(
     };
     child.stdout.on('data', onData);
     child.once('exit', onExit);
+    tryConsume();
   });
 }
 
