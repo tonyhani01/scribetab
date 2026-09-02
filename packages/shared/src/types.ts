@@ -80,6 +80,12 @@ export interface ProviderConfig {
    * to one per chunk. Ignored by other providers.
    */
   smartMode?: boolean;
+  /**
+   * Request timeout override in ms. Defaults to each provider's own value
+   * (120 s), which is right for a 12-20 s chunk but too short for a whole-file
+   * pass over an hour of audio.
+   */
+  timeoutMs?: number;
 }
 
 export interface ChatMessage {

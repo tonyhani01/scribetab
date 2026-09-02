@@ -13,6 +13,11 @@ export const GOOGLE_API_BASE = 'https://generativelanguage.googleapis.com/v1beta
 const PINNED_URL = `${GOOGLE_API_BASE}/interactions`;
 const DEFAULT_MODEL = 'gemini-3.5-transcribe';
 const TIMEOUT_MS = 120_000;
+
+function requestTimeoutMs(cfg: ProviderConfig): number {
+  const ms = cfg.timeoutMs;
+  return typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? ms : TIMEOUT_MS;
+}
 const GAP_SPLIT_MS = 1_500;
 const MAX_SEGMENT_MS = 12_000;
 const EXCERPT_MAX = 200;
@@ -77,7 +82,7 @@ export const googleProvider: TranscriptionProvider = {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(requestTimeoutMs(cfg)),
     });
     if (!res.ok) {
       const errBody = redactKey(await res.text().catch(() => ''), cfg.apiKey).slice(0, 300);

@@ -1,6 +1,9 @@
 import {
   distinctSpeakers,
   originPattern,
+  shouldRunWholeFileDiarization,
+  WAV_HEADER_BYTES,
+  wholeFileDiarizationSupported,
   parseVocab,
   transcriptionEndpoint,
 } from '@scribetab/shared';
@@ -72,6 +75,9 @@ import {
 import { isCapturableUrl, isMeetingPlatform, platformFromUrl, titleFromTab } from '@/utils/platform';
 import { checkQuota } from '@/utils/quota';
 import { getSegments, putSegments } from '@/utils/segmentStore';
+import { assembleRecording } from '@/utils/assemble';
+import { getChunksForSession, type ChunkRow } from '@/utils/chunkStore';
+import { runWholeFileDiarization } from '@/utils/wholeFileDiarization';
 import {
   normalizeVocabReplacements,
   prepareFusedSegmentsForStorage,
@@ -483,6 +489,19 @@ async function applyAutoLabels(sessionId: string): Promise<void> {
   });
 }
 
+/** Recorded length from the stored chunk rows, without assembling the audio. */
+function recordedSeconds(rows: readonly ChunkRow[]): number {
+  let ms = 0;
+  for (const r of rows) {
+    if (typeof r.durationMs === 'number' && Number.isFinite(r.durationMs)) {
+      ms += r.durationMs;
+    } else if (r.format !== 'ogg-opus' && r.sampleRate > 0) {
+      ms += (Math.max(0, r.wav.byteLength - WAV_HEADER_BYTES) / 2 / r.sampleRate) * 1000;
+    }
+  }
+  return ms / 1000;
+}
+
 async function completeSession(
   sessionId: string | undefined,
   status: 'complete' | 'failed',
@@ -492,6 +511,20 @@ async function completeSession(
   await applyFusion(sessionId, true).catch(() => {});
   await clearCaptionTimeline(sessionId).catch(() => {});
   const s = await getSettings();
+  // finalizeSession may delete the audio chunks, so assemble first — but only
+  // after the cheap settings and duration gates, since assembling holds the
+  // whole recording in memory.
+  let diarizeAudio: Awaited<ReturnType<typeof assembleRecording>> | undefined;
+  if (status === 'complete' && wholeFileDiarizationSupported(s)) {
+    try {
+      const audioSeconds = recordedSeconds(await getChunksForSession(sessionId));
+      if (shouldRunWholeFileDiarization({ ...s, audioSeconds })) {
+        diarizeAudio = await assembleRecording(sessionId);
+      }
+    } catch (e) {
+      console.warn('whole-file diarization: audio unavailable', e);
+    }
+  }
   const flipped = await finalizeSession(sessionId, { retainAudio: s.retainAudio, status });
   if (flipped) {
     await updateSession(sessionId, {
@@ -522,6 +555,21 @@ async function completeSession(
         message: e instanceof Error ? e.message : String(e),
       }).catch(() => {});
     }
+  }
+  // Whole-file diarization is a network round trip over the entire recording —
+  // never block the STOP ack on it.
+  if (flipped && status === 'complete' && diarizeAudio) {
+    void runWholeFileDiarization(sessionId, diarizeAudio, s).then(async (n) => {
+      if (n === 0) return;
+      await applyAutoLabels(sessionId).catch(() => {});
+      notifySidePanel({
+        target: 'sidepanel',
+        type: 'SEGMENTS_UPDATED',
+        sessionId,
+        segments: await getSegments(sessionId).catch(() => []),
+      });
+      await maybeSyncSession(sessionId).catch(() => {});
+    });
   }
 }
 
