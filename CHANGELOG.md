@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.2.1 — 2026-09-02
+
+- Merge fix/issue-1-chunk-speaker-labels: chunk-scoped STT speaker labels (#1)
+- fix(stt): drop chunk-scoped diarization labels; filter content-free segments
+
 ## v1.2.0 — 2026-09-01
 
 - Merge fix/stt-speaker-labels: STT speaker labels + Scribe/Gemini provider options

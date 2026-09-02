@@ -8,7 +8,7 @@ configure (cloud key or localhost), and optional Notion page create from the
 native host (`api.notion.com`). Transcripts are exposed to AI agents and
 notetaking apps via MCP.
 
-**Status: v1.2.0.** Capture, live transcription, library/search/export, native
+**Status: v1.2.1.** Capture, live transcription, library/search/export, native
 host + MCP, Meet caption speakers, summaries, and Obsidian/Notion/NotebookLM
 integrations are implemented.
 
