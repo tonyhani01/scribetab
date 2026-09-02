@@ -7,6 +7,7 @@ import {
   distinctSpeakers,
   highlightKindEmoji,
   highlightsWithContext,
+  isContentfulSegmentText,
   normalizeSpeakerNames,
   sttSpeakerDisplayMap,
 } from '../src/speakers';
@@ -88,5 +89,23 @@ describe('sttSpeakerDisplayMap', () => {
     expect(m.get('spk_2')).toBe('Speaker 2');
     expect(m.get('3')).toBe('Speaker 3');
     expect(m.get('Alice')).toBe('Alice');
+  });
+});
+
+describe('isContentfulSegmentText', () => {
+  it('rejects text with no letters or digits outside brackets', () => {
+    expect(isContentfulSegmentText('.')).toBe(false);
+    expect(isContentfulSegmentText('   ')).toBe(false);
+    expect(isContentfulSegmentText('[صوت ضغط على الأزرار]')).toBe(false);
+    expect(isContentfulSegmentText('(laughter)')).toBe(false);
+    expect(isContentfulSegmentText('【拍手】')).toBe(false);
+    expect(isContentfulSegmentText('（笑）.')).toBe(false);
+  });
+
+  it('keeps text with real content, including non-Latin scripts', () => {
+    expect(isContentfulSegmentText('ok.')).toBe(true);
+    expect(isContentfulSegmentText('مرحبا')).toBe(true);
+    expect(isContentfulSegmentText('42')).toBe(true);
+    expect(isContentfulSegmentText('[laughs] yes')).toBe(true);
   });
 });

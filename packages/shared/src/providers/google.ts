@@ -107,7 +107,9 @@ export const googleProvider: TranscriptionProvider = {
 
     if (hasUsableSegments) {
       const text = outputText?.trim() ? outputText : segments!.map((s) => s.text).join(' ');
-      return { text, segments };
+      // Speaker ids are numbered per request, so labels are chunk-scoped only.
+      const diarized = segments!.some((s) => s.speaker);
+      return { text, segments, ...(diarized ? { speakerScope: 'chunk' as const } : {}) };
     }
 
     return { text: outputText ?? '', segments: undefined };

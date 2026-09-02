@@ -481,8 +481,9 @@ function App() {
                   checked={s.diarize}
                   onChange={(e) => set('diarize', (e.currentTarget as HTMLInputElement).checked)}
                 />{' '}
-                Speaker diarization — label segments “Speaker 1/2/…” (per audio chunk; captions or
-                manual renames refine the names)
+                Speaker diarization — splits the transcript at speaker changes. Speaker ids are
+                numbered per audio chunk and are not stable across the meeting, so no speaker
+                labels are shown; caption speakers from Meet/Teams/Zoom still apply.
               </label>
             )}
 

@@ -109,3 +109,19 @@ export function highlightsWithContext(
     return { highlight: hl, segment: best };
   });
 }
+
+/**
+ * True when a segment carries actual words. Bracketed spans (`[...]`, `(...)`,
+ * `【...】`, `（...）`) are sound tags, not speech; after stripping them a segment
+ * with no Unicode letter or digit left is content-free (a bare ".", a lone
+ * `[keyboard clicks]`) and should not be stored — silent chunks emit these
+ * every 12-20 s and pad transcripts.
+ */
+export function isContentfulSegmentText(text: string): boolean {
+  const stripped = text
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/【[^】]*】/g, ' ')
+    .replace(/（[^）]*）/g, ' ');
+  return /[\p{L}\p{N}]/u.test(stripped);
+}

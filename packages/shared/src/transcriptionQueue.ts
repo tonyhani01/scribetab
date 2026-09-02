@@ -1,3 +1,4 @@
+import { isContentfulSegmentText } from './speakers.js';
 import type { TranscribeRequest, TranscribeResult, TranscriptSegment } from './types.js';
 
 export interface TranscriptionJob {
@@ -35,8 +36,11 @@ export function segmentsFromResult(
   makeId: () => string,
 ): TranscriptSegment[] {
   if (result.segments && result.segments.length > 0) {
+    // Chunk-scoped diarization labels ("Speaker 1" restarting every chunk) are
+    // dropped: caption fusion attaches real names, manual renames act on those.
+    const keepSpeaker = result.speakerScope !== 'chunk';
     return result.segments
-      .filter((s) => s.text.trim().length > 0)
+      .filter((s) => isContentfulSegmentText(s.text))
       .map((s) => ({
         id: makeId(),
         sessionId,
@@ -44,11 +48,11 @@ export function segmentsFromResult(
         endMs: job.startMs + s.endMs,
         text: s.text.trim(),
         source: 'audio' as const,
-        ...(s.speaker ? { speaker: s.speaker } : {}),
+        ...(keepSpeaker && s.speaker ? { speaker: s.speaker } : {}),
       }));
   }
   const text = result.text.trim();
-  if (!text) return [];
+  if (!isContentfulSegmentText(text)) return [];
   return [{
     id: makeId(),
     sessionId,

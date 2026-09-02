@@ -124,6 +124,7 @@ describe('elevenlabsProvider response', () => {
       { startMs: 100, endMs: 850, text: 'Hello world', speaker: 'Speaker 1' },
       { startMs: 1000, endMs: 1400, text: 'thanks', speaker: 'Speaker 2' },
     ]);
+    expect(result.speakerScope).toBe('chunk');
   });
 
   it('sends diarize=false when cfg.diarize is false', async () => {
