@@ -12,6 +12,11 @@ export const ELEVENLABS_API_BASE = 'https://api.elevenlabs.io/v1';
 const PINNED_URL = `${ELEVENLABS_API_BASE}/speech-to-text`;
 export const ELEVENLABS_DEFAULT_MODEL = 'scribe_v2';
 const TIMEOUT_MS = 120_000;
+
+function requestTimeoutMs(cfg: ProviderConfig): number {
+  const ms = cfg.timeoutMs;
+  return typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? ms : TIMEOUT_MS;
+}
 const GAP_SPLIT_MS = 1_500;
 const MAX_SEGMENT_MS = 12_000;
 const EXCERPT_MAX = 200;
@@ -62,7 +67,7 @@ export const elevenlabsProvider: TranscriptionProvider = {
       method: 'POST',
       headers: { 'xi-api-key': cfg.apiKey },
       body: form,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(requestTimeoutMs(cfg)),
     });
     if (!res.ok) {
       const errBody = redactKey(await res.text().catch(() => ''), cfg.apiKey).slice(0, 300);

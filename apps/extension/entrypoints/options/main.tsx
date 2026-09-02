@@ -481,9 +481,10 @@ function App() {
                   checked={s.diarize}
                   onChange={(e) => set('diarize', (e.currentTarget as HTMLInputElement).checked)}
                 />{' '}
-                Speaker diarization — splits the transcript at speaker changes. Speaker ids are
-                numbered per audio chunk and are not stable across the meeting, so no speaker
-                labels are shown; caption speakers from Meet/Teams/Zoom still apply.
+                Speaker diarization — splits the transcript at speaker changes. When the meeting
+                ends, ScribeTab runs one more diarization pass over the whole recording to assign
+                consistent “Speaker N” labels, which roughly doubles the transcription cost for
+                that meeting. Caption speakers from Meet/Teams/Zoom take precedence.
               </label>
             )}
 

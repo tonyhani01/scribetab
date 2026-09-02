@@ -34,6 +34,19 @@ describe('elevenLabsLanguageCode', () => {
 });
 
 describe('elevenlabsProvider request', () => {
+  it('honours a timeoutMs override, defaulting to 120 s', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    const fetchMock = vi.fn(async () => okJson({ text: 'hello', words: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await elevenlabsProvider.transcribe(req, { apiKey: 'k' });
+    expect(timeoutSpy).toHaveBeenLastCalledWith(120_000);
+
+    await elevenlabsProvider.transcribe(req, { apiKey: 'k', timeoutMs: 600_000 });
+    expect(timeoutSpy).toHaveBeenLastCalledWith(600_000);
+    timeoutSpy.mockRestore();
+  });
+
   it('POSTs multipart to the pinned URL with xi-api-key and default settings', async () => {
     const fetchMock = vi.fn().mockResolvedValue(okJson({ text: 'hello', words: [] }));
     vi.stubGlobal('fetch', fetchMock);
