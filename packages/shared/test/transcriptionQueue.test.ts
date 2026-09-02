@@ -39,6 +39,37 @@ describe('segmentsFromResult', () => {
     expect('speaker' in segs[1]!).toBe(false);
   });
 
+  it('drops chunk-scoped speaker labels (not comparable across chunks)', () => {
+    const segs = segmentsFromResult(
+      { text: 'x', speakerScope: 'chunk', segments: [
+        { startMs: 0, endMs: 1000, text: 'hi', speaker: 'Speaker 1' },
+        { startMs: 1000, endMs: 2000, text: 'yo', speaker: 'Speaker 2' },
+      ] },
+      job(0), 's1', ids,
+    );
+    expect(segs).toHaveLength(2);
+    expect(segs.every((s) => !('speaker' in s))).toBe(true);
+  });
+
+  it('filters content-free segments (bare punctuation, bracket-only sound tags)', () => {
+    const segs = segmentsFromResult(
+      { text: 'x', segments: [
+        { startMs: 0, endMs: 0, text: '.' },
+        { startMs: 10, endMs: 20, text: '[صوت ضغط على الأزرار]' },
+        { startMs: 20, endMs: 30, text: '(laughter)' },
+        { startMs: 30, endMs: 40, text: 'ok.' },
+        { startMs: 40, endMs: 50, text: 'مرحبا' },
+      ] },
+      job(0), 's1', ids,
+    );
+    expect(segs.map((s) => s.text)).toEqual(['ok.', 'مرحبا']);
+  });
+
+  it('drops a content-free text-only fallback chunk', () => {
+    expect(segmentsFromResult({ text: ' [صوت] ' }, job(0), 's1', ids)).toEqual([]);
+    expect(segmentsFromResult({ text: '.' }, job(0), 's1', ids)).toEqual([]);
+  });
+
   it('falls back to one whole-chunk segment when the provider returns only text', () => {
     const segs = segmentsFromResult({ text: ' just text ' }, job(0), 's1', ids);
     expect(segs).toEqual([expect.objectContaining({

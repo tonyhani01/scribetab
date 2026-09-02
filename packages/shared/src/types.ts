@@ -42,6 +42,13 @@ export interface TranscribeRequest {
 export interface TranscribeResult {
   text: string;
   segments?: { startMs: number; endMs: number; text: string; speaker?: string }[];
+  /**
+   * Set when the segment `speaker` labels were numbered per request/chunk:
+   * "Speaker 1" in one chunk is NOT the same person as "Speaker 1" in the next,
+   * so the labels are not comparable across chunks and must not be stored as
+   * session-global speakers. In-chunk speaker turns (segment splits) are valid.
+   */
+  speakerScope?: 'chunk';
   costUsd?: number;          // provider-computed estimate, feeds cost meter
 }
 

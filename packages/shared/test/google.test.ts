@@ -164,6 +164,7 @@ describe('googleProvider', () => {
       { startMs: 100, endMs: 850, text: 'Hello world', speaker: 'Speaker 1' },
       { startMs: 1000, endMs: 1400, text: 'thanks', speaker: 'Speaker 2' },
     ]);
+    expect(result.speakerScope).toBe('chunk');
   });
 
   it('requests smart mode without word timestamps when cfg.smartMode is set', async () => {

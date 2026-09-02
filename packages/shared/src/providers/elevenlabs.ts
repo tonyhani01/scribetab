@@ -35,11 +35,12 @@ interface ScribeResponse {
  *
  * Multipart POST to the pinned /v1/speech-to-text endpoint with `xi-api-key`.
  * Word timestamps are always requested; diarization is on unless cfg.diarize
- * is explicitly false. Speaker ids split segments on speaker turns and are
- * surfaced as "Speaker N" labels on each segment (per-chunk ids — Scribe
- * numbers speakers per request, so labels may not be stable across chunks;
- * caption fusion or manual renames refine them). cfg.baseUrl is ignored so
- * keys cannot leak.
+ * is explicitly false. Speaker ids split segments on speaker turns — that
+ * in-chunk information is correct — but Scribe numbers speakers per request,
+ * so the "Speaker N" labels are chunk-scoped: the result is flagged
+ * `speakerScope: 'chunk'` and the labels are dropped downstream (caption fusion
+ * and manual renames supply real names). cfg.baseUrl is ignored so keys cannot
+ * leak.
  */
 export const elevenlabsProvider: TranscriptionProvider = {
   id: 'elevenlabs',
@@ -89,7 +90,8 @@ export const elevenlabsProvider: TranscriptionProvider = {
     }
     if (segments) {
       const text = outputText?.trim() ? outputText : segments.map((s) => s.text).join(' ');
-      return { text, segments };
+      const diarized = segments.some((s) => s.speaker);
+      return { text, segments, ...(diarized ? { speakerScope: 'chunk' as const } : {}) };
     }
     return { text: outputText ?? '', segments: undefined };
   },
