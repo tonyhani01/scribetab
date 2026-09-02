@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.2.2 — 2026-09-02
+
+- Merge feat/whole-file-diarization: whole-meeting speaker labels (#2)
+- feat(stt): whole-meeting diarization pass restores consistent speaker labels
+
 ## v1.2.1 — 2026-09-02
 
 - Merge fix/issue-1-chunk-speaker-labels: chunk-scoped STT speaker labels (#1)
